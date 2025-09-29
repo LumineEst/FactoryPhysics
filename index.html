@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Assembly Line Financial Simulator</title>
+        <link rel="stylesheet" href="style.css">
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+
+<body>
+        <div class="container">
+                <div class="card" style="flex: 1.5;">
+                        <div id="demandStatus" class="status">Loading...</div>
+                        <div class="row">
+                                <span class="control-group"><span class="label-span">Daily Unit
+                                                Demand:</span><input type="number" id="dailyDemand" value="120" min="1"
+                                                max="521"></span>
+                                <span class="control-group"><span class="label-span">Operational
+                                                Hours:</span><input type="number" id="opHours" value="8" min="1"
+                                                max="24" step="0.25"></span>
+                                <span class="control-group"><span class="label-span">Labor Cost (per
+                                                hour):</span><input type="number" id="laborCost" value="20.00" min="0"
+                                                step="0.50"></span>
+                                <br>
+                                <br>
+                                <span class="control-group"><span class="label-span">Number of Employees:</span>
+                                        <span id="employeeCountDisplay">7</span></span><input type="range"
+                                        id="numEmployees" value="8" min="3" max="12" step="1"></span>
+                                <br>
+                        </div>
+                        <div class="row">
+                                <span class="control-group"><span class="label-span">Super Sell
+                                                Price:</span><input type="number" id="superSell" value="500" min="0"
+                                                step="10"></span>
+                                <span class="control-group"><span class="label-span">Ultra Sell
+                                                Price:</span><input type="number" id="ultraSell" value="800" min="0"
+                                                step="10"></span>
+                                <span class="control-group"><span class="label-span">Mega Sell
+                                                Price:</span><input type="number" id="megaSell" value="1200" min="0"
+                                                step="10"></span>
+                                <br>
+                                <br>
+                                <span class="control-group"><span class="label-span">Super COGS:</span><input
+                                                type="number" id="superCogs" value="400" min="0" step="10"></span>
+                                <span class="control-group"><span class="label-span">Ultra COGS:</span><input
+                                                type="number" id="ultraCogs" value="550" min="0" step="10"></span>
+                                <span class="control-group"><span class="label-span">Mega COGS:</span><input
+                                                type="number" id="megaCogs" value="900" min="0" step="10"></span>
+                        </div>
+                </div>
+                <div class="row">
+                        <div class="card">
+                                <span class="output-item"><span class="label-span">Throughput (units/hr):</span><span
+                                                id="throughput" class="value-span">...</span></span>
+                                <span class="output-item"><span class="label-span">Daily Gross Profit:</span><span
+                                                id="grossProfit" class="value-span">...</span></span>
+                                <span class="output-item"><span class="label-span">Gross Profit Margin:</span><span
+                                                id="profitMargin" class="value-span">...</span></span>
+                        </div>
+                        <div class="card">
+                                <span class="output-item"><span class="label-span">WIP (units on line):</span><span
+                                                id="wip" class="value-span">...</span></span>
+                                <span class="output-item"><span class="label-span">Conveyor Speed (ft/min):</span><span
+                                                id="conveyorSpeed" class="value-span">...</span></span>
+                                <span class="output-item"><span class="label-span">Product Spacing (ft):</span><span
+                                                id="productSpacing" class="value-span">...</span></span>
+                        </div>
+                        <div class="card">
+                                <span class="output-item"><span class="label-span">Average Efficiency:</span><span
+                                                id="avgEfficiency" class="value-span">...</span></span>
+                                <span class="output-item"><span class="label-span">Total Idle Time (hrs):</span><span
+                                                id="totalIdleTime" class="value-span">...</span></span>
+                                <span class="output-item"><span class="label-span">Balance Delay:</span><span
+                                                id="balanceDelay" class="value-span">...</span></span>
+                                <span class="output-item"><span class="label-span">Idle Time CV:</span><span
+                                                id="idleTimeCv" class="value-span">...</span></span>
+                        </div>
+                </div>
+                <div class="row">
+                        <span class="card">
+                                <span id="workstationOutputsContainer"></span>
+                        </span>
+                </div>
+        </div>
+        <script src="script.js" defer></script>
+</body>
+
+</html>
