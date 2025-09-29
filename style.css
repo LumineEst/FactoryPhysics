@@ -1,0 +1,107 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 20px;
+    background-color: #f4f7fa;
+    color: #333;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+    max-width: 1600px;
+}
+
+.row {
+    flex: 1;
+    border: 1px solid #ccc;
+    padding: 10px;
+    text-align: center;
+    background-color: #f9f9f9;
+    margin: 5px;
+}
+
+.card h2 {
+    margin-top: 0;
+    color: #333;
+    border-bottom: 1px solid #007bff;
+    padding-bottom: 8px;
+    margin-bottom: 15px;
+    font-size: 1.15em;
+}
+
+.control-group,
+.output-item {
+    align-items: center;
+    margin-bottom: 10px;
+    gap: 3px;
+    padding: 4px 20px;
+}
+
+.label-span {
+    font-weight: 600;
+    color: #555;
+    font-size: 0.9em;
+    flex-shrink: 0;
+}
+
+.value-span {
+    font-size: 1.3em;
+    color: #0056b3;
+    font-weight: bold;
+    background-color: #e9f5ff;
+    padding: 4px 10px;
+    border-radius: 4px;
+    text-align: right;
+    min-width: 80px;
+}
+
+input[type="number"] {
+    padding: 5px;
+    font-size: 1.3em;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    color: #0056b3;
+    font-weight: bold;
+    text-align: center;
+    background-color: #e9f5ff;
+    width: 140px;
+}
+
+input[type="range"] {
+    width: 100%;
+}
+
+#employeeCountDisplay {
+    font-weight: bold;
+    color: #0056b3;
+    font-size: 1.3em;
+}
+
+.status {
+    padding: 10px;
+    border-radius: 5px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 1em;
+    margin-top: 5px;
+}
+
+.status.success {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.status.failure {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+#workstationOutputsContainer {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0 20px;
+}
