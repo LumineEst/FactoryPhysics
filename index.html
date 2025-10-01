@@ -2,89 +2,115 @@
 <html lang="en">
 
 <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Assembly Line Financial Simulator</title>
-        <link rel="stylesheet" href="style.css">
-        <script src="https://d3js.org/d3.v7.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factory Flow to Fortune</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
 </head>
 
 <body>
-        <div class="container">
-                <div class="card" style="flex: 1.5;">
-                        <div id="demandStatus" class="status">Loading...</div>
-                        <div class="row">
-                                <span class="control-group"><span class="label-span">Daily Unit
-                                                Demand:</span><input type="number" id="dailyDemand" value="120" min="1"
-                                                max="521"></span>
-                                <span class="control-group"><span class="label-span">Operational
-                                                Hours:</span><input type="number" id="opHours" value="8" min="1"
-                                                max="24" step="0.25"></span>
-                                <span class="control-group"><span class="label-span">Labor Cost (per
-                                                hour):</span><input type="number" id="laborCost" value="20.00" min="0"
-                                                step="0.50"></span>
-                                <br>
-                                <br>
-                                <span class="control-group"><span class="label-span">Number of Employees:</span>
-                                        <span id="employeeCountDisplay">7</span></span><input type="range"
-                                        id="numEmployees" value="8" min="3" max="12" step="1"></span>
-                                <br>
-                        </div>
-                        <div class="row">
-                                <span class="control-group"><span class="label-span">Super Sell
-                                                Price:</span><input type="number" id="superSell" value="500" min="0"
-                                                step="10"></span>
-                                <span class="control-group"><span class="label-span">Ultra Sell
-                                                Price:</span><input type="number" id="ultraSell" value="800" min="0"
-                                                step="10"></span>
-                                <span class="control-group"><span class="label-span">Mega Sell
-                                                Price:</span><input type="number" id="megaSell" value="1200" min="0"
-                                                step="10"></span>
-                                <br>
-                                <br>
-                                <span class="control-group"><span class="label-span">Super COGS:</span><input
-                                                type="number" id="superCogs" value="400" min="0" step="10"></span>
-                                <span class="control-group"><span class="label-span">Ultra COGS:</span><input
-                                                type="number" id="ultraCogs" value="550" min="0" step="10"></span>
-                                <span class="control-group"><span class="label-span">Mega COGS:</span><input
-                                                type="number" id="megaCogs" value="900" min="0" step="10"></span>
-                        </div>
-                </div>
-                <div class="row">
-                        <div class="card">
-                                <span class="output-item"><span class="label-span">Throughput (units/hr):</span><span
-                                                id="throughput" class="value-span">...</span></span>
-                                <span class="output-item"><span class="label-span">Daily Gross Profit:</span><span
-                                                id="grossProfit" class="value-span">...</span></span>
-                                <span class="output-item"><span class="label-span">Gross Profit Margin:</span><span
-                                                id="profitMargin" class="value-span">...</span></span>
-                        </div>
-                        <div class="card">
-                                <span class="output-item"><span class="label-span">WIP (units on line):</span><span
-                                                id="wip" class="value-span">...</span></span>
-                                <span class="output-item"><span class="label-span">Conveyor Speed (ft/min):</span><span
-                                                id="conveyorSpeed" class="value-span">...</span></span>
-                                <span class="output-item"><span class="label-span">Product Spacing (ft):</span><span
-                                                id="productSpacing" class="value-span">...</span></span>
-                        </div>
-                        <div class="card">
-                                <span class="output-item"><span class="label-span">Average Efficiency:</span><span
-                                                id="avgEfficiency" class="value-span">...</span></span>
-                                <span class="output-item"><span class="label-span">Total Idle Time (hrs):</span><span
-                                                id="totalIdleTime" class="value-span">...</span></span>
-                                <span class="output-item"><span class="label-span">Balance Delay:</span><span
-                                                id="balanceDelay" class="value-span">...</span></span>
-                                <span class="output-item"><span class="label-span">Idle Time CV:</span><span
-                                                id="idleTimeCv" class="value-span">...</span></span>
-                        </div>
-                </div>
-                <div class="row">
-                        <span class="card">
-                                <span id="workstationOutputsContainer"></span>
-                        </span>
-                </div>
-        </div>
-        <script src="script.js" defer></script>
+    <div class="app-container">
+        <aside id="left-sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h3>Workstations</h3>
+                <button id="left-toggle" class="toggle-btn">&laquo;</button>
+            </div>
+            <div id="workstation-list" class="sidebar-content">
+            </div>
+        </aside>
+
+        <main id="main-content">
+            <header class="main-header">
+                <h1>Factory Flow to Fortune</h1>
+                <nav id="tabs">
+                    <button class="tab-btn" data-tab="overview">Overview</button>  
+                    <button class="tab-btn" data-tab="precedence">Precedence</button>  
+                    <button class="tab-btn active" data-tab="schedule">Schedule</button>
+                    <button class="tab-btn" data-tab="efficiency">Efficiency</button>
+                    <button class="tab-btn" data-tab="layout">Layout</button>
+                    <button class="tab-btn" data-tab="profit">Profit</button> 
+                </nav>
+            </header>
+            <div id="svg-container">
+                <svg id="visualization-svg" width="100%" height="100%">
+                    <g id="overview-panel" class="vis-panel" style="display: none;"></g>
+                    <g id="precedence-panel" class="vis-panel" style="display: none;"></g>
+                    <g id="schedule-panel" class="vis-panel active"></g>
+                    <g id="efficiency-panel" class="vis-panel" style="display: none;"></g>
+                    <g id="layout-panel" class="vis-panel" style="display: none;"></g>
+                    <g id="profit-panel" class="vis-panel" style="display: none;"></g>
+                </svg>
+            </div>
+        </main>
+
+        <aside id="right-sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <button id="right-toggle" class="toggle-btn">&raquo;</button>
+                <h3>Controls & Outputs</h3>
+            </div>
+            <div class="sidebar-content">
+                <section class="control-section">
+                    <h4>Operational Inputs</h4>
+                    <div class="input-group">
+                        <label for="dailyDemand">Daily Demand (units)</label>
+                        <input type="number" id="dailyDemand" value="180" min="1" max="576">
+                    </div>
+                    <div class="input-group">
+                        <label for="opHours">Operational Hours</label>
+                        <input type="number" id="opHours" value="15" step="0.25" min="1" max="24">
+                    </div>
+                    <div class="input-group">
+                        <label for="numEmployees">Employees: <span id="employeeCountDisplay">8</span></label>
+                        <input type="range" id="numEmployees" value="8" min="3" max="13" step="1">
+                    </div>
+                </section>
+                <section class="control-section">
+                    <h4>Financial Inputs</h4>
+                    <div class="input-group">
+                        <label for="laborCost">Labor Cost ($/hr)</label>
+                        <input type="number" id="laborCost" value="25.00" step="0.50" min="0">
+                    </div>
+                    <div class="fin-grid">
+                        <span></span><span>Sell Price ($/unit)</span><span>Material Cost ($/unit)</span>
+                        <label>Super</label>
+                        <input type="number" id="superSell" value="1250">
+                        <input type="number" id="superCogs" value="450">
+                        <label>Ultra</label>
+                        <input type="number" id="ultraSell" value="1500">
+                        <input type="number" id="ultraCogs" value="550">
+                        <label>Mega</label>
+                        <input type="number" id="megaSell" value="1800">
+                        <input type="number" id="megaCogs" value="650">
+                    </div>
+                </section>
+                <hr>
+                <section class="output-section">
+                    <h4>Key Metrics</h4>
+                    <div id="demandStatus" class="status"></div>
+                    <div class="output-grid">
+                        <span>WIP:</span><strong id="wip">0 units</strong>
+                        <span>Throughput:</span><strong id="throughput">0/hr</strong>
+                        <span>Conveyor Speed:</span><strong id="conveyorSpeed">0 ft/min</strong>
+                        <span>Product Spacing:</span><strong id="productSpacing">0 ft</strong>
+                        <span>Gross Profit:</span><strong id="grossProfit">$0</strong>
+                        <span>Profit Margin:</span><strong id="profitMargin">0%</strong>
+                    </div>
+                </section>
+                <section class="output-section">
+                    <h4>Efficiency Metrics</h4>
+                    <div class="output-grid">
+                        <span>Avg. Efficiency:</span><strong id="avgEfficiency">0%</strong>
+                        <span>Total Idle Time:</span><strong id="totalIdleTime">0 hrs</strong>
+                        <span>Balance Delay:</span><strong id="balanceDelay">0%</strong>
+                        <span>Idle Time CV:</span><strong id="idleTimeCv">0%</strong>
+                    </div>
+                </section>
+            </div>
+        </aside>
+    </div>
+    <script src="script.js"></script>
 </body>
 
 </html>
