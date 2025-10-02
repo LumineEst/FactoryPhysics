@@ -11,7 +11,6 @@ const originalConfigData = {};
 let sortableInstances = [];
 let precedenceChartNodes = null;
 let invalidPrecedenceNodes = new Set();
-let productionQueue = [];
 let animationState = {
     layout: { frameId: null, isRunning: false },
     schedule: { frameId: null, isRunning: false }
@@ -160,7 +159,6 @@ function handleInputChange(driverId) {
         let opHours = parseFloat(opHoursInput.value) || 1;
         let numEmployees = parseInt(numEmployeesInput.value);
         if (driverId === 'numEmployees') {
-            // Reset scroll position before redrawing to prevent graphical offsets.
             workstationList.scrollTop = 0;
             state.configData[numEmployees] = JSON.parse(JSON.stringify(originalConfigData[numEmployees]));
         }
@@ -235,6 +233,7 @@ function calculateWorkstationDetails(numEmployees) {
 /**
  * Backend - Calculate the various variables whenever one changes.
  */
+
 function calculateMetrics(op, fin) {
     const netProductionTimeMinutes = op.opHours * 60;
     const taktTime = netProductionTimeMinutes / op.dailyDemand;
@@ -247,36 +246,38 @@ function calculateMetrics(op, fin) {
     const conveyorSpeed = throughputPerMinute * productSpacing;
     const throughputUnitsPerDay = throughputPerMinute * netProductionTimeMinutes;
     const wip = productSpacing > 0 ? ASSEMBLY_LINE_LENGTH / productSpacing : 0;
-    let totalIdleTime = 0,
-        efficiencies = [],
-        idleTimesPerCycle = [];
+
+    let totalWorkstationCycleTime = 0;
     wsDetails.workstations.forEach(ws => {
-        const idleTimePerCycle = bottleneckCycleTime - ws.cycleTime;
-        ws.dailyIdleTime = idleTimePerCycle * throughputUnitsPerDay;
-        ws.efficiency = bottleneckCycleTime > 0 ? (ws.cycleTime / bottleneckCycleTime) * 100 : 0;
-        totalIdleTime += ws.dailyIdleTime;
-        efficiencies.push(ws.efficiency);
-        idleTimesPerCycle.push(idleTimePerCycle);
+        totalWorkstationCycleTime += ws.cycleTime;
     });
-    const totalAvailableTime = op.opHours * op.numEmployees * 60;
-    const averageEfficiency = totalAvailableTime > 0 ? ((totalAvailableTime - totalIdleTime) / totalAvailableTime) * 100 : 0;
+
+    const totalAvailableTime = op.numEmployees * netProductionTimeMinutes;
+    const totalProductiveTime = throughputUnitsPerDay * totalWorkstationCycleTime;
+    const totalIdleTime = Math.max(0, totalAvailableTime - totalProductiveTime);
+    const averageEfficiency = totalAvailableTime > 0 ? (totalProductiveTime / totalAvailableTime) * 100 : 0;
+    const efficiencies = wsDetails.workstations.map(ws => (bottleneckCycleTime > 0 ? (ws.cycleTime / bottleneckCycleTime) * 100 : 0));
     const balanceActive = efficiencies.length > 0 ? efficiencies.reduce((a, b) => a + b, 0) / efficiencies.length : 0;
     const balanceDelay = 100 - balanceActive;
+    const idleTimesPerCycle = wsDetails.workstations.map(ws => bottleneckCycleTime - ws.cycleTime);
     const idleMean = idleTimesPerCycle.length > 0 ? idleTimesPerCycle.reduce((a, b) => a + b, 0) / idleTimesPerCycle.length : 0;
     const stdDev = Math.sqrt(idleTimesPerCycle.map(x => Math.pow(x - idleMean, 2)).reduce((a, b) => a + b, 0) / (idleTimesPerCycle.length || 1));
     const idleTimeCv = idleMean > 0 ? (stdDev / idleMean) * 100 : 0;
+
     const throughputUnitsPerHour = op.opHours > 0 ? throughputUnitsPerDay / op.opHours : 0;
     const totalDailyLaborCost = op.numEmployees * op.opHours * (fin.laborCost || 0);
     const totalRevenue = throughputUnitsPerDay * ((BUILD_RATIOS.super * (fin.superSell || 0)) + (BUILD_RATIOS.ultra * (fin.ultraSell || 0)) + (BUILD_RATIOS.mega * (fin.megaSell || 0)));
     const totalCogs = throughputUnitsPerDay * ((BUILD_RATIOS.super * (fin.superCogs || 0)) + (BUILD_RATIOS.ultra * (fin.ultraCogs || 0)) + (BUILD_RATIOS.mega * (fin.megaCogs || 0)));
     const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost;
     const grossProfitMargin = totalRevenue > 0 ? (dailyGrossProfit / totalRevenue) * 100 : 0;
+
     return {
         wip, throughputUnitsPerHour, conveyorSpeed, productSpacing, dailyGrossProfit,
         grossProfitMargin, meetsDemand, effectiveCycleTime, workstations: wsDetails.workstations,
         averageEfficiency, totalIdleTime, balanceDelay, idleTimeCv
     };
 }
+
 
 /**
  * Backend - Identify the best default employee count for a given TaktTime.
@@ -347,8 +348,8 @@ function validatePrecedence() {
 * Backend - Generates a production sequence based on demand using MSSA Algorithm.
 */
 function generateProductionQueue(dailyDemand) {
-    productionQueue = [];
-    const modelRatios = [0.35, 0.45, 0.20];
+    const productionQueue = [];
+    const modelRatios = Object.values(BUILD_RATIOS);
     let modelDemand = [];
     let sumOfDemands = 0;
 
@@ -456,10 +457,7 @@ function updateUI() {
  * UI - Creating the Left Sidebar for Workstation Configurations.
  */
 function renderWorkstationSidebar(numEmployees) {
-    // Clear everything except the clock
-    while (workstationList.children.length > 0 && workstationList.firstChild.id !== 'sidebar-clock') {
-        workstationList.firstChild.remove();
-    }
+
     while (workstationList.children.length > 1) {
         workstationList.lastChild.remove();
     }
@@ -523,7 +521,6 @@ function renderWorkstationSidebar(numEmployees) {
         workstationList.appendChild(workstationDiv);
     }
 
-    // ADDED: Dynamically align sidebar content with the top of the SVG container
     const firstTitle = workstationList.querySelector('.workstation-title');
     const svgContainer = document.getElementById('svg-container');
 
@@ -588,13 +585,11 @@ function setupUIEventListeners() {
         }
     });
 
-    // ADDED: Synchronize sidebar scroll with the schedule visualization
     workstationList.addEventListener('scroll', () => {
         const scrollTop = workstationList.scrollTop;
         const schedulePanel = document.getElementById('schedule-panel');
         const contentGroup = schedulePanel.querySelector('.schedule-content-group');
         if (contentGroup) {
-            // Apply a negative translation to move the SVG content up as the user scrolls down
             contentGroup.setAttribute('transform', `translate(0, ${-scrollTop})`);
         }
     });
@@ -698,7 +693,7 @@ function startSimulation(config) {
     }
 
     animationState.layout.isRunning = true;
-    const realWorkdayDurationMs = (opHours * 60 * 60 * 1000) / 60; // 60x speed up
+    const realWorkdayDurationMs = (opHours * 60 * 60 * 1000) / 60;
     const modelColors = { 1: '#3498db', 2: '#f1c40f', 3: '#e74c3c' };
     const modelBorders = { 1: '#f39c12', 2: '#8e44ad', 3: '#1abc9c' };
 
@@ -924,7 +919,7 @@ function drawLayoutVisualization() {
     const clockDisplay = clockGroup.append("text").attr("id", "sim-clock-display").attr("fill", "white").style("font-size", "18px").style("font-family", "monospace").text("00:00");
     const speedoX = containerWidth - (rightPanelWidth / 2) - uiPadding;
     const speedoY = 80;
-    const speedoGroup = svg.append("g").attr("transform", `translate(${speedoX}, ${speedoY})`);
+    const speedoGroup = svg.append("g").attr("transform", `translate(${speedoX+28}, ${speedoY})`);
     const speedoRadius = 60;
     const speedoScale = d3.scaleLinear().domain([0, 15]).range([-90, 90]);
     const arcGen = d3.arc().innerRadius(speedoRadius * 0.7).outerRadius(speedoRadius).startAngle(-Math.PI / 2).endAngle(Math.PI / 2);
@@ -1019,10 +1014,7 @@ function runGanttSimulation() {
     const productionQueue = generateProductionQueue(dailyDemand);
     const metrics = calculateMetrics({ dailyDemand, opHours, numEmployees }, {});
     const launchInterval = metrics.effectiveCycleTime;
-
     let allFinishedTasks = [];
-
-    // Initial arrivals at the first station
     let arrivalsForNextStation = productionQueue.map((modelId, index) => ({
         modelId: modelId,
         arrivalTime: index * launchInterval,
@@ -1035,19 +1027,16 @@ function runGanttSimulation() {
         const elements = config[stationId] || [];
         if (elements.length === 0) continue;
 
-        let stationFreeTime = 0; // Tracks when the workstation is next available
-        let processedModels = []; // Models that have completed this station
+        let stationFreeTime = 0;
+        let processedModels = [];
 
-        // Sort models by their arrival time at this station
         arrivalsForNextStation.sort((a, b) => a.arrivalTime - b.arrivalTime);
 
         for (const model of arrivalsForNextStation) {
-            // Work can only start after the model arrives AND the station is free.
             let currentTimeForModel = Math.max(stationFreeTime, model.arrivalTime);
 
-            // Sequentially process elements for this model
             for (const elementId of elements) {
-                // Check if this element is valid for the current model
+
                 if (doesElementBuildModel(elementId, model.modelId)) {
                     const task = state.taskData.get(elementId);
                     if (task) {
@@ -1063,21 +1052,15 @@ function runGanttSimulation() {
                             uniqueId: model.uniqueId
                         });
 
-                        // The current time for this model advances to the end of this task
                         currentTimeForModel = taskEndTime;
                     }
                 }
-            } // End of elements loop for one model
+            }
 
-            // The station is now occupied until this model is fully processed
             stationFreeTime = currentTimeForModel;
-
-            // The model's arrival time for the *next* station is when it departs this one.
             processedModels.push({ ...model, arrivalTime: currentTimeForModel });
+        }
 
-        } // End of models loop for one station
-
-        // The output of this station is the input for the next
         arrivalsForNextStation = processedModels;
     }
 
@@ -1112,30 +1095,22 @@ function drawScheduleVisualization() {
 
     const chart = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
-    const clockGroup = svg.append("g").attr("transform", `translate(${margin.left+10}, 30)`);
+    const clockGroup = svg.append("g").attr("transform", `translate(${margin.left + 10}, 30)`);
     clockGroup.append("rect").attr("x", -10).attr("y", -15).attr("width", 100).attr("height", 20).attr("fill", "rgba(0,0,0,0.5)").attr("rx", 5);
     const clockDisplay = clockGroup.append("text").attr("id", "sim-clock-display").attr("fill", "white").style("font-size", "18px").style("font-family", "monospace").text("00:00");
-
-    // All scrolling content (bars and borders) goes in this single group.
     const contentGroup = chart.append("g").attr("class", "schedule-content-group");
-
     const gridGroup = contentGroup.append("g").attr("class", "vertical-grid");
-
-    // This combined offset accounts for the SVG's position on the page AND its internal top margin.
     const yOffset = document.getElementById('svg-container').getBoundingClientRect().top + margin.top;
-
-    // 1. Map the precise geometry of each element row from the sidebar.
     const elementGeometry = new Map();
     document.querySelectorAll('.element-row').forEach(elRow => {
         const taskId = parseInt(elRow.dataset.taskId);
         const rect = elRow.getBoundingClientRect();
         const centerY = rect.top + rect.height / 2;
-        const barHeight = rect.height * 0.8; // Use 80% of the row height for the bar.
+        const barHeight = rect.height * 0.8;
         const barY = (centerY - barHeight / 2) - yOffset;
         elementGeometry.set(taskId, { y: barY, height: barHeight });
     });
 
-    // 2. Draw workstation title-centered borders inside the scrolling group.
     document.querySelectorAll('.workstation-title').forEach(title => {
         const rect = title.getBoundingClientRect();
         const centerY = rect.top + rect.height / 2;
@@ -1154,7 +1129,6 @@ function drawScheduleVisualization() {
     const timeMarker = chart.append("line").attr("x1", 0).attr("x2", 0).attr("y1", -margin.top).attr("y2", height + margin.bottom).attr("stroke", "red").attr("stroke-width", 2);
     timeMarker.append("title").text("Current Simulation Time");
 
-    // 3. Draw the Gantt bars using the calculated geometry map.
     contentGroup.append("g").attr("class", "task-bars")
         .selectAll(".bar").data(tasks).enter().append("rect")
         .attr("class", "bar")
@@ -1186,23 +1160,6 @@ function drawScheduleVisualization() {
         contentGroup.selectAll(".bar")
             .attr("x", d => xScale(d.startTime))
             .attr("width", d => Math.max(0, xScale(d.endTime) - xScale(d.startTime)));
-
-        // Dynamically update vertical grid lines
-        const interval = 15; // 15 minutes
-        const viewEndTime = viewStartTime + VIEW_WINDOW_MINS;
-        const firstTick = Math.ceil(viewStartTime / interval) * interval;
-        const tickValues = d3.range(firstTick, viewEndTime, interval);
-
-        gridGroup.selectAll("line")
-            .data(tickValues, d => d)
-            .join("line")
-            .attr("x1", d => xScale(d))
-            .attr("x2", d => xScale(d))
-            .attr("y1", -margin.top)
-            .attr("y2", height + containerHeight) // Ensure it covers the full scrollable area
-            .attr("stroke", "#e0e0e0")
-            .attr("stroke-width", 1);
-
 
         if (elapsedRealTimeMs < totalRealSimDurationMs) {
             animationState.schedule.frameId = requestAnimationFrame(animationLoop);
