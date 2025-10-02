@@ -13,9 +13,10 @@ let precedenceChartNodes = null;
 let invalidPrecedenceNodes = new Set();
 let productionQueue = [];
 let animationState = {
-    frameId: null,
-    isRunning: false,
+    layout: { frameId: null, isRunning: false },
+    schedule: { frameId: null, isRunning: false }
 };
+
 
 // DOM Element References
 const dailyDemandInput = document.getElementById('dailyDemand');
@@ -52,6 +53,7 @@ const precedenceMap = flattenPrecedenceTree();
 // Main Initialization
 async function main() {
     console.log("Initializing application.");
+
     await loadData();
     setupEventListeners();
     setupUIEventListeners();
@@ -158,6 +160,8 @@ function handleInputChange(driverId) {
         let opHours = parseFloat(opHoursInput.value) || 1;
         let numEmployees = parseInt(numEmployeesInput.value);
         if (driverId === 'numEmployees') {
+            // Reset scroll position before redrawing to prevent graphical offsets.
+            workstationList.scrollTop = 0;
             state.configData[numEmployees] = JSON.parse(JSON.stringify(originalConfigData[numEmployees]));
         }
         const isOperationalDriver = ['dailyDemand', 'opHours', 'numEmployees'].includes(driverId);
@@ -262,9 +266,9 @@ function calculateMetrics(op, fin) {
     const stdDev = Math.sqrt(idleTimesPerCycle.map(x => Math.pow(x - idleMean, 2)).reduce((a, b) => a + b, 0) / (idleTimesPerCycle.length || 1));
     const idleTimeCv = idleMean > 0 ? (stdDev / idleMean) * 100 : 0;
     const throughputUnitsPerHour = op.opHours > 0 ? throughputUnitsPerDay / op.opHours : 0;
-    const totalDailyLaborCost = op.numEmployees * op.opHours * fin.laborCost;
-    const totalRevenue = throughputUnitsPerDay * ((BUILD_RATIOS.super * fin.superSell) + (BUILD_RATIOS.ultra * fin.ultraSell) + (BUILD_RATIOS.mega * fin.megaSell));
-    const totalCogs = throughputUnitsPerDay * ((BUILD_RATIOS.super * fin.superCogs) + (BUILD_RATIOS.ultra * fin.ultraCogs) + (BUILD_RATIOS.mega * fin.megaCogs));
+    const totalDailyLaborCost = op.numEmployees * op.opHours * (fin.laborCost || 0);
+    const totalRevenue = throughputUnitsPerDay * ((BUILD_RATIOS.super * (fin.superSell || 0)) + (BUILD_RATIOS.ultra * (fin.ultraSell || 0)) + (BUILD_RATIOS.mega * (fin.megaSell || 0)));
+    const totalCogs = throughputUnitsPerDay * ((BUILD_RATIOS.super * (fin.superCogs || 0)) + (BUILD_RATIOS.ultra * (fin.ultraCogs || 0)) + (BUILD_RATIOS.mega * (fin.megaCogs || 0)));
     const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost;
     const grossProfitMargin = totalRevenue > 0 ? (dailyGrossProfit / totalRevenue) * 100 : 0;
     return {
@@ -348,7 +352,6 @@ function generateProductionQueue(dailyDemand) {
     let modelDemand = [];
     let sumOfDemands = 0;
 
-    // To avoid rounding errors, calculate the first n-1 demands and derive the last one.
     for (let i = 0; i < modelRatios.length - 1; i++) {
         const demand = Math.round(modelRatios[i] * dailyDemand);
         modelDemand.push(demand);
@@ -385,6 +388,7 @@ function updateUI() {
     renderWorkstationSidebar(parseInt(numEmployeesInput.value));
     setupDragAndDrop();
     invalidPrecedenceNodes = validatePrecedence();
+
     if (invalidPrecedenceNodes.size > 0) {
         demandStatusEl.textContent = "Fails to Meet Precedence";
         demandStatusEl.className = "status failure";
@@ -429,14 +433,22 @@ function updateUI() {
             demandStatusEl.className = results.meetsDemand ? "status success" : "status failure";
         }
     }
+
     const activeTab = document.querySelector('.tab-btn.active').dataset.tab;
-    // Stop simulation if we switch away from the layout tab
-    if (activeTab !== 'layout') {
-        stopSimulation();
+
+    stopAllSimulations();
+
+    if (activeTab === 'layout' || activeTab === 'schedule') {
+        const clockToReset = document.querySelector(`#${activeTab}-panel #sim-clock-display`);
+        if (clockToReset) clockToReset.textContent = "00:00";
     }
+
     if (activeTab === 'layout') {
         drawLayoutVisualization();
+    } else if (activeTab === 'schedule') {
+        drawScheduleVisualization();
     }
+
     updatePrecedenceChartColors();
 }
 
@@ -444,7 +456,14 @@ function updateUI() {
  * UI - Creating the Left Sidebar for Workstation Configurations.
  */
 function renderWorkstationSidebar(numEmployees) {
-    workstationList.innerHTML = '';
+    // Clear everything except the clock
+    while (workstationList.children.length > 0 && workstationList.firstChild.id !== 'sidebar-clock') {
+        workstationList.firstChild.remove();
+    }
+    while (workstationList.children.length > 1) {
+        workstationList.lastChild.remove();
+    }
+
     const config = state.configData[numEmployees];
     if (!config || Object.keys(config).length === 0) return;
     let maxElementTime = 0;
@@ -503,6 +522,23 @@ function renderWorkstationSidebar(numEmployees) {
         workstationDiv.appendChild(elementsContainer);
         workstationList.appendChild(workstationDiv);
     }
+
+    // ADDED: Dynamically align sidebar content with the top of the SVG container
+    const firstTitle = workstationList.querySelector('.workstation-title');
+    const svgContainer = document.getElementById('svg-container');
+
+    if (firstTitle && svgContainer) {
+        requestAnimationFrame(() => {
+            const svgTop = svgContainer.getBoundingClientRect().top;
+            const titleTop = firstTitle.getBoundingClientRect().top;
+
+            const currentPadding = parseFloat(getComputedStyle(workstationList).paddingTop) || 0;
+            const offset = svgTop - titleTop;
+            const newPadding = Math.max(0, currentPadding + offset);
+
+            workstationList.style.paddingTop = `${newPadding}px`;
+        });
+    }
 }
 
 /**
@@ -517,9 +553,6 @@ function setupEventListeners() {
     inputs.forEach(input => input.addEventListener('input', (e) => handleInputChange(e.target.id)));
 }
 
-/**
- * UI - Set listeners for the various UI Events.
- */
 function setupUIEventListeners() {
     let precedenceChartDrawn = false;
     leftToggle.addEventListener('click', () => {
@@ -535,24 +568,34 @@ function setupUIEventListeners() {
     tabs.addEventListener('click', (e) => {
         if (e.target.classList.contains('tab-btn')) {
             const targetTab = e.target.dataset.tab;
+
             tabs.querySelector('.active').classList.remove('active');
             e.target.classList.add('active');
             visPanels.forEach(panel => {
                 panel.style.display = panel.id === `${targetTab}-panel` ? 'block' : 'none';
             });
 
-            // Stop the simulation if the tab is changed
-            if (targetTab !== 'layout') {
-                stopSimulation();
-            }
+            stopAllSimulations();
 
             if (targetTab === 'layout') {
                 drawLayoutVisualization();
-            }
-            if (targetTab === 'precedence' && !precedenceChartDrawn) {
+            } else if (targetTab === 'schedule') {
+                drawScheduleVisualization();
+            } else if (targetTab === 'precedence' && !precedenceChartDrawn) {
                 drawPrecedenceChart();
                 precedenceChartDrawn = true;
             }
+        }
+    });
+
+    // ADDED: Synchronize sidebar scroll with the schedule visualization
+    workstationList.addEventListener('scroll', () => {
+        const scrollTop = workstationList.scrollTop;
+        const schedulePanel = document.getElementById('schedule-panel');
+        const contentGroup = schedulePanel.querySelector('.schedule-content-group');
+        if (contentGroup) {
+            // Apply a negative translation to move the SVG content up as the user scrolls down
+            contentGroup.setAttribute('transform', `translate(0, ${-scrollTop})`);
         }
     });
 }
@@ -595,88 +638,23 @@ function updatePrecedenceChartColors() {
  * Precedence - Generates a Precedence DAG for Elements connected by precedence.
  */
 function drawPrecedenceChart() {
-    const rawData = [
-        { id: 1, predecessors: [] }, { id: 2, predecessors: [1] },
-        { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] },
-        { id: 5, predecessors: [2, 3] }, { id: 6, predecessors: [1] },
-        { id: 7, predecessors: [6] }, { id: 8, predecessors: [1] },
-        { id: 9, predecessors: [8] }, { id: 10, predecessors: [1] },
-        { id: 11, predecessors: [1] }, { id: 12, predecessors: [10, 11] },
-        { id: 13, predecessors: [4, 5, 7, 9, 12] }, { id: 14, predecessors: [13] },
-        { id: 15, predecessors: [14] }, { id: 16, predecessors: [15] },
-        { id: 17, predecessors: [16] }, { id: 18, predecessors: [14] },
-        { id: 19, predecessors: [18] }, { id: 20, predecessors: [19] },
-        { id: 21, predecessors: [20] }, { id: 22, predecessors: [18] },
-        { id: 23, predecessors: [22] }, { id: 24, predecessors: [23] },
-        { id: 25, predecessors: [19, 22] }, { id: 26, predecessors: [19, 22] },
-        { id: 27, predecessors: [25, 26] }, { id: 28, predecessors: [27] },
-        { id: 29, predecessors: [15] }, { id: 30, predecessors: [17, 21, 24, 27, 29] },
-        { id: 31, predecessors: [30] },
-    ];
+    const rawData = [{ id: 1, predecessors: [] }, { id: 2, predecessors: [1] }, { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] }, { id: 5, predecessors: [2, 3] }, { id: 6, predecessors: [1] }, { id: 7, predecessors: [6] }, { id: 8, predecessors: [1] }, { id: 9, predecessors: [8] }, { id: 10, predecessors: [1] }, { id: 11, predecessors: [1] }, { id: 12, predecessors: [10, 11] }, { id: 13, predecessors: [4, 5, 7, 9, 12] }, { id: 14, predecessors: [13] }, { id: 15, predecessors: [14] }, { id: 16, predecessors: [15] }, { id: 17, predecessors: [16] }, { id: 18, predecessors: [14] }, { id: 19, predecessors: [18] }, { id: 20, predecessors: [19] }, { id: 21, predecessors: [20] }, { id: 22, predecessors: [18] }, { id: 23, predecessors: [22] }, { id: 24, predecessors: [23] }, { id: 25, predecessors: [19, 22] }, { id: 26, predecessors: [19, 22] }, { id: 27, predecessors: [25, 26] }, { id: 28, predecessors: [27] }, { id: 29, predecessors: [15] }, { id: 30, predecessors: [17, 21, 24, 27, 29] }, { id: 31, predecessors: [30] },];
     const nodes = rawData.map(d => ({ id: d.id }));
     const links = [];
-    rawData.forEach(d => {
-        d.predecessors.forEach(pId => {
-            links.push({ source: pId, target: d.id });
-        });
-    });
+    rawData.forEach(d => { d.predecessors.forEach(pId => { links.push({ source: pId, target: d.id }); }); });
     const svg = d3.select("#precedence-panel");
     const width = document.getElementById('svg-container').clientWidth;
     const height = document.getElementById('svg-container').clientHeight;
-    const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(60))
-        .force("charge", d3.forceManyBody().strength(-200))
-        .force("center", d3.forceCenter(width / 2, height / 2));
-    const link = svg.append("g")
-        .attr("stroke", "#999")
-        .attr("stroke-opacity", 0.6)
-        .selectAll("line")
-        .data(links)
-        .join("line")
-        .attr("stroke-width", 2);
-    precedenceChartNodes = svg.append("g")
-        .selectAll("g")
-        .data(nodes)
-        .join("g");
-    precedenceChartNodes.append("circle")
-        .attr("r", 12)
-        .attr("stroke", "#fff")
-        .attr("stroke-width", 1.5)
-        .attr("fill", "steelblue");
-    precedenceChartNodes.append("text")
-        .text(d => d.id)
-        .attr("text-anchor", "middle")
-        .attr("dy", "0.35em")
-        .style("fill", "white")
-        .style("font-size", "10px")
-        .style("pointer-events", "none");
-    precedenceChartNodes.call(d3.drag()
-        .on("start", dragstarted)
-        .on("drag", dragged)
-        .on("end", dragended));
-    simulation.on("tick", () => {
-        link
-            .attr("x1", d => d.source.x)
-            .attr("y1", d => d.source.y)
-            .attr("x2", d => d.target.x)
-            .attr("y2", d => d.target.y);
-        precedenceChartNodes
-            .attr("transform", d => `translate(${d.x}, ${d.y})`);
-    });
-    function dragstarted(event) {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        event.subject.fx = event.subject.x;
-        event.subject.fy = event.subject.y;
-    }
-    function dragged(event) {
-        event.subject.fx = event.x;
-        event.subject.fy = event.y;
-    }
-    function dragended(event) {
-        if (!event.active) simulation.alphaTarget(0);
-        event.subject.fx = null;
-        event.subject.fy = null;
-    }
+    const simulation = d3.forceSimulation(nodes).force("link", d3.forceLink(links).id(d => d.id).distance(60)).force("charge", d3.forceManyBody().strength(-200)).force("center", d3.forceCenter(width / 2, height / 2));
+    const link = svg.append("g").attr("stroke", "#999").attr("stroke-opacity", 0.6).selectAll("line").data(links).join("line").attr("stroke-width", 2);
+    precedenceChartNodes = svg.append("g").selectAll("g").data(nodes).join("g");
+    precedenceChartNodes.append("circle").attr("r", 12).attr("stroke", "#fff").attr("stroke-width", 1.5).attr("fill", "steelblue");
+    precedenceChartNodes.append("text").text(d => d.id).attr("text-anchor", "middle").attr("dy", "0.35em").style("fill", "white").style("font-size", "10px").style("pointer-events", "none");
+    precedenceChartNodes.call(d3.drag().on("start", dragstarted).on("drag", dragged).on("end", dragended));
+    simulation.on("tick", () => { link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y); precedenceChartNodes.attr("transform", d => `translate(${d.x}, ${d.y})`); });
+    function dragstarted(event) { if (!event.active) simulation.alphaTarget(0.3).restart(); event.subject.fx = event.subject.x; event.subject.fy = event.subject.y; }
+    function dragged(event) { event.subject.fx = event.x; event.subject.fy = event.y; }
+    function dragended(event) { if (!event.active) simulation.alphaTarget(0); event.subject.fx = null; event.subject.fy = null; }
 }
 
 /**
@@ -685,29 +663,30 @@ function drawPrecedenceChart() {
 function doesElementBuildModel(elementId, modelId) {
     const task = state.taskData.get(elementId);
     if (!task) return false;
-
     const modelMap = { 1: 'Super', 2: 'Ultra', 3: 'Mega' };
-    const modelFieldName = modelMap[modelId];
-
-    // An element "builds" a model if its percentage value in the data is greater than 0.
-    return task[modelFieldName] > 0;
+    return task[modelMap[modelId]] > 0;
 }
 
 /**
- * Layout - Halts the Simulation.
+ * Halts all running animations.
  */
-function stopSimulation() {
-    if (animationState.frameId) {
-        cancelAnimationFrame(animationState.frameId);
+function stopAllSimulations() {
+    if (animationState.layout.frameId) {
+        cancelAnimationFrame(animationState.layout.frameId);
+        animationState.layout = { frameId: null, isRunning: false };
     }
-    animationState = { frameId: null, isRunning: false };
+    if (animationState.schedule.frameId) {
+        cancelAnimationFrame(animationState.schedule.frameId);
+        animationState.schedule = { frameId: null, isRunning: false };
+    }
 }
 
 /**
 * Layout - Initialize the Simulation for a given configuration.
 */
 function startSimulation(config) {
-    stopSimulation();
+    stopAllSimulations();
+
     let {
         svg, g, masterPathNode, productionQueue, totalDurationMs, launchDelayMs,
         binConfig, opHours, clockDisplay, scale, elementMap
@@ -718,11 +697,12 @@ function startSimulation(config) {
         return;
     }
 
+    animationState.layout.isRunning = true;
     const realWorkdayDurationMs = (opHours * 60 * 60 * 1000) / 60; // 60x speed up
     const modelColors = { 1: '#3498db', 2: '#f1c40f', 3: '#e74c3c' };
     const modelBorders = { 1: '#f39c12', 2: '#8e44ad', 3: '#1abc9c' };
 
-    animationState = {
+    animationState.layout = {
         ...config,
         isRunning: true,
         startTime: performance.now(),
@@ -733,66 +713,55 @@ function startSimulation(config) {
         pathLength: masterPathNode.getTotalLength()
     };
 
-    // Animation Loop for Product movement
     function animationLoop(currentTime) {
-        if (!animationState.isRunning) return;
+        if (!animationState.layout.isRunning) return;
 
-        const elapsedRealTimeMs = Math.min(currentTime - animationState.startTime, realWorkdayDurationMs);
+        const elapsedRealTimeMs = currentTime - animationState.layout.startTime;
         const elapsedSimTimeMs = elapsedRealTimeMs * 60;
-
-        // Update clock
         const simSeconds = elapsedSimTimeMs / 1000;
         const totalSimHours = Math.floor(simSeconds / 3600);
         const totalSimMinutes = Math.floor((simSeconds % 3600) / 60);
         clockDisplay.text(`${String(totalSimHours).padStart(2, '0')}:${String(totalSimMinutes).padStart(2, '0')}`);
 
-
-        // Launch new products if within operational hour constraints
-        if (elapsedRealTimeMs < realWorkdayDurationMs && currentTime >= animationState.nextLaunchTime && animationState.queueIndex < animationState.productionQueue.length) {
-            const modelId = animationState.productionQueue[animationState.queueIndex];
-            animationState.productsOnLine.push({
+        if (elapsedRealTimeMs < realWorkdayDurationMs && currentTime >= animationState.layout.nextLaunchTime && animationState.layout.queueIndex < animationState.layout.productionQueue.length) {
+            const modelId = animationState.layout.productionQueue[animationState.layout.queueIndex];
+            animationState.layout.productsOnLine.push({
                 modelId: modelId,
                 launchTime: currentTime,
                 element: createProductShape(g, modelId, modelColors, modelBorders)
             });
-            animationState.queueIndex++;
-            animationState.nextLaunchTime += animationState.launchDelayMs;
+            animationState.layout.queueIndex++;
+            animationState.layout.nextLaunchTime += animationState.layout.launchDelayMs;
         }
 
-        // Update and move products on the line
-        for (let i = animationState.productsOnLine.length - 1; i >= 0; i--) {
-            const product = animationState.productsOnLine[i];
+        for (let i = animationState.layout.productsOnLine.length - 1; i >= 0; i--) {
+            const product = animationState.layout.productsOnLine[i];
             const elapsedTime = currentTime - product.launchTime;
-            const progress = elapsedTime / animationState.totalDurationMs;
+            const progress = elapsedTime / animationState.layout.totalDurationMs;
 
             if (progress >= 1) {
-                // Product finished, move to bin
-                placeInBin(product.element, animationState.finishedGoodsCount, animationState.binConfig, svg, scale);
-                animationState.finishedGoodsCount++;
-                animationState.productsOnLine.splice(i, 1);
+                placeInBin(product.element, animationState.layout.finishedGoodsCount, animationState.layout.binConfig, svg, scale);
+                animationState.layout.finishedGoodsCount++;
+                animationState.layout.productsOnLine.splice(i, 1);
             } else {
-                // Product is still on the line, update its position and color
-                const distance = animationState.pathLength * progress;
-                const pos = animationState.masterPathNode.getPointAtLength(distance);
-                const nextPos = animationState.masterPathNode.getPointAtLength(distance + 1);
+                const distance = animationState.layout.pathLength * progress;
+                const pos = animationState.layout.masterPathNode.getPointAtLength(distance);
+                const nextPos = animationState.layout.masterPathNode.getPointAtLength(distance + 1);
                 const angle = Math.atan2(nextPos.y - pos.y, nextPos.x - pos.x) * 180 / Math.PI;
                 product.element.attr('transform', `translate(${pos.x},${pos.y}) rotate(${angle})`);
-
                 const currentSegment = elementMap.find(e => distance >= e.startDist && distance < e.endDist);
                 const builds = currentSegment ? doesElementBuildModel(currentSegment.elementId, product.modelId) : false;
                 product.element.attr('fill', builds ? modelColors[product.modelId] : '#cccccc');
             }
         }
 
-        // Continue the loop
-        if (animationState.productsOnLine.length > 0 || (animationState.queueIndex < animationState.productionQueue.length && elapsedRealTimeMs < realWorkdayDurationMs)) {
-            animationState.frameId = requestAnimationFrame(animationLoop);
+        if (animationState.layout.productsOnLine.length > 0 || (animationState.layout.queueIndex < animationState.layout.productionQueue.length && elapsedRealTimeMs < realWorkdayDurationMs)) {
+            animationState.layout.frameId = requestAnimationFrame(animationLoop);
         } else {
-            animationState.isRunning = false;
+            animationState.layout.isRunning = false;
         }
     }
-
-    animationState.frameId = requestAnimationFrame(animationLoop);
+    animationState.layout.frameId = requestAnimationFrame(animationLoop);
 }
 
 /**
@@ -814,9 +783,7 @@ function createProductShape(container, modelId, modelColors, modelBorders) {
     }
 
     if (shape) {
-        shape.attr("fill", modelColors[modelId])
-            .attr("stroke", modelBorders[modelId])
-            .attr("stroke-width", 0.1);
+        shape.attr("fill", modelColors[modelId]).attr("stroke", modelBorders[modelId]).attr("stroke-width", 0.1);
     }
     return shape;
 }
@@ -828,14 +795,10 @@ function placeInBin(element, count, binConfig, svg, scale) {
     const { binPixelX, binPixelY_bottom, itemsPerRow, productPixelSize, padding } = binConfig;
     const row = Math.floor(count / itemsPerRow);
     const col = count % itemsPerRow;
-
     svg.node().appendChild(element.node());
-
-    // Calculate new position in pixels
     const newX = binPixelX + (padding / 2) + (col * productPixelSize) + (productPixelSize / 2);
     const newY = binPixelY_bottom - (padding / 2) - (row * productPixelSize) - (productPixelSize / 2);
     const newScale = productPixelSize / 1.3;
-
     element.attr('transform', `translate(${newX}, ${newY}) rotate(0) scale(${newScale})`);
 }
 
@@ -843,19 +806,17 @@ function placeInBin(element, count, binConfig, svg, scale) {
 * Layout - Renders the U-shaped assembly line layout and initializes the animation.
 */
 function drawLayoutVisualization() {
-    stopSimulation(); // Crucial reset step
+    stopAllSimulations();
     const numEmployees = parseInt(numEmployeesInput.value);
     const svg = d3.select("#layout-panel");
     svg.selectAll("*").remove();
 
     const config = state.configData[numEmployees];
     if (!config || Object.keys(config).length === 0) {
-        svg.append("text").attr("x", "50%").attr("y", "50%").attr("text-anchor", "middle").attr("fill", "black")
-            .text("No configuration data for this number of workstations.");
+        svg.append("text").attr("x", "50%").attr("y", "50%").attr("text-anchor", "middle").attr("fill", "black").text("No configuration data for this number of workstations.");
         return;
     }
 
-    // Check for invalid workstation spacing
     let isLayoutValid = true;
     for (const stationId in config) {
         const elements = config[stationId];
@@ -871,8 +832,7 @@ function drawLayoutVisualization() {
     if (!isLayoutValid) {
         demandStatusEl.textContent = "Invalid Spacing";
         demandStatusEl.className = "status failure";
-        svg.append("text").attr("x", "50%").attr("y", "50%").attr("text-anchor", "middle").attr("fill", "red")
-            .text("Error: A workstation's length is less than 13 feet.");
+        svg.append("text").attr("x", "50%").attr("y", "50%").attr("text-anchor", "middle").attr("fill", "red").text("Error: A workstation's length is less than 13 feet.");
         return;
     }
 
@@ -881,12 +841,10 @@ function drawLayoutVisualization() {
     const results = calculateMetrics(opInputs, finInputs);
     const { clientWidth: containerWidth, clientHeight: containerHeight } = document.getElementById('svg-container');
 
-    // Generate workstation geometry
     const isEven = numEmployees % 2 === 0;
     const numLeft = isEven ? numEmployees / 2 : Math.floor(numEmployees / 2);
     const middleWsId = isEven ? null : numLeft + 1;
     let connectionPoint;
-
     const baseHue = 150, goldenAngle = 137.5, baseChroma = 65, baseLuminance = 60, luminanceVary = 20, hueVary = 12;
     const workstationColors = [];
     for (let i = 0; i < numEmployees; i++) {
@@ -898,7 +856,6 @@ function drawLayoutVisualization() {
         const wsId = i;
         const elements = config[wsId];
         if (!elements || elements.length === 0) continue;
-
         const totalElementTime = elements.reduce((sum, elId) => sum + (state.taskData.get(elId)?.elementTime || 0), 0);
         const totalLengthFt = totalElementTime * 15;
         let p;
@@ -933,12 +890,10 @@ function drawLayoutVisualization() {
             }
         }
         allPoints.push(...p);
-
         const baseColor = workstationColors[wsId - 1];
         const startColor = baseColor.copy(); startColor.h += hueVary; startColor.l += luminanceVary;
         const endColor = baseColor.copy(); endColor.h -= hueVary; endColor.l -= luminanceVary;
         const elementShader = d3.scaleLinear().domain([0, elements.length > 1 ? elements.length - 1 : 1]).range([startColor.toString(), endColor.toString()]).interpolate(d3.interpolateHcl);
-
         let currentPathPosFt = 0;
         elements.forEach((elId, index) => {
             const task = state.taskData.get(elId);
@@ -947,33 +902,26 @@ function drawLayoutVisualization() {
         });
     }
 
-    // Calculate Bounding Box and Scaling for Assembly Line
     if (allPoints.length === 0) return;
     const minX_ft = d3.min(allPoints, d => d.x);
     const maxX_ft = d3.max(allPoints, d => d.x);
     const minY_ft = d3.min(allPoints, d => d.y);
     const maxY_ft = d3.max(allPoints, d => d.y);
     if ((maxX_ft - minX_ft) <= 0 || (maxY_ft - minY_ft) <= 0) return;
-
     const lineBBox = { width: maxX_ft - minX_ft, height: maxY_ft - minY_ft };
     const uiPadding = 20;
     const rightPanelWidth = 180;
-
     const availableWidth = containerWidth - rightPanelWidth - uiPadding;
     const availableHeight = containerHeight - (uiPadding * 2);
     const scale = Math.min(availableWidth / lineBBox.width, availableHeight / lineBBox.height);
-
     const scaledLineWidth = lineBBox.width * scale;
     const leftPadding = ((containerWidth - rightPanelWidth) - scaledLineWidth) / 2;
     const translateX = leftPadding - (minX_ft * scale);
     const translateY = uiPadding - (minY_ft * scale);
     const g = svg.append("g").attr("transform", `translate(${translateX}, ${translateY}) scale(${scale})`).attr("fill", "none");
-
-    // Draw UI Overlay (Dashboard, Bin, Legend) in Pixel Space
     const clockGroup = svg.append("g").attr("transform", `translate(${uiPadding}, ${uiPadding + 10})`);
     clockGroup.append("rect").attr("x", -10).attr("y", -22).attr("width", 100).attr("height", 30).attr("fill", "rgba(0,0,0,0.5)").attr("rx", 5);
     const clockDisplay = clockGroup.append("text").attr("id", "sim-clock-display").attr("fill", "white").style("font-size", "18px").style("font-family", "monospace").text("00:00");
-
     const speedoX = containerWidth - (rightPanelWidth / 2) - uiPadding;
     const speedoY = 80;
     const speedoGroup = svg.append("g").attr("transform", `translate(${speedoX}, ${speedoY})`);
@@ -981,81 +929,43 @@ function drawLayoutVisualization() {
     const speedoScale = d3.scaleLinear().domain([0, 15]).range([-90, 90]);
     const arcGen = d3.arc().innerRadius(speedoRadius * 0.7).outerRadius(speedoRadius).startAngle(-Math.PI / 2).endAngle(Math.PI / 2);
     speedoGroup.append("path").attr("d", arcGen).attr("fill", "#eee").attr("stroke", "#999");
-    speedoGroup.selectAll("line.tick").data(speedoScale.ticks(3)).enter().append("line").attr("class", "tick")
-        .attr("x1", 0).attr("y1", -speedoRadius * 1.05).attr("x2", 0).attr("y2", -speedoRadius * 0.7)
-        .attr("transform", d => `rotate(${speedoScale(d)})`).attr("stroke", "black").attr("stroke-width", 2);
-    speedoGroup.append("line").attr("id", "speedo-needle").attr("y2", -speedoRadius * 0.9).attr("stroke", "#e74c3c").attr("stroke-width", 3).attr("stroke-linecap", "round")
-        .attr("transform", `rotate(${speedoScale(Math.min(15, results.conveyorSpeed || 0))})`);
+    speedoGroup.selectAll("line.tick").data(speedoScale.ticks(3)).enter().append("line").attr("class", "tick").attr("x1", 0).attr("y1", -speedoRadius * 1.05).attr("x2", 0).attr("y2", -speedoRadius * 0.7).attr("transform", d => `rotate(${speedoScale(d)})`).attr("stroke", "black").attr("stroke-width", 2);
+    speedoGroup.append("line").attr("id", "speedo-needle").attr("y2", -speedoRadius * 0.9).attr("stroke", "#e74c3c").attr("stroke-width", 3).attr("stroke-linecap", "round").attr("transform", `rotate(${speedoScale(Math.min(15, results.conveyorSpeed || 0))})`);
     speedoGroup.append("text").text(`${(results.conveyorSpeed || 0).toFixed(1)} ft/min`).attr("y", speedoRadius * 0.5).attr("text-anchor", "middle").style("font-size", "14px").attr("fill", "black");
-
     const binConfig = { productPixelSize: 12, itemsPerRow: 10, padding: 5 };
     binConfig.binPixelWidth = (binConfig.itemsPerRow * binConfig.productPixelSize) + (2 * binConfig.padding);
     binConfig.binPixelX = containerWidth - binConfig.binPixelWidth - uiPadding;
     binConfig.binPixelY_bottom = containerHeight - uiPadding;
     const binTopY = binConfig.binPixelY_bottom - (containerHeight * 0.70);
     const actualBinHeight = binConfig.binPixelY_bottom - binTopY;
-
     svg.append("rect").attr("x", binConfig.binPixelX).attr("y", binTopY).attr("width", binConfig.binPixelWidth).attr("height", actualBinHeight).attr("fill", "#E5E7E9").attr("stroke", "#666").attr("stroke-width", 1);
     svg.append("text").text("Finished Goods").attr("x", binConfig.binPixelX + binConfig.binPixelWidth / 2).attr("y", binTopY + actualBinHeight / 2).attr("text-anchor", "middle").attr("dominant-baseline", "middle").style("font-size", "16px").attr("fill", "#333");
-
     const legendGroup = svg.append("g").attr("transform", `translate(${uiPadding}, ${containerHeight - 130})`);
     legendGroup.append("rect").attr("width", 160).attr("height", 120).attr("fill", "rgba(255,255,255,0.8)").attr("rx", 5).attr("stroke", "#ccc");
     legendGroup.append("text").text("Legend").attr("x", 10).attr("y", 20).style("font-weight", "bold").attr("fill", "black");
     const legendModels = [{ id: 1, name: "Super" }, { id: 2, name: "Ultra" }, { id: 3, name: "Mega" }];
     const modelColors = { 1: '#3498db', 2: '#f1c40f', 3: '#e74c3c' };
     const modelBorders = { 1: '#f39c12', 2: '#8e44ad', 3: '#1abc9c' };
-    legendModels.forEach((model, i) => {
-        const item = legendGroup.append("g").attr("transform", `translate(20, ${40 + i * 22})`);
-        createProductShape(item, model.id, modelColors, modelBorders).attr("transform", "scale(8)");
-        item.append("text").text(model.name).attr("x", 20).attr("y", 4).attr("fill", "black");
-    });
+    legendModels.forEach((model, i) => { const item = legendGroup.append("g").attr("transform", `translate(20, ${40 + i * 22})`); createProductShape(item, model.id, modelColors, modelBorders).attr("transform", "scale(8)"); item.append("text").text(model.name).attr("x", 20).attr("y", 4).attr("fill", "black"); });
     legendGroup.append("text").text("Grid: 10ft x 10ft").attr("x", 10).attr("y", 110).style("font-style", "italic").attr("fill", "black");
-
-    // Draw Assembly Line & Grid
     const gridGroup = g.append("g");
-    const gridBounds = {
-        x1: (0 - translateX) / scale, y1: (0 - translateY) / scale,
-        x2: (containerWidth - translateX) / scale, y2: (containerHeight - translateY) / scale
-    };
-    for (let x = Math.floor(gridBounds.x1 / 10) * 10; x <= gridBounds.x2; x += 10) {
-        gridGroup.append("line").attr("x1", x).attr("y1", gridBounds.y1).attr("x2", x).attr("y2", gridBounds.y2);
-    }
-    for (let y = Math.floor(gridBounds.y1 / 10) * 10; y <= gridBounds.y2; y += 10) {
-        gridGroup.append("line").attr("x1", gridBounds.x1).attr("y1", y).attr("x2", gridBounds.x2).attr("y2", y);
-    }
+    const gridBounds = { x1: (0 - translateX) / scale, y1: (0 - translateY) / scale, x2: (containerWidth - translateX) / scale, y2: (containerHeight - translateY) / scale };
+    for (let x = Math.floor(gridBounds.x1 / 10) * 10; x <= gridBounds.x2; x += 10) { gridGroup.append("line").attr("x1", x).attr("y1", gridBounds.y1).attr("x2", x).attr("y2", gridBounds.y2); }
+    for (let y = Math.floor(gridBounds.y1 / 10) * 10; y <= gridBounds.y2; y += 10) { gridGroup.append("line").attr("x1", gridBounds.x1).attr("y1", y).attr("x2", gridBounds.x2).attr("y2", y); }
     gridGroup.selectAll("line").attr("stroke", "rgba(0,0,0,0.1)").attr("stroke-width", 0.2);
-
     const elementGroups = g.selectAll("g.element-group").data(allPaths).join("g");
     elementGroups.append("path").attr("d", d => d.path).attr("stroke", "#333333").attr("stroke-width", 1.4).attr("stroke-linecap", "round");
     elementGroups.append("path").attr("d", d => d.path).attr("stroke", d => d.color).attr("stroke-width", 1).attr("stroke-linecap", "round").append("title").text(d => `Element ${d.elId}\nWorkstation ${d.wsId}`);
-
-    // Initialize and Start Product Animation
     const totalDurationSec = (ASSEMBLY_LINE_LENGTH / results.conveyorSpeed);
     const launchDelaySec = (results.productSpacing / results.conveyorSpeed);
-
     if (isFinite(totalDurationSec) && totalDurationSec > 0 && isFinite(launchDelaySec) && launchDelaySec > 0) {
         let masterPathString = "";
         allPaths.forEach((pathData, i) => { masterPathString += i === 0 ? pathData.path : pathData.path.replace('M', ' '); });
         const masterPathNode = g.append("path").attr("d", masterPathString).node();
-
         let cumulativeDist = 0;
         const tempPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        const elementMap = allPaths.map(p => {
-            tempPath.setAttribute('d', p.path);
-            const len = tempPath.getTotalLength();
-            const segment = { elementId: p.elId, startDist: cumulativeDist, endDist: cumulativeDist + len };
-            cumulativeDist += len;
-            return segment;
-        });
-
-        startSimulation({
-            svg, g, masterPathNode, clockDisplay, elementMap,
-            opHours: opInputs.opHours,
-            productionQueue: generateProductionQueue(opInputs.dailyDemand),
-            totalDurationMs: totalDurationSec * 1000,
-            launchDelayMs: launchDelaySec * 1000,
-            binConfig, scale
-        });
+        const elementMap = allPaths.map(p => { tempPath.setAttribute('d', p.path); const len = tempPath.getTotalLength(); const segment = { elementId: p.elId, startDist: cumulativeDist, endDist: cumulativeDist + len }; cumulativeDist += len; return segment; });
+        startSimulation({ svg, g, masterPathNode, clockDisplay, elementMap, opHours: opInputs.opHours, productionQueue: generateProductionQueue(opInputs.dailyDemand), totalDurationMs: totalDurationSec * 1000, launchDelayMs: launchDelaySec * 1000, binConfig, scale });
     }
 }
 
@@ -1091,6 +1001,217 @@ function generateSubPath(points, startFt, lengthFt) {
         traveledFt += segLenFt;
     }
     return pathString;
+}
+
+/**
+ * Schedule - Gathers data for the Gantt chart.
+ */
+function runGanttSimulation() {
+    const numEmployees = parseInt(numEmployeesInput.value);
+    const dailyDemand = parseInt(dailyDemandInput.value);
+    const opHours = parseFloat(opHoursInput.value);
+    const config = state.configData[numEmployees];
+
+    if (!config || Object.keys(config).length === 0 || invalidPrecedenceNodes.size > 0) {
+        return { tasks: [] };
+    }
+
+    const productionQueue = generateProductionQueue(dailyDemand);
+    const metrics = calculateMetrics({ dailyDemand, opHours, numEmployees }, {});
+    const launchInterval = metrics.effectiveCycleTime;
+
+    let allFinishedTasks = [];
+
+    // Initial arrivals at the first station
+    let arrivalsForNextStation = productionQueue.map((modelId, index) => ({
+        modelId: modelId,
+        arrivalTime: index * launchInterval,
+        uniqueId: `${modelId}-${index}`
+    }));
+
+    const sortedWorkstationIds = Object.keys(config).sort((a, b) => parseInt(a) - parseInt(b));
+
+    for (const stationId of sortedWorkstationIds) {
+        const elements = config[stationId] || [];
+        if (elements.length === 0) continue;
+
+        let stationFreeTime = 0; // Tracks when the workstation is next available
+        let processedModels = []; // Models that have completed this station
+
+        // Sort models by their arrival time at this station
+        arrivalsForNextStation.sort((a, b) => a.arrivalTime - b.arrivalTime);
+
+        for (const model of arrivalsForNextStation) {
+            // Work can only start after the model arrives AND the station is free.
+            let currentTimeForModel = Math.max(stationFreeTime, model.arrivalTime);
+
+            // Sequentially process elements for this model
+            for (const elementId of elements) {
+                // Check if this element is valid for the current model
+                if (doesElementBuildModel(elementId, model.modelId)) {
+                    const task = state.taskData.get(elementId);
+                    if (task) {
+                        const taskStartTime = currentTimeForModel;
+                        const taskEndTime = taskStartTime + task.elementTime;
+
+                        allFinishedTasks.push({
+                            workstationId: `WS ${stationId}`,
+                            modelId: model.modelId,
+                            taskId: elementId,
+                            startTime: taskStartTime,
+                            endTime: taskEndTime,
+                            uniqueId: model.uniqueId
+                        });
+
+                        // The current time for this model advances to the end of this task
+                        currentTimeForModel = taskEndTime;
+                    }
+                }
+            } // End of elements loop for one model
+
+            // The station is now occupied until this model is fully processed
+            stationFreeTime = currentTimeForModel;
+
+            // The model's arrival time for the *next* station is when it departs this one.
+            processedModels.push({ ...model, arrivalTime: currentTimeForModel });
+
+        } // End of models loop for one station
+
+        // The output of this station is the input for the next
+        arrivalsForNextStation = processedModels;
+    }
+
+    return { tasks: allFinishedTasks };
+}
+
+
+/**
+ * Schedule - Renders the scrolling Gantt chart animation, aligned with the left sidebar.
+ */
+function drawScheduleVisualization() {
+    stopAllSimulations();
+    const svg = d3.select("#schedule-panel");
+    svg.selectAll("*").remove();
+
+    const simulationResult = runGanttSimulation();
+    const { clientWidth: containerWidth, clientHeight: containerHeight } = document.getElementById('svg-container');
+
+    if (!simulationResult || simulationResult.tasks.length === 0) {
+        svg.append("text").attr("x", containerWidth / 2).attr("y", containerHeight / 2).attr("text-anchor", "middle").attr("fill", "#666")
+            .text("No data to display. Check configuration or inputs.");
+        return;
+    }
+
+    animationState.schedule.isRunning = true;
+    const { tasks } = simulationResult;
+    const opHours = parseFloat(opHoursInput.value);
+
+    const margin = { top: 40, right: 20, bottom: 20, left: 20 };
+    const width = containerWidth - margin.left - margin.right;
+    const height = containerHeight - margin.top - margin.bottom;
+
+    const chart = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+    const clockGroup = svg.append("g").attr("transform", `translate(${margin.left+10}, 30)`);
+    clockGroup.append("rect").attr("x", -10).attr("y", -15).attr("width", 100).attr("height", 20).attr("fill", "rgba(0,0,0,0.5)").attr("rx", 5);
+    const clockDisplay = clockGroup.append("text").attr("id", "sim-clock-display").attr("fill", "white").style("font-size", "18px").style("font-family", "monospace").text("00:00");
+
+    // All scrolling content (bars and borders) goes in this single group.
+    const contentGroup = chart.append("g").attr("class", "schedule-content-group");
+
+    const gridGroup = contentGroup.append("g").attr("class", "vertical-grid");
+
+    // This combined offset accounts for the SVG's position on the page AND its internal top margin.
+    const yOffset = document.getElementById('svg-container').getBoundingClientRect().top + margin.top;
+
+    // 1. Map the precise geometry of each element row from the sidebar.
+    const elementGeometry = new Map();
+    document.querySelectorAll('.element-row').forEach(elRow => {
+        const taskId = parseInt(elRow.dataset.taskId);
+        const rect = elRow.getBoundingClientRect();
+        const centerY = rect.top + rect.height / 2;
+        const barHeight = rect.height * 0.8; // Use 80% of the row height for the bar.
+        const barY = (centerY - barHeight / 2) - yOffset;
+        elementGeometry.set(taskId, { y: barY, height: barHeight });
+    });
+
+    // 2. Draw workstation title-centered borders inside the scrolling group.
+    document.querySelectorAll('.workstation-title').forEach(title => {
+        const rect = title.getBoundingClientRect();
+        const centerY = rect.top + rect.height / 2;
+        const lineY = centerY - yOffset;
+
+        contentGroup.append("line")
+            .attr("x1", -margin.left).attr("x2", width + margin.right)
+            .attr("y1", lineY).attr("y2", lineY)
+            .attr("stroke", "#34495e").attr("stroke-width", 3).attr("stroke-opacity", 0.75);
+    });
+
+    const VIEW_WINDOW_MINS = 10;
+    const xScale = d3.scaleLinear().range([0, width]);
+    const modelColors = d3.scaleOrdinal().domain([1, 2, 3]).range(['#3498db', '#f1c40f', '#e74c3c']);
+
+    const timeMarker = chart.append("line").attr("x1", 0).attr("x2", 0).attr("y1", -margin.top).attr("y2", height + margin.bottom).attr("stroke", "red").attr("stroke-width", 2);
+    timeMarker.append("title").text("Current Simulation Time");
+
+    // 3. Draw the Gantt bars using the calculated geometry map.
+    contentGroup.append("g").attr("class", "task-bars")
+        .selectAll(".bar").data(tasks).enter().append("rect")
+        .attr("class", "bar")
+        .attr("y", d => elementGeometry.get(d.taskId)?.y || -100)
+        .attr("height", d => elementGeometry.get(d.taskId)?.height || 0)
+        .attr("fill", d => modelColors(d.modelId))
+        .attr("stroke", "#333").attr("stroke-width", 0.5);
+
+    const maxTime = tasks.length > 0 ? d3.max(tasks, d => d.endTime) : (opHours * 60);
+    const totalSimDurationMinutes = maxTime;
+    const totalRealSimDurationMs = (totalSimDurationMinutes * 60000) / 60;
+
+    const animationStartTime = performance.now();
+
+    function animationLoop(currentTime) {
+        if (!animationState.schedule.isRunning) return;
+
+        const elapsedRealTimeMs = currentTime - animationStartTime;
+        const cappedElapsedRealTimeMs = Math.min(elapsedRealTimeMs, totalRealSimDurationMs);
+        const elapsedSimTimeMinutes = (cappedElapsedRealTimeMs * 60) / 60000;
+
+        const h = String(Math.floor(elapsedSimTimeMinutes / 60)).padStart(2, '0');
+        const m = String(Math.floor(elapsedSimTimeMinutes % 60)).padStart(2, '0');
+        clockDisplay.text(`${h}:${m}`);
+
+        const viewStartTime = (elapsedRealTimeMs * 60) / 60000;
+        xScale.domain([viewStartTime, viewStartTime + VIEW_WINDOW_MINS]);
+
+        contentGroup.selectAll(".bar")
+            .attr("x", d => xScale(d.startTime))
+            .attr("width", d => Math.max(0, xScale(d.endTime) - xScale(d.startTime)));
+
+        // Dynamically update vertical grid lines
+        const interval = 15; // 15 minutes
+        const viewEndTime = viewStartTime + VIEW_WINDOW_MINS;
+        const firstTick = Math.ceil(viewStartTime / interval) * interval;
+        const tickValues = d3.range(firstTick, viewEndTime, interval);
+
+        gridGroup.selectAll("line")
+            .data(tickValues, d => d)
+            .join("line")
+            .attr("x1", d => xScale(d))
+            .attr("x2", d => xScale(d))
+            .attr("y1", -margin.top)
+            .attr("y2", height + containerHeight) // Ensure it covers the full scrollable area
+            .attr("stroke", "#e0e0e0")
+            .attr("stroke-width", 1);
+
+
+        if (elapsedRealTimeMs < totalRealSimDurationMs) {
+            animationState.schedule.frameId = requestAnimationFrame(animationLoop);
+        } else {
+            animationState.schedule.isRunning = false;
+        }
+    }
+    workstationList.dispatchEvent(new Event('scroll'));
+    animationState.schedule.frameId = requestAnimationFrame(animationLoop);
 }
 
 // Run the application
