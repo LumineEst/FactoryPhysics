@@ -191,6 +191,11 @@ body {
     margin-top: 0.5rem;
 }
 
+.workstation-list {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+}
+
 .workstation-title {
     font-weight: bold;
     margin-bottom: 0.1rem;
