@@ -949,8 +949,8 @@ function drawLayoutVisualization() {
     for (let y = Math.floor(gridBounds.y1 / 10) * 10; y <= gridBounds.y2; y += 10) { gridGroup.append("line").attr("x1", gridBounds.x1).attr("y1", y).attr("x2", gridBounds.x2).attr("y2", y); }
     gridGroup.selectAll("line").attr("stroke", "rgba(0,0,0,0.1)").attr("stroke-width", 0.2);
     const elementGroups = g.selectAll("g.element-group").data(allPaths).join("g");
-    elementGroups.append("path").attr("d", d => d.path).attr("stroke", "#333333").attr("stroke-width", 1.4).attr("stroke-linecap", "round");
-    elementGroups.append("path").attr("d", d => d.path).attr("stroke", d => d.color).attr("stroke-width", 1).attr("stroke-linecap", "round").append("title").text(d => `Element ${d.elId}\nWorkstation ${d.wsId}`);
+    elementGroups.append("path").attr("d", d => d.path).attr("stroke", "#333333").attr("stroke-width", 1.4).attr("stroke-linecap", "butt");
+    elementGroups.append("path").attr("d", d => d.path).attr("stroke", d => d.color).attr("stroke-width", 1).attr("stroke-linecap", "butt").append("title").text(d => `Element ${d.elId}\nWorkstation ${d.wsId}`);
     const totalDurationSec = (ASSEMBLY_LINE_LENGTH / results.conveyorSpeed);
     const launchDelaySec = (results.productSpacing / results.conveyorSpeed);
     if (isFinite(totalDurationSec) && totalDurationSec > 0 && isFinite(launchDelaySec) && launchDelaySec > 0) {
