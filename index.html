@@ -29,7 +29,7 @@
                     <button class="tab-btn" data-tab="precedence">Precedence</button>  
                     <button class="tab-btn" data-tab="schedule">Schedule</button>
                     <button class="tab-btn" data-tab="efficiency">Efficiency</button>
-                    <button class="tab-btn active" data-tab="layout">Layout</button>
+                    <button class="tab-btn" data-tab="layout">Layout</button>
                     <button class="tab-btn" data-tab="profit">Profit</button> 
                 </nav>
             </header>
@@ -37,7 +37,7 @@
                 <svg id="visualization-svg" width="100%" height="100%">
                     <g id="overview-panel" class="vis-panel" style="display: none;"></g>
                     <g id="precedence-panel" class="vis-panel" style="display: none;"></g>
-                    <g id="schedule-panel" class="vis-panel active"></g>
+                    <g id="schedule-panel" class="vis-panel"></g>
                     <g id="efficiency-panel" class="vis-panel" style="display: none;"></g>
                     <g id="layout-panel" class="vis-panel" style="display: none;"></g>
                     <g id="profit-panel" class="vis-panel" style="display: none;"></g>
@@ -75,14 +75,14 @@
                     <div class="fin-grid">
                         <span></span><span>Sell Price ($/unit)</span><span>Material Cost ($/unit)</span>
                         <label>Super</label>
-                        <input type="number" id="superSell" value="1250">
-                        <input type="number" id="superCogs" value="450">
+                        <input type="number" id="superSell" value="400" min="1">
+                        <input type="number" id="superCogs" value="375" min="1">
                         <label>Ultra</label>
-                        <input type="number" id="ultraSell" value="1500">
-                        <input type="number" id="ultraCogs" value="550">
+                        <input type="number" id="ultraSell" value="620" min="1">
+                        <input type="number" id="ultraCogs" value="590" min="1">
                         <label>Mega</label>
-                        <input type="number" id="megaSell" value="1800">
-                        <input type="number" id="megaCogs" value="650">
+                        <input type="number" id="megaSell" value="1000" min="1">
+                        <input type="number" id="megaCogs" value="960" min="1">
                     </div>
                 </section>
                 <hr>
