@@ -467,7 +467,10 @@ function updateUI() {
     employeeCountDisplay.textContent = numEmployeesInput.value;
     renderWorkstationSidebar(parseInt(numEmployeesInput.value));
     setupDragAndDrop();
-    invalidPrecedenceNodes = validatePrecedence();
+
+    const invalidPrecedenceMap = validatePrecedence();
+    invalidPrecedenceNodes = new Set(invalidPrecedenceMap.keys());
+
     if (invalidPrecedenceNodes.size > 0) {
         demandStatusEl.textContent = "Fails to Meet Precedence";
         demandStatusEl.className = "status failure";
@@ -513,6 +516,7 @@ function updateUI() {
             demandStatusEl.className = results.meetsDemand ? "status success" : "status failure";
         }
     }
+
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
 
     stopAllSimulations();
@@ -533,6 +537,7 @@ function updateUI() {
     }
     if (activeTab === 'precedence') {
         updatePrecedenceChartColors();
+        updatePrecedenceChartLinks(invalidPrecedenceMap);
     }
 }
 
@@ -948,16 +953,44 @@ function drawPrecedenceChart() {
     const svg = d3.select("#precedence-panel");
     svg.selectAll("*").remove();
 
+    svg.append('defs').selectAll('marker')
+        .data(['arrowhead', 'arrowhead-highlight'])
+        .join('marker')
+        .attr('id', d => d)
+        .attr('viewBox', '0 -5 10 10')
+        .attr('refX', 10)
+        .attr('refY', 0)
+        .attr('orient', 'auto')
+        .attr('markerWidth', 6)
+        .attr('markerHeight', 6)
+        .append('path')
+        .attr('d', 'M0,-5L10,0L0,5')
+        .attr('fill', d => d === 'arrowhead-highlight' ? '#e74c3c' : '#999');
+
     const width = document.getElementById('svg-container').clientWidth;
     const height = document.getElementById('svg-container').clientHeight;
+
     const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(60))
-        .force("charge", d3.forceManyBody().strength(-200))
-        .force("center", d3.forceCenter(width / 2, height / 2));
+        .force("link", d3.forceLink(links).id(d => d.id).distance(d => {
+            // Define the specific links that need a shorter distance.
+            const specialLinks = {
+                '13-14': true,
+                '14-15': true,
+                '14-18': true
+            };
+            // Create a key from the link's source and target IDs.
+            const linkKey = `${d.source.id}-${d.target.id}`;
+            return specialLinks[linkKey] ? 5 : 40;
+        }))
+        .force("charge", d3.forceManyBody().strength(-500))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collide", d3.forceCollide().radius(d => (d.r || 50) + 8).strength(1));
 
     const link = svg.append("g")
-        .attr("stroke", "#999").attr("stroke-opacity", 0.6)
-        .selectAll("line").data(links).join("line").attr("stroke-width", 2);
+        .attr("stroke", "#999").attr("stroke-opacity", 0.8)
+        .selectAll("line").data(links).join("line")
+        .attr("stroke-width", 2.5)
+        .attr("marker-end", "url(#arrowhead)");
 
     precedenceChartNodes = svg.append("g").selectAll("g").data(nodes).join("g");
 
@@ -972,8 +1005,27 @@ function drawPrecedenceChart() {
         .on("start", dragstarted).on("drag", dragged).on("end", dragended));
 
     simulation.on("tick", () => {
-        link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
-            .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+        link.each(function (d) {
+            const targetRadius = (d.target.r || 12) + 3;
+            const dx = d.target.x - d.source.x;
+            const dy = d.target.y - d.source.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            let x2 = d.target.x;
+            let y2 = d.target.y;
+
+            if (distance > 0) {
+                const ratio = (distance - targetRadius) / distance;
+                x2 = d.source.x + dx * ratio;
+                y2 = d.source.y + dy * ratio;
+            }
+
+            d3.select(this)
+                .attr("x1", d.source.x)
+                .attr("y1", d.source.y)
+                .attr("x2", x2)
+                .attr("y2", y2);
+        });
         precedenceChartNodes.attr("transform", d => `translate(${d.x}, ${d.y})`);
     });
 
@@ -993,6 +1045,110 @@ function drawPrecedenceChart() {
     }
 
     renderPrecedenceLegend();
+}
+
+
+/**
+ * Precedence - Sets link styles based on the specific paths that violate precedence.
+ */
+function updatePrecedenceChartLinks() {
+    if (!precedenceChartNodes) return;
+
+    const allLinks = d3.select("#precedence-panel").selectAll('g > line');
+
+    if (invalidPrecedenceNodes.size === 0) {
+        // Reset all links to default style if there are no errors
+        allLinks
+            .transition().duration(300)
+            .attr('stroke', '#999')
+            .attr('stroke-width', 2.5)
+            .attr('marker-end', 'url(#arrowhead)');
+        return;
+    }
+
+    // Step 1: Get the current visual order of all elements from the DOM.
+    const elementOrderMap = new Map();
+    let orderIndex = 0;
+    document.querySelectorAll('.element-row').forEach(row => {
+        const taskId = parseInt(row.dataset.taskId);
+        elementOrderMap.set(taskId, orderIndex++);
+    });
+
+    // Step 2: Build a map of direct successors for path traversal.
+    const directPredecessorsData = [
+        { id: 1, predecessors: [] }, { id: 2, predecessors: [1] }, { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] },
+        { id: 5, predecessors: [2, 3] }, { id: 6, predecessors: [1] }, { id: 7, predecessors: [6] }, { id: 8, predecessors: [1] },
+        { id: 9, predecessors: [8] }, { id: 10, predecessors: [1] }, { id: 11, predecessors: [1] }, { id: 12, predecessors: [10, 11] },
+        { id: 13, predecessors: [4, 5, 7, 9, 12] }, { id: 14, predecessors: [13] }, { id: 15, predecessors: [14] }, { id: 16, predecessors: [15] },
+        { id: 17, predecessors: [16] }, { id: 18, predecessors: [14] }, { id: 19, predecessors: [18] }, { id: 20, predecessors: [19] },
+        { id: 21, predecessors: [20] }, { id: 22, predecessors: [18] }, { id: 23, predecessors: [22] }, { id: 24, predecessors: [23] },
+        { id: 25, predecessors: [19, 22] }, { id: 26, predecessors: [19, 22] }, { id: 27, predecessors: [25, 26] }, { id: 28, predecessors: [27] },
+        { id: 29, predecessors: [15] }, { id: 30, predecessors: [17, 21, 24, 27, 29] }, { id: 31, predecessors: [30] },
+    ];
+    const directSuccessorsMap = new Map();
+    directPredecessorsData.forEach(el => {
+        if (!directSuccessorsMap.has(el.id)) directSuccessorsMap.set(el.id, new Set());
+        el.predecessors.forEach(pId => {
+            if (!directSuccessorsMap.has(pId)) directSuccessorsMap.set(pId, new Set());
+            directSuccessorsMap.get(pId).add(el.id);
+        });
+    });
+
+    // Helper function to get all successors of a node, with memoization for performance.
+    const fullSuccessorMemo = new Map();
+    function getAllSuccessors(taskId) {
+        if (fullSuccessorMemo.has(taskId)) return fullSuccessorMemo.get(taskId);
+
+        const successors = directSuccessorsMap.get(taskId) || new Set();
+        const allSuccessors = new Set(successors);
+        successors.forEach(sId => {
+            getAllSuccessors(sId).forEach(gsId => allSuccessors.add(gsId));
+        });
+
+        fullSuccessorMemo.set(taskId, allSuccessors);
+        return allSuccessors;
+    }
+
+    // Step 3: Identify all nodes that lie on a path between a violating node
+    // and a specific predecessor that has been placed *after* it.
+    const violatingPathNodes = new Set();
+    for (const violatingNodeId of invalidPrecedenceNodes) {
+        const allPredecessors = precedenceMap.get(violatingNodeId) || new Set();
+
+        for (const predecessorId of allPredecessors) {
+            if (elementOrderMap.get(predecessorId) > elementOrderMap.get(violatingNodeId)) {
+                violatingPathNodes.add(violatingNodeId);
+                violatingPathNodes.add(predecessorId);
+                const successorsOfLatePred = getAllSuccessors(predecessorId);
+
+                for (const potentialPathNodeId of successorsOfLatePred) {
+                    if (allPredecessors.has(potentialPathNodeId)) {
+                        violatingPathNodes.add(potentialPathNodeId);
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 4: Sort links to draw highlighted ones on top, then apply styles.
+    allLinks
+        .sort((a, b) => {
+            // Determine if links a and b are part of a violating path
+            const aIsHighlighted = violatingPathNodes.has(a.source.id) && violatingPathNodes.has(a.target.id);
+            const bIsHighlighted = violatingPathNodes.has(b.source.id) && violatingPathNodes.has(b.target.id);
+
+            if (aIsHighlighted && !bIsHighlighted) return 1;  // a is drawn on top of b
+            if (!aIsHighlighted && bIsHighlighted) return -1; // b is drawn on top of a
+            return 0;
+        })
+        .each(function (d) {
+            const isHighlighted = violatingPathNodes.has(d.source.id) && violatingPathNodes.has(d.target.id);
+            d3.select(this)
+                .transition().duration(300)
+                .attr('stroke', isHighlighted ? '#e74c3c' : '#999')
+                .attr('stroke-width', isHighlighted ? 5.5 : 2.5) // Increased width
+                .attr('marker-end', isHighlighted ? 'url(#arrowhead-highlight)' : 'url(#arrowhead)');
+        });
 }
 
 /* =======================
@@ -1899,7 +2055,7 @@ function drawLayoutVisualization() {
     g.selectAll("g.element-group-butt")
         .data(buttPaths, d => `${d.wsId}-${d.elId}`)
         .join("g")
-        .attr("class", "element-group-butt")      
+        .attr("class", "element-group-butt")
         .call(drawElementPaths);
 
     // 2. Draw the 'round' capped elements on top.
@@ -2173,7 +2329,7 @@ function drawEfficiencyPanel() {
         .join(enter => enter.append("g").attr("id", "eff-root"));
 
     // Layout params
-    const wsBlockWidth  = 500;
+    const wsBlockWidth = 500;
     const wsBlockHeight = 260;
     const margin = { top: 80, left: 40 };
     const cols = 4;
@@ -2181,7 +2337,7 @@ function drawEfficiencyPanel() {
         const col = i % cols;
         const row = Math.floor(i / cols) + 1;
         const x = margin.left + col * wsBlockWidth;
-        const y = margin.top  + row * wsBlockHeight;
+        const y = margin.top + row * wsBlockHeight;
         return `translate(${x},${y})`;
     };
 
@@ -2197,7 +2353,7 @@ function drawEfficiencyPanel() {
     // sub-groups created on enter only
     wsEnter.append("g").attr("class", "pie").attr("transform", "translate(75,75)");
     wsEnter.append("g").attr("class", "clock").attr("transform", "translate(275,75)");
-    
+
     // Add workstation heading
     wsEnter.append("text")
         .attr("class", "ws-heading")
@@ -2211,7 +2367,7 @@ function drawEfficiencyPanel() {
     // Update positions for all workstations (including existing ones)
     const wsMerge = wsEnter.merge(wsSel)
         .attr("transform", (d, i) => layoutTransform(i));
-    
+
     // Update workstation headings
     wsMerge.select("text.ws-heading")
         .text(d => `Workstation ${d.id}`);
@@ -2224,21 +2380,21 @@ function drawEfficiencyPanel() {
 
     wsMerge.each(function (ws) {
         const pieGroup = d3.select(this).select("g.pie");
-        
+
         // Create data with fixed angles instead of using d3.pie()
         // Clamp efficiency to prevent exact 100% which causes flickering
         const clampedEfficiency = Math.min(ws.efficiency, 99.99) / 100; // convert to 0-1 range
         const workAngle = clampedEfficiency * 2 * Math.PI; // work portion angle
-        
+
         const data = [
-            { 
-                label: "Work", 
+            {
+                label: "Work",
                 startAngle: 0,  // start at top (12 o'clock)
                 endAngle: workAngle,  // end after work portion
                 value: Math.min(ws.efficiency, 99.99)
             },
-            { 
-                label: "Idle", 
+            {
+                label: "Idle",
                 startAngle: workAngle,  // start where work ends
                 endAngle: 2 * Math.PI,  // complete the circle
                 value: Math.max(100 - ws.efficiency, 0.01)
@@ -2252,7 +2408,7 @@ function drawEfficiencyPanel() {
             .append("path")
             .attr("class", "slice")
             .attr("fill", d => d.label === "Work" ? "#2ecc71" : "#e74c3c")
-            .each(function(d) { 
+            .each(function (d) {
                 // Initialize with zero state for smooth animation from 0
                 const zeroState = {
                     ...d,
@@ -2261,7 +2417,7 @@ function drawEfficiencyPanel() {
                 };
                 this._current = zeroState;
             })
-            .attr("d", function(d) { return arc(this._current); });  // Set initial path from zero state
+            .attr("d", function (d) { return arc(this._current); });  // Set initial path from zero state
 
         // Merge enter and update selections
         const slicesMerged = slicesEnter.merge(slices);
@@ -2327,7 +2483,7 @@ function drawEfficiencyPanel() {
         // Add clock markings (12 tick marks like a real clock)
         const clockMarks = clockGroup.selectAll("line.tick")
             .data([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]);
-        
+
         clockMarks.enter()
             .append("line")
             .attr("class", "tick")
@@ -2342,7 +2498,7 @@ function drawEfficiencyPanel() {
         // Add center dot
         const centerDot = clockGroup.selectAll("circle.center")
             .data([null]);
-        
+
         centerDot.enter()
             .append("circle")
             .attr("class", "center")
@@ -2368,7 +2524,7 @@ function drawEfficiencyPanel() {
             .attr("stroke-linecap", "round")
             .attr("transform", "rotate(0)")  // Start from 0 rotation
             .each(function (a) { this._prev = 0; })  // Initialize previous state to 0
-          .merge(wsHand)
+            .merge(wsHand)
             .transition()
             .duration(750)
             .attrTween("transform", function (a) {
@@ -2406,12 +2562,12 @@ function drawEfficiencyPanel() {
     const summaryHeight = 240;
     const summaryX = margin.left + 1 * wsBlockWidth + 300; // align with pie chart position in second column
     const summaryY = margin.top + 60; // add padding to prevent clipping of pie chart top
-    
+
     const summary = root.selectAll("g#eff-summary")
         .data([null])
         .join(enter => {
             const summaryGroup = enter.append("g").attr("id", "eff-summary");
-            
+
             // Add border rectangle for the summary section (full width with padding)
             summaryGroup.append("rect")
                 .attr("class", "summary-border")
@@ -2424,7 +2580,7 @@ function drawEfficiencyPanel() {
                 .attr("stroke-width", 2)
                 .attr("stroke-dasharray", "5,5")
                 .attr("rx", 10);
-            
+
             // Add summary title (top left corner of the box)
             summaryGroup.append("text")
                 .attr("class", "summary-title")
@@ -2435,28 +2591,28 @@ function drawEfficiencyPanel() {
                 .style("font-weight", "bold")
                 .attr("fill", "#2c3e50")
                 .text("Line Efficiency Summary");
-            
+
             return summaryGroup;
         })
         .attr("transform", `translate(${summaryX}, ${summaryY})`);
 
     // summary pie - make it bigger to match workstation pie charts
     const arcLine = d3.arc().innerRadius(0).outerRadius(100);
-    
+
     // Create data with fixed angles instead of using d3.pie()
     // Clamp efficiency to prevent exact 100% which causes flickering
     const clampedEfficiency = Math.min(results.averageEfficiency, 99.99) / 100; // convert to 0-1 range
     const workAngle = clampedEfficiency * 2 * Math.PI; // work portion angle
-    
+
     const linePieData = [
-        { 
-            label: "Work", 
+        {
+            label: "Work",
             startAngle: 0,  // start at top (12 o'clock) - adjusted from -Math.PI/2
             endAngle: workAngle,  // end after work portion
             value: Math.min(results.averageEfficiency, 99.99)
         },
-        { 
-            label: "Idle", 
+        {
+            label: "Idle",
             startAngle: workAngle,  // start where work ends
             endAngle: 2 * Math.PI,  // complete the circle
             value: Math.max(100 - results.averageEfficiency, 0.01)
@@ -2476,7 +2632,7 @@ function drawEfficiencyPanel() {
         .append("path")
         .attr("class", "sum-slice")
         .attr("fill", d => d.label === "Work" ? "#2ecc71" : "#e74c3c")
-        .each(function (d) { 
+        .each(function (d) {
             // Initialize with zero state for smooth animation from 0
             const zeroState = {
                 ...d,
@@ -2485,7 +2641,7 @@ function drawEfficiencyPanel() {
             };
             this._current = zeroState;
         })
-        .attr("d", function(d) { return arcLine(this._current); });  // Set initial path from zero state
+        .attr("d", function (d) { return arcLine(this._current); });  // Set initial path from zero state
 
     // Merge enter and update selections
     const sumSlicesMerged = sumSlicesEnter.merge(sumSlices);
@@ -2498,7 +2654,7 @@ function drawEfficiencyPanel() {
             this._current = i(1);
             return t => arcLine(i(t));
         });
-    
+
     sumSlices.exit().remove();
 
     // Add subtle circle background for summary percentage text
@@ -2554,7 +2710,7 @@ function drawEfficiencyPanel() {
     // Add clock markings (12 tick marks like a real clock)
     const sumClockMarks = sumClock.selectAll("line.tick")
         .data([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]);
-    
+
     sumClockMarks.enter()
         .append("line")
         .attr("class", "tick")
@@ -2567,7 +2723,7 @@ function drawEfficiencyPanel() {
     // Add center dot
     const sumCenterDot = sumClock.selectAll("circle.center")
         .data([null]);
-    
+
     sumCenterDot.enter()
         .append("circle")
         .attr("class", "center")
@@ -2591,7 +2747,7 @@ function drawEfficiencyPanel() {
         .attr("stroke-linecap", "round")
         .attr("transform", "rotate(0)")  // Start from 0 rotation
         .each(function (a) { this._prev = 0; })  // Initialize previous state to 0
-      .merge(sumHand)
+        .merge(sumHand)
         .transition()
         .duration(750)
         .attrTween("transform", function (a) {
