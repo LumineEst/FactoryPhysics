@@ -2173,7 +2173,7 @@ function drawEfficiencyPanel() {
         .join(enter => enter.append("g").attr("id", "eff-root"));
 
     // Layout params
-    const wsBlockWidth = 500;
+    const wsBlockWidth  = 500;
     const wsBlockHeight = 260;
     const margin = { top: 80, left: 40 };
     const cols = 4;
@@ -2181,7 +2181,7 @@ function drawEfficiencyPanel() {
         const col = i % cols;
         const row = Math.floor(i / cols) + 1;
         const x = margin.left + col * wsBlockWidth;
-        const y = margin.top + row * wsBlockHeight;
+        const y = margin.top  + row * wsBlockHeight;
         return `translate(${x},${y})`;
     };
 
@@ -2197,10 +2197,24 @@ function drawEfficiencyPanel() {
     // sub-groups created on enter only
     wsEnter.append("g").attr("class", "pie").attr("transform", "translate(75,75)");
     wsEnter.append("g").attr("class", "clock").attr("transform", "translate(275,75)");
+    
+    // Add workstation heading
+    wsEnter.append("text")
+        .attr("class", "ws-heading")
+        .attr("x", 70)
+        .attr("y", -50)
+        .attr("text-anchor", "middle")
+        .style("font-size", "18px")
+        .style("font-weight", "bold")
+        .attr("fill", "black");
 
     // Update positions for all workstations (including existing ones)
     const wsMerge = wsEnter.merge(wsSel)
         .attr("transform", (d, i) => layoutTransform(i));
+    
+    // Update workstation headings
+    wsMerge.select("text.ws-heading")
+        .text(d => `Workstation ${d.id}`);
 
     // Remove workstations that no longer exist
     wsSel.exit().remove();
@@ -2210,23 +2224,23 @@ function drawEfficiencyPanel() {
 
     wsMerge.each(function (ws) {
         const pieGroup = d3.select(this).select("g.pie");
-
+        
         // Create data with fixed angles instead of using d3.pie()
         // Clamp efficiency to prevent exact 100% which causes flickering
         const clampedEfficiency = Math.min(ws.efficiency, 99.99) / 100; // convert to 0-1 range
         const workAngle = clampedEfficiency * 2 * Math.PI; // work portion angle
-
+        
         const data = [
-            {
-                label: "Work",
-                startAngle: 0,  // start at top (12 o'clock)
-                endAngle: workAngle,  // end after work portion
+            { 
+                label: "Work", 
+                startAngle: 0,  // start at top (12 o'clock)
+                endAngle: workAngle,  // end after work portion
                 value: Math.min(ws.efficiency, 99.99)
             },
-            {
-                label: "Idle",
-                startAngle: workAngle,  // start where work ends
-                endAngle: 2 * Math.PI,  // complete the circle
+            { 
+                label: "Idle", 
+                startAngle: workAngle,  // start where work ends
+                endAngle: 2 * Math.PI,  // complete the circle
                 value: Math.max(100 - ws.efficiency, 0.01)
             }
         ];
@@ -2238,7 +2252,7 @@ function drawEfficiencyPanel() {
             .append("path")
             .attr("class", "slice")
             .attr("fill", d => d.label === "Work" ? "#2ecc71" : "#e74c3c")
-            .each(function (d) {
+            .each(function(d) { 
                 // Initialize with zero state for smooth animation from 0
                 const zeroState = {
                     ...d,
@@ -2247,10 +2261,7 @@ function drawEfficiencyPanel() {
                 };
                 this._current = zeroState;
             })
-            .attr("d", function (d) { return arc(this._current); });  // Set initial path from zero state
-
-        // Add titles to new slices
-        slicesEnter.append("title");
+            .attr("d", function(d) { return arc(this._current); });  // Set initial path from zero state
 
         // Merge enter and update selections
         const slicesMerged = slicesEnter.merge(slices);
@@ -2264,14 +2275,40 @@ function drawEfficiencyPanel() {
                 return t => arc(i(t));
             });
 
-        // Update tooltip text
-        slicesMerged.select("title")
-            .text(`WS${ws.id}: ${ws.efficiency.toFixed(1)}% efficiency`);
-
         slices.exit().remove();
+
+        // Add subtle circle background for percentage text
+        const pieTextBg = pieGroup.selectAll("circle.pie-text-bg")
+            .data([ws.efficiency]);
+
+        pieTextBg.enter()
+            .append("circle")
+            .attr("class", "pie-text-bg")
+            .attr("r", 33)
+            .attr("fill", "white")
+            .merge(pieTextBg);
+
+        pieTextBg.exit().remove();
+
+        // Add percentage text in center of pie chart
+        const pieText = pieGroup.selectAll("text.pie-text")
+            .data([ws.efficiency]);
+
+        pieText.enter()
+            .append("text")
+            .attr("class", "pie-text")
+            .attr("text-anchor", "middle")
+            .attr("dy", "0.35em")
+            .style("font-size", "16px")
+            .style("font-weight", "bold")
+            .attr("fill", "#2c3e50")
+            .merge(pieText)
+            .text(d => `${d.toFixed(1)}%`);
+
+        pieText.exit().remove();
     });
 
-    // === CLOCK (animated hand via rotation) ===
+    // === IDLE TIME CLOCK (animated hand via rotation) ===
     wsMerge.each(function (ws) {
         const clockGroup = d3.select(this).select("g.clock");
 
@@ -2284,17 +2321,39 @@ function drawEfficiencyPanel() {
             .attr("class", "face")
             .attr("r", 55)
             .attr("fill", "#ecf0f1")
-            .attr("stroke", "#333");
+            .attr("stroke", "#333")
+            .attr("stroke-width", 2);
 
-        // Add title to new faces
-        clockFaceEnter.append("title");
+        // Add clock markings (12 tick marks like a real clock)
+        const clockMarks = clockGroup.selectAll("line.tick")
+            .data([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]);
+        
+        clockMarks.enter()
+            .append("line")
+            .attr("class", "tick")
+            .attr("x1", 0).attr("y1", -50)
+            .attr("x2", 0).attr("y2", (d, i) => [0, 90, 180, 270].includes(d) ? -42 : -45) // Major ticks longer
+            .attr("stroke", "#333")
+            .attr("stroke-width", (d, i) => [0, 90, 180, 270].includes(d) ? 2.5 : 1.5) // Major ticks thicker
+            .attr("transform", d => `rotate(${d})`);
 
-        // Update tooltip text for all clock faces
-        clockFaceEnter.merge(clockFace).select("title")
-            .text(`WS${ws.id}: ${(ws.dailyIdleTime / 60).toFixed(1)}h idle time`);
 
-        const radius = 55;
-        const angle = 2 * Math.PI * ((ws.dailyIdleTime / 60) / opInputs.opHours);
+
+        // Add center dot
+        const centerDot = clockGroup.selectAll("circle.center")
+            .data([null]);
+        
+        centerDot.enter()
+            .append("circle")
+            .attr("class", "center")
+            .attr("r", 3)
+            .attr("fill", "#333");
+
+        const radius = 45;
+        // Convert idle time to hours and map to clock positions (12-hour format)
+        // Start from 12 o'clock (top) and rotate clockwise
+        const idleHours = ws.dailyIdleTime / 60; // Convert minutes to hours
+        const angle = (idleHours / 12) * 2 * Math.PI; // Start from 0° (12 o'clock position)
 
         // Clock hand with animation
         const wsHand = clockGroup.selectAll("line.hand")
@@ -2305,10 +2364,11 @@ function drawEfficiencyPanel() {
             .attr("class", "hand")
             .attr("x1", 0).attr("y1", 0)
             .attr("x2", 0).attr("y2", -radius)
-            .attr("stroke", "#e67e22").attr("stroke-width", 3)
-            .attr("transform", "rotate(0)")  // Start from 0 rotation
-            .each(function (a) { this._prev = 0; })  // Initialize previous state to 0
-            .merge(wsHand)
+            .attr("stroke", "#e67e22").attr("stroke-width", 4)
+            .attr("stroke-linecap", "round")
+            .attr("transform", "rotate(0)")  // Start from 0 rotation
+            .each(function (a) { this._prev = 0; })  // Initialize previous state to 0
+          .merge(wsHand)
             .transition()
             .duration(750)
             .attrTween("transform", function (a) {
@@ -2319,48 +2379,104 @@ function drawEfficiencyPanel() {
             });
 
         wsHand.exit().remove();
+
+        // Add idle time text below clock
+        const idleText = clockGroup.selectAll("text.idle-text")
+            .data([ws.dailyIdleTime]);
+
+        idleText.enter()
+            .append("text")
+            .attr("class", "idle-text")
+            .attr("text-anchor", "middle")
+            .attr("y", 75)
+            .style("font-size", "12px")
+            .style("font-weight", "bold")
+            .attr("fill", "black")
+            .merge(idleText)
+            .text(d => `${(d / 60).toFixed(1)}h idle`);
+
+        idleText.exit().remove();
     });
 
     // === TOP ROW SUMMARY ===
-    // Align with second column (col 1, index 1) - same x position as wsBlockWidth for 4-column layout
+    // Full width summary box with 10% padding on all sides
+    const summaryPaddingX = panelWidth * 0.01; // 1% padding
+    const summaryPaddingY = panelHeight * 0.01; // 1% padding
+    const summaryWidth = panelWidth - (2 * summaryPaddingX); // Full width minus padding
+    const summaryHeight = 240;
     const summaryX = margin.left + 1 * wsBlockWidth + 300; // align with pie chart position in second column
     const summaryY = margin.top + 60; // add padding to prevent clipping of pie chart top
+    
     const summary = root.selectAll("g#eff-summary")
         .data([null])
-        .join(enter => enter.append("g").attr("id", "eff-summary"))
+        .join(enter => {
+            const summaryGroup = enter.append("g").attr("id", "eff-summary");
+            
+            // Add border rectangle for the summary section (full width with padding)
+            summaryGroup.append("rect")
+                .attr("class", "summary-border")
+                .attr("x", -summaryX + summaryPaddingX) // Center the border on the page
+                .attr("y", -summaryY + summaryPaddingY)
+                .attr("width", summaryWidth)
+                .attr("height", summaryHeight)
+                .attr("fill", "none")
+                .attr("stroke", "#34495e")
+                .attr("stroke-width", 2)
+                .attr("stroke-dasharray", "5,5")
+                .attr("rx", 10);
+            
+            // Add summary title (top left corner of the box)
+            summaryGroup.append("text")
+                .attr("class", "summary-title")
+                .attr("x", -summaryX + summaryPaddingX + 25) // Left edge of box + padding
+                .attr("y", -summaryY + summaryPaddingY + 40) // Top edge of box + padding
+                .attr("text-anchor", "start")
+                .style("font-size", "20px")
+                .style("font-weight", "bold")
+                .attr("fill", "#2c3e50")
+                .text("Line Efficiency Summary");
+            
+            return summaryGroup;
+        })
         .attr("transform", `translate(${summaryX}, ${summaryY})`);
 
     // summary pie - make it bigger to match workstation pie charts
     const arcLine = d3.arc().innerRadius(0).outerRadius(100);
-
+    
     // Create data with fixed angles instead of using d3.pie()
     // Clamp efficiency to prevent exact 100% which causes flickering
     const clampedEfficiency = Math.min(results.averageEfficiency, 99.99) / 100; // convert to 0-1 range
     const workAngle = clampedEfficiency * 2 * Math.PI; // work portion angle
-
+    
     const linePieData = [
-        {
-            label: "Work",
-            startAngle: 0,  // start at top (12 o'clock) - adjusted from -Math.PI/2
-            endAngle: workAngle,  // end after work portion
+        { 
+            label: "Work", 
+            startAngle: 0,  // start at top (12 o'clock) - adjusted from -Math.PI/2
+            endAngle: workAngle,  // end after work portion
             value: Math.min(results.averageEfficiency, 99.99)
         },
-        {
-            label: "Idle",
-            startAngle: workAngle,  // start where work ends
-            endAngle: 2 * Math.PI,  // complete the circle
+        { 
+            label: "Idle", 
+            startAngle: workAngle,  // start where work ends
+            endAngle: 2 * Math.PI,  // complete the circle
             value: Math.max(100 - results.averageEfficiency, 0.01)
         }
     ];
 
-    const sumSlices = summary.selectAll("path.sum-slice")
+    // Create a group for the pie chart elements and move it
+    const pieGroup = summary.selectAll("g.pie-group")
+        .data([null])
+        .join(enter => enter.append("g").attr("class", "pie-group"))
+        .attr("transform", "translate(0, -7)"); // Move pie chart up by 7 pixels
+
+    const sumSlices = pieGroup.selectAll("path.sum-slice")
         .data(linePieData, d => d.label);
 
     const sumSlicesEnter = sumSlices.enter()
         .append("path")
         .attr("class", "sum-slice")
         .attr("fill", d => d.label === "Work" ? "#2ecc71" : "#e74c3c")
-        .each(function (d) {
+        .each(function (d) { 
             // Initialize with zero state for smooth animation from 0
             const zeroState = {
                 ...d,
@@ -2369,10 +2485,7 @@ function drawEfficiencyPanel() {
             };
             this._current = zeroState;
         })
-        .attr("d", function (d) { return arcLine(this._current); });  // Set initial path from zero state
-
-    // Add titles to new slices
-    sumSlicesEnter.append("title");
+        .attr("d", function(d) { return arcLine(this._current); });  // Set initial path from zero state
 
     // Merge enter and update selections
     const sumSlicesMerged = sumSlicesEnter.merge(sumSlices);
@@ -2385,18 +2498,44 @@ function drawEfficiencyPanel() {
             this._current = i(1);
             return t => arcLine(i(t));
         });
-
-    // Update tooltip text for all slices (both new and existing)
-    sumSlicesMerged.select("title")
-        .text(`Line Average: ${results.averageEfficiency.toFixed(1)}% efficiency`);
-
+    
     sumSlices.exit().remove();
+
+    // Add subtle circle background for summary percentage text
+    const summaryPieTextBg = pieGroup.selectAll("circle.summary-pie-text-bg")
+        .data([results.averageEfficiency]);
+
+    summaryPieTextBg.enter()
+        .append("circle")
+        .attr("class", "summary-pie-text-bg")
+        .attr("r", 33)
+        .attr("fill", "white")
+        .merge(summaryPieTextBg);
+
+    summaryPieTextBg.exit().remove();
+
+    // Add percentage text in center of summary pie chart
+    const summaryPieText = pieGroup.selectAll("text.summary-pie-text")
+        .data([results.averageEfficiency]);
+
+    summaryPieText.enter()
+        .append("text")
+        .attr("class", "summary-pie-text")
+        .attr("text-anchor", "middle")
+        .attr("dy", "0.35em")
+        .style("font-size", "16px")
+        .style("font-weight", "bold")
+        .attr("fill", "#2c3e50")
+        .merge(summaryPieText)
+        .text(d => `${d.toFixed(1)}%`);
+
+    summaryPieText.exit().remove();
 
     // summary idle clock - moved closer to pie chart (same spacing as workstation charts)
     const sumClock = summary.selectAll("g.sum-clock")
         .data([null])
         .join(enter => enter.append("g").attr("class", "sum-clock"))
-        .attr("transform", "translate(200,0)"); // spacing to match workstation layout
+        .attr("transform", "translate(200, -7)"); // spacing to match workstation layout + moved up to align with pie chart
 
     const clockFace = sumClock.selectAll("circle.face")
         .data([null])
@@ -2406,18 +2545,39 @@ function drawEfficiencyPanel() {
                     .attr("class", "face")
                     .attr("r", 55)
                     .attr("fill", "#ecf0f1")
-                    .attr("stroke", "#333");
-                circle.append("title");
+                    .attr("stroke", "#333")
+                    .attr("stroke-width", 2);
                 return circle;
             }
         );
 
-    // Update tooltip text for all clock faces (both new and existing)
-    clockFace.select("title")
-        .text(`Line Total: ${(results.totalIdleTime / 60).toFixed(1)}h idle time`);
+    // Add clock markings (12 tick marks like a real clock)
+    const sumClockMarks = sumClock.selectAll("line.tick")
+        .data([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]);
+    
+    sumClockMarks.enter()
+        .append("line")
+        .attr("class", "tick")
+        .attr("x1", 0).attr("y1", -50)
+        .attr("x2", 0).attr("y2", (d, i) => [0, 90, 180, 270].includes(d) ? -42 : -45) // Major ticks longer
+        .attr("stroke", "#333")
+        .attr("stroke-width", (d, i) => [0, 90, 180, 270].includes(d) ? 2.5 : 1.5) // Major ticks thicker
+        .attr("transform", d => `rotate(${d})`);
 
-    const idleFrac = (results.totalIdleTime / 60) / (opInputs.opHours * opInputs.numEmployees);
-    const sumAngle = 2 * Math.PI * idleFrac;
+    // Add center dot
+    const sumCenterDot = sumClock.selectAll("circle.center")
+        .data([null]);
+    
+    sumCenterDot.enter()
+        .append("circle")
+        .attr("class", "center")
+        .attr("r", 3)
+        .attr("fill", "#333");
+
+    // Convert total idle time to hours and map to clock positions (12-hour format)
+    // Start from 12 o'clock (top) and rotate clockwise
+    const totalIdleHours = results.totalIdleTime / 60; // Convert minutes to hours
+    const sumAngle = (totalIdleHours / 12) * 2 * Math.PI; // Start from 0° (12 o'clock position)
 
     const sumHand = sumClock.selectAll("line.hand")
         .data([sumAngle]);
@@ -2426,10 +2586,12 @@ function drawEfficiencyPanel() {
         .append("line")
         .attr("class", "hand")
         .attr("x1", 0).attr("y1", 0)
-        .attr("x2", 0).attr("y2", -55) // match workstation clock size
-        .attr("stroke", "#e67e22").attr("stroke-width", 3) // increased stroke width to match workstation clocks
-        .each(function (a) { this._prev = a; })
-        .merge(sumHand)
+        .attr("x2", 0).attr("y2", -45) // match workstation clock radius
+        .attr("stroke", "#e67e22").attr("stroke-width", 4)
+        .attr("stroke-linecap", "round")
+        .attr("transform", "rotate(0)")  // Start from 0 rotation
+        .each(function (a) { this._prev = 0; })  // Initialize previous state to 0
+      .merge(sumHand)
         .transition()
         .duration(750)
         .attrTween("transform", function (a) {
@@ -2440,6 +2602,23 @@ function drawEfficiencyPanel() {
         });
 
     sumHand.exit().remove();
+
+    // Add idle time text below summary clock
+    const sumIdleText = sumClock.selectAll("text.sum-idle-text")
+        .data([results.totalIdleTime]);
+
+    sumIdleText.enter()
+        .append("text")
+        .attr("class", "sum-idle-text")
+        .attr("text-anchor", "middle")
+        .attr("y", 75)
+        .style("font-size", "12px")
+        .style("font-weight", "bold")
+        .attr("fill", "black")
+        .merge(sumIdleText)
+        .text(d => `${(d / 60).toFixed(1)}h idle`);
+
+    sumIdleText.exit().remove();
 
     // === LINE METRICS TEXT (next to clock) ===
     const metricsGroup = summary.selectAll("g.line-metrics")
