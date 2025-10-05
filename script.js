@@ -1,7 +1,7 @@
 // Global Constants and Mapping
 const MIN_TAKT_TIME = 2.5;
 const BUILD_RATIOS = { super: 0.35, ultra: 0.45, mega: 0.20 };
-const ASSEMBLY_LINE_LENGTH = 486; // in feet
+const ASSEMBLY_LINE_LENGTH = 486;
 let isRecalculating = false;
 
 // Global Constants for Color Generation
@@ -14,19 +14,33 @@ const COLOR_CONSTANTS = {
     hueVary: 10
 };
 
+const PERT_LABOR_FALLBACK = {
+    1: 0.8, 2: 1.5, 3: 1.0, 4: 1.3, 5: 0.5, 6: 0.7, 7: 0.7, 8: 0.52, 9: 0.325, 10: 0.96, 11: 0.3, 12: 2.0,
+    13: 2.5, 14: 1.5, 15: 2.2, 16: 1.2, 17: 0.5, 18: 0.8, 19: 1.1, 20: 0.325, 21: 0.325, 22: 1.3, 23: 0.14,
+    24: 0.585, 25: 1.3, 26: 1.0, 27: 0.7, 28: 1.0, 29: 0.7, 30: 0.5, 31: 0.4
+};
+
+const PERT_PIE_STROKE = '#ffffff';
+const PERT_PIE_COLORS = {
+    super: '#3498db',
+    ultra: '#f1c40f',
+    mega: '#e74c3c',
+    idle: '#e5e7e9'
+};
+
+const originalConfigData = {};
 const state = {
     taskData: new Map(),
     configData: {}
 };
 
-const originalConfigData = {};
 let sortableInstances = [];
 let precedenceChartNodes = null;
 let invalidPrecedenceNodes = new Set();
 let profitMaximizationCache = { key: null, data: null };
 let isProfitCalculating = false;
-
 let animationState = {
+    speedMultiplier: 1.0,
     layout: { frameId: null, isRunning: false },
     schedule: { frameId: null, isRunning: false }
 };
@@ -68,6 +82,9 @@ async function main() {
     await loadData();
     setupEventListeners();
     setupUIEventListeners();
+    setupVisibilityListener();
+    state.invalidPrecedenceMap = validatePrecedence();
+    invalidPrecedenceNodes = new Set(Array.from(state.invalidPrecedenceMap.keys()));
     restoreActiveTab();
     updateUI();
     renderActiveTab();
@@ -77,8 +94,7 @@ async function main() {
     document.querySelectorAll("input[type='range']").forEach(input => {
         enableMiddleDragNumberInput(input, 1, 1);
     });
-
-    calculateOptimalProfitData(); // Pre-calculate profit data on initial load
+    calculateOptimalProfitData();
 }
 
 // Data Loading from local files
@@ -176,21 +192,21 @@ function flattenPrecedenceTree() {
 function handleInputChange(driverId) {
     if (isRecalculating) return;
     isRecalculating = true;
-
     const isFinancialDriver = ['laborCost', 'superSell', 'superCogs', 'ultraSell', 'ultraCogs', 'megaSell', 'megaCogs'].includes(driverId);
     if (isFinancialDriver && !isProfitCalculating) {
         calculateOptimalProfitData();
     }
-
     try {
         let dailyDemand = parseInt(dailyDemandInput.value) || 1;
         let opHours = parseFloat(opHoursInput.value) || 1;
         let numEmployees = parseInt(numEmployeesInput.value);
-        if (driverId === 'numEmployees') {
+        const isOperationalDriver = ['dailyDemand', 'opHours', 'numEmployees'].includes(driverId);
+        if (isOperationalDriver) {
             workstationList.scrollTop = 0;
+        }
+        if (driverId === 'numEmployees') {
             state.configData[numEmployees] = JSON.parse(JSON.stringify(originalConfigData[numEmployees]));
         }
-        const isOperationalDriver = ['dailyDemand', 'opHours', 'numEmployees'].includes(driverId);
         if (isOperationalDriver) {
             let currentBottleneck = calculateWorkstationDetails(numEmployees).bottleneckTime;
             if (currentBottleneck === 0) {
@@ -262,28 +278,59 @@ function calculateWorkstationDetails(numEmployees) {
  * Backend - Calculate the various variables whenever one changes.
  */
 function calculateMetrics(op, fin) {
-    const netProductionTimeMinutes = op.opHours * 60;
-    const taktTime = netProductionTimeMinutes / op.dailyDemand;
     const wsDetails = calculateWorkstationDetails(op.numEmployees);
+    const fullTotalOpMinutes = op.opHours * 60;
     const bottleneckCycleTime = wsDetails.bottleneckTime;
-    const meetsDemand = bottleneckCycleTime <= taktTime && bottleneckCycleTime > 0;
-    const effectiveCycleTime = meetsDemand ? taktTime : bottleneckCycleTime;
     const productSpacing = wsDetails.fastestTime === Infinity ? 0 : wsDetails.fastestTime * 15;
-    const throughputPerMinute = effectiveCycleTime > 0 ? 1 / effectiveCycleTime : 0;
-    const conveyorSpeed = throughputPerMinute * productSpacing;
-    const throughputUnitsPerDay = throughputPerMinute * netProductionTimeMinutes;
-    const wip = productSpacing > 0 ? ASSEMBLY_LINE_LENGTH / productSpacing : 0;
-
+    if (productSpacing <= 0 || bottleneckCycleTime <= 0) {
+        return {
+            wip: 0, throughputUnitsPerHour: 0, conveyorSpeed: 0, productSpacing: 0, dailyGrossProfit: -(op.numEmployees * op.opHours * (fin.laborCost || 0)),
+            grossProfitMargin: 0, meetsDemand: false, effectiveCycleTime: Infinity, workstations: wsDetails.workstations,
+            averageEfficiency: 0, totalIdleTime: fullTotalOpMinutes * op.numEmployees, balanceDelay: 100, idleTimeCv: 0, throughputUnitsPerDay: 0
+        };
+    }
+    let requiredTaktTime;
+    const demandIntervals = op.dailyDemand > 1 ? op.dailyDemand - 1 : 0;
+    const throughputTimeAsIntervals = ASSEMBLY_LINE_LENGTH / productSpacing;
+    if (op.dailyDemand <= 1) {
+        requiredTaktTime = Infinity;
+    } else {
+        const totalIntervals = demandIntervals + throughputTimeAsIntervals;
+        requiredTaktTime = fullTotalOpMinutes / totalIntervals;
+    }
+    const meetsDemand = bottleneckCycleTime <= requiredTaktTime;
+    const effectiveCycleTime = meetsDemand ? requiredTaktTime : bottleneckCycleTime;
+    const cycleTimeToUseForSpeedCalc = isFinite(effectiveCycleTime) ? effectiveCycleTime : bottleneckCycleTime;
+    const conveyorSpeed = productSpacing / cycleTimeToUseForSpeedCalc;
+    const actualThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * effectiveCycleTime;
+    let throughputUnitsPerDay;
+    if (fullTotalOpMinutes < actualThroughputTime) {
+        throughputUnitsPerDay = 0;
+    } else if (op.dailyDemand <= 1) {
+        throughputUnitsPerDay = 1;
+    } else {
+        const launchWindowMinutes = fullTotalOpMinutes - actualThroughputTime;
+        throughputUnitsPerDay = Math.floor(launchWindowMinutes / effectiveCycleTime) + 1;
+    }
+    const wip = ASSEMBLY_LINE_LENGTH / productSpacing;
+    let actualProductionMinutes;
+    if (op.dailyDemand <= 0) {
+        actualProductionMinutes = 0;
+    } else if (op.dailyDemand === 1) {
+        actualProductionMinutes = actualThroughputTime;
+    } else {
+        actualProductionMinutes = effectiveCycleTime * (demandIntervals) + actualThroughputTime;
+    }
+    const throughputUnitsPerHour = actualProductionMinutes > 0 ? (op.dailyDemand / actualProductionMinutes) * 60 : 0;
     let totalWorkstationCycleTime = 0;
     wsDetails.workstations.forEach(ws => {
         totalWorkstationCycleTime += ws.cycleTime;
-        // Calculate per-workstation metrics needed for efficiency panel
+        ws.efficiency = bottleneckCycleTime > 0 ? (ws.cycleTime / bottleneckCycleTime) * 100 : 0;
         const idleTimePerCycle = bottleneckCycleTime - ws.cycleTime;
         ws.dailyIdleTime = idleTimePerCycle * throughputUnitsPerDay;
-        ws.efficiency = bottleneckCycleTime > 0 ? (ws.cycleTime / bottleneckCycleTime) * 100 : 0;
     });
-
-    const totalAvailableTime = op.numEmployees * netProductionTimeMinutes;
+    const totalAvailableTime = op.numEmployees * fullTotalOpMinutes;
+    const totalDailyLaborCost = op.numEmployees * op.opHours * (fin.laborCost || 0);
     const totalProductiveTime = throughputUnitsPerDay * totalWorkstationCycleTime;
     const totalIdleTime = Math.max(0, totalAvailableTime - totalProductiveTime);
     const averageEfficiency = totalAvailableTime > 0 ? (totalProductiveTime / totalAvailableTime) * 100 : 0;
@@ -294,9 +341,6 @@ function calculateMetrics(op, fin) {
     const idleMean = idleTimesPerCycle.length > 0 ? idleTimesPerCycle.reduce((a, b) => a + b, 0) / idleTimesPerCycle.length : 0;
     const stdDev = Math.sqrt(idleTimesPerCycle.map(x => Math.pow(x - idleMean, 2)).reduce((a, b) => a + b, 0) / (idleTimesPerCycle.length || 1));
     const idleTimeCv = idleMean > 0 ? (stdDev / idleMean) * 100 : 0;
-
-    const throughputUnitsPerHour = op.opHours > 0 ? throughputUnitsPerDay / op.opHours : 0;
-    const totalDailyLaborCost = op.numEmployees * op.opHours * (fin.laborCost || 0);
     const totalRevenue = throughputUnitsPerDay * ((BUILD_RATIOS.super * (fin.superSell || 0)) + (BUILD_RATIOS.ultra * (fin.ultraSell || 0)) + (BUILD_RATIOS.mega * (fin.megaSell || 0)));
     const totalCogs = throughputUnitsPerDay * ((BUILD_RATIOS.super * (fin.superCogs || 0)) + (BUILD_RATIOS.ultra * (fin.ultraCogs || 0)) + (BUILD_RATIOS.mega * (fin.megaCogs || 0)));
     const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost;
@@ -307,7 +351,6 @@ function calculateMetrics(op, fin) {
         averageEfficiency, totalIdleTime, balanceDelay, idleTimeCv, throughputUnitsPerDay
     };
 }
-
 
 /**
  * Backend - Identify the best default employee count for a given TaktTime.
@@ -325,7 +368,7 @@ function findBestEmployeeFit(requiredTaktTime, startingCount) {
 function roundUpToQuarter(value) { return Math.ceil(value / 0.25) * 0.25; }
 
 /**
- * Backend - Update Workstation Sequences based on takt-time thresholds
+ * Backend - Update Workstation Sequences and trigger precedence validation.
  */
 function updateWorkstationOrder() {
     const numEmployees = parseInt(numEmployeesInput.value);
@@ -343,6 +386,12 @@ function updateWorkstationOrder() {
         }
     });
     state.configData[numEmployees] = newConfig;
+    const invalidPrecedenceMap = validatePrecedence();
+    invalidPrecedenceNodes = new Set(Array.from(invalidPrecedenceMap.keys()));
+    if (document.querySelector('.tab-btn[data-tab="precedence"].active')) {
+        updatePrecedenceChartColors();
+        updatePrecedenceChartLinks(invalidPrecedenceMap);
+    }
     setTimeout(updateUI, 0);
 }
 
@@ -382,8 +431,6 @@ function generateProductionQueue(dailyDemand) {
     const modelRatios = Object.values(BUILD_RATIOS);
     let modelDemand = [];
     let sumOfDemands = 0;
-
-    // To avoid rounding errors, calculate the first n-1 demands and derive the last one.
     for (let i = 0; i < modelRatios.length - 1; i++) {
         const demand = Math.round(modelRatios[i] * dailyDemand);
         modelDemand.push(demand);
@@ -417,30 +464,24 @@ function generateProductionQueue(dailyDemand) {
  */
 function animateValue(element, start, end, duration = 1000, formatter = (val) => val.toFixed(1)) {
     if (!element) return;
-
     if (element._animationId) {
         cancelAnimationFrame(element._animationId);
     }
-
     const startTime = Date.now();
     const range = end - start;
-
     function updateValue() {
         const now = Date.now();
         const elapsed = now - startTime;
         const progress = Math.min(elapsed / duration, 1);
         const easeProgress = 1 - Math.pow(1 - progress, 4);
         const current = start + (range * easeProgress);
-
         element.textContent = formatter(current);
-
         if (progress < 1) {
             element._animationId = requestAnimationFrame(updateValue);
         } else {
             element._animationId = null;
         }
     }
-
     updateValue();
 }
 
@@ -450,28 +491,151 @@ function animateValue(element, start, end, duration = 1000, formatter = (val) =>
 function parseElementValue(element) {
     if (!element || !element.textContent) return 0;
     const text = element.textContent;
-
     if (text.includes('$')) {
         const cleanedText = text.replace(/[$,]/g, '');
         const match = cleanedText.match(/-?\d+\.?\d*/);
         return match ? parseFloat(match[0]) : 0;
     }
-
     const match = text.match(/-?\d+\.?\d*/);
     return match ? parseFloat(match[0]) : 0;
 }
 
 /**
- * UI - Update User Interface for changes in Element Order or Variables.
+ * UI - Enable Middle Drag for Variables 
+ */
+function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
+    let isDragging = false;
+    let startY, startValue;
+    const defaultValues = {
+        'dailyDemand': 180,
+        'opHours': 15.0,
+        'numEmployees': 8,
+        'laborCost': 25.0,
+        'superSell': 1250,
+        'superCogs': 450,
+        'ultraSell': 1500,
+        'ultraCogs': 550,
+        'megaSell': 1800,
+        'megaCogs': 650
+    };
+    const getConstraints = () => {
+        const min = input.hasAttribute('min') ? parseFloat(input.min) : -Infinity;
+        const max = input.hasAttribute('max') ? parseFloat(input.max) : Infinity;
+        const stepValue = parseFloat(input.step) || 1;
+        return { min, max, step: stepValue };
+    };
+    input.addEventListener("mousedown", (e) => {
+        if (e.button === 1) { 
+            e.preventDefault();
+            e.stopPropagation();
+            isDragging = true;
+            startY = e.clientY;
+            startValue = parseFloat(input.value) || 0;
+            const onMouseMove = (ev) => {
+                if (!isDragging) return;
+                const deltaY = startY - ev.clientY;
+                const constraints = getConstraints();
+                let newVal = startValue + deltaY * sensitivity * step;
+                newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
+                if (input.type === 'range' || constraints.step === 1) {
+                    input.value = Math.round(newVal).toString();
+                } else if (constraints.step < 1) {
+                    const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
+                    input.value = newVal.toFixed(decimals);
+                } else {
+                    input.value = newVal.toFixed(2);
+                }
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+            };
+            const onMouseUp = () => {
+                isDragging = false;
+                document.removeEventListener("mousemove", onMouseMove);
+                document.removeEventListener("mouseup", onMouseUp);
+            };
+            document.addEventListener("mousemove", onMouseMove);
+            document.addEventListener("mouseup", onMouseUp);
+        }
+    });
+    input.addEventListener("wheel", (e) => {
+        if (document.activeElement === input) {
+            e.preventDefault();
+            const constraints = getConstraints();
+            const direction = e.deltaY > 0 ? -1 : 1;
+            let currentValue = parseFloat(input.value) || 0;
+            let newVal = currentValue + (direction * constraints.step);
+            newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
+            if (input.type === 'range' || constraints.step === 1) {
+                input.value = Math.round(newVal).toString();
+            } else if (constraints.step < 1) {
+                const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
+                input.value = newVal.toFixed(decimals);
+            } else {
+                input.value = newVal.toFixed(2);
+            }
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+    });
+    input.addEventListener("click", (e) => {
+        if (e.ctrlKey) {
+            e.preventDefault();
+            const inputId = input.id;
+            const defaultValue = defaultValues[inputId];
+            if (defaultValue !== undefined) {
+                const constraints = getConstraints();
+                const clampedDefault = Math.max(constraints.min, Math.min(constraints.max, defaultValue));
+                if (input.type === 'range' || constraints.step === 1) {
+                    input.value = Math.round(clampedDefault).toString();
+                } else if (constraints.step < 1) {
+                    const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
+                    input.value = clampedDefault.toFixed(decimals);
+                } else {
+                    input.value = clampedDefault.toFixed(2);
+                }
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.style.backgroundColor = '#90EE90';
+                setTimeout(() => {
+                    input.style.backgroundColor = '';
+                }, 200);
+            }
+        }
+    });
+}
+
+/**
+ * UI - Used to Default to last tab when refreshed
+ */
+function restoreActiveTab() {
+    const savedTab = sessionStorage.getItem("activeTab");
+    const defaultTab = "overview";
+    const targetTab = savedTab || defaultTab;
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    const btn = document.querySelector(`.tab-btn[data-tab="${targetTab}"]`);
+    if (btn) btn.classList.add("active");
+    visPanels.forEach(panel => {
+        panel.style.display = panel.id === `${targetTab}-panel` ? "block" : "none";
+    });
+}
+
+/**
+ * UI - Rendering Active Tabs
+ */
+function renderActiveTab() {
+    const activeTab = document.querySelector('.tab-btn.active').dataset.tab;
+    if (activeTab === 'overview') drawOverviewPanel();
+    else if (activeTab === 'precedence') drawPrecedenceChart();
+    else if (activeTab === 'schedule') drawScheduleVisualization();
+    else if (activeTab === 'efficiency') drawEfficiencyPanel();
+    else if (activeTab === 'layout') drawLayoutVisualization();
+    else if (activeTab === 'profit') drawProfitPanel();
+}
+
+/**
+ * UI - Update User Interface for changes in variables (excluding precedence visuals).
  */
 function updateUI() {
     employeeCountDisplay.textContent = numEmployeesInput.value;
     renderWorkstationSidebar(parseInt(numEmployeesInput.value));
     setupDragAndDrop();
-
-    const invalidPrecedenceMap = validatePrecedence();
-    invalidPrecedenceNodes = new Set(invalidPrecedenceMap.keys());
-
     if (invalidPrecedenceNodes.size > 0) {
         demandStatusEl.textContent = "Fails to Meet Precedence";
         demandStatusEl.className = "status failure";
@@ -512,33 +676,17 @@ function updateUI() {
             animateValue(totalIdleTimeEl, parseElementValue(totalIdleTimeEl), results.totalIdleTime / 60, 800, val => `${val.toFixed(2)} hrs`);
             animateValue(balanceDelayEl, parseElementValue(balanceDelayEl), results.balanceDelay, 800, val => `${val.toFixed(1)}%`);
             animateValue(idleTimeCvEl, parseElementValue(idleTimeCvEl), results.idleTimeCv, 800, val => `${val.toFixed(1)}%`);
-
             demandStatusEl.textContent = results.meetsDemand ? "Meets Demand" : "Fails to Meet Demand";
             demandStatusEl.className = results.meetsDemand ? "status success" : "status failure";
         }
     }
-
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-
-    stopAllSimulations();
-
-    if (activeTab && (activeTab === 'layout' || activeTab === 'schedule')) {
-        const clockToReset = document.querySelector(`#${activeTab}-panel #sim-clock-display`);
-        if (clockToReset) clockToReset.textContent = "00:00";
-    }
-
-    if (activeTab === 'layout') {
-        drawLayoutVisualization();
-    } else if (activeTab === 'schedule') {
-        drawScheduleVisualization();
-    }
-
-    if (activeTab === 'efficiency') {
-        drawEfficiencyPanel();
-    }
-    if (activeTab === 'precedence') {
-        updatePrecedenceChartColors();
-        updatePrecedenceChartLinks(invalidPrecedenceMap);
+    if (activeTab === 'layout' || activeTab === 'schedule' || activeTab === 'efficiency' || activeTab === 'profit') {
+        stopAllSimulations();
+        if (activeTab === 'layout') drawLayoutVisualization();
+        if (activeTab === 'schedule') drawScheduleVisualization();
+        if (activeTab === 'efficiency') drawEfficiencyPanel();
+        if (activeTab === 'profit') drawProfitPanel();
     }
 }
 
@@ -547,20 +695,13 @@ function updateUI() {
  */
 function generateElementColorScale(workstationIndex, numWorkstations, numElements) {
     const { baseHue, goldenAngle, baseChroma, baseLuminance, luminanceVary, hueVary } = COLOR_CONSTANTS;
-
-    // Calculate the unique base color for the workstation using the golden angle for distinct hues.
     const baseColor = d3.hcl((baseHue + workstationIndex * goldenAngle) % 360, baseChroma, baseLuminance);
-
-    // Create the start and end points of the gradient for this workstation's elements.
     const startColor = baseColor.copy();
     startColor.h += hueVary;
     startColor.l += luminanceVary;
-
     const endColor = baseColor.copy();
     endColor.h -= hueVary;
     endColor.l -= luminanceVary;
-
-    // Return a D3 scale that maps an element's index (0 to n-1) to a color in the gradient.
     return d3.scaleLinear()
         .domain([0, numElements > 1 ? numElements - 1 : 1])
         .range([startColor.toString(), endColor.toString()])
@@ -574,11 +715,8 @@ function renderWorkstationSidebar(numEmployees) {
     workstationList.innerHTML = '';
     const config = state.configData[numEmployees];
     if (!config || Object.keys(config).length === 0) return;
-
-    // Sort station IDs to ensure a consistent processing order for coloring.
     const sortedStationIds = Object.keys(config).sort((a, b) => parseInt(a) - parseInt(b));
     const numWorkstations = sortedStationIds.length;
-
     let maxElementTime = 0;
     sortedStationIds.forEach(stationId => {
         config[stationId].forEach(taskId => {
@@ -588,14 +726,10 @@ function renderWorkstationSidebar(numEmployees) {
             }
         });
     });
-
     if (maxElementTime === 0) return;
-
     sortedStationIds.forEach((stationId, stationIndex) => {
         const elementsInStation = config[stationId];
-        // Generate the unique color scale for this workstation.
         const elementColorScale = generateElementColorScale(stationIndex, numWorkstations, elementsInStation.length);
-
         const workstationDiv = document.createElement('div');
         workstationDiv.className = 'workstation';
         const title = document.createElement('div');
@@ -618,13 +752,10 @@ function renderWorkstationSidebar(numEmployees) {
                 elementTimeBar.className = 'element-time-bar';
                 const elementBarWidth = (task.elementTime / maxElementTime) * 80;
                 elementTimeBar.style.width = `${elementBarWidth}%`;
-                // Set the element bar's fill to grey and its border to the generated color.
                 elementTimeBar.style.backgroundColor = '#cccccc';
                 elementTimeBar.style.border = `3px solid ${elementColor}`;
-
                 const laborTimeBar = document.createElement('div');
                 laborTimeBar.className = 'labor-time-bar';
-                // Set the labor bar's fill to the generated color.
                 laborTimeBar.style.backgroundColor = elementColor;
                 const laborBarRatio = task.elementTime > 0 ? (task.laborTime / task.elementTime) : 0;
                 laborTimeBar.style.transform = `scaleX(${laborBarRatio})`;
@@ -648,19 +779,15 @@ function renderWorkstationSidebar(numEmployees) {
         workstationDiv.appendChild(elementsContainer);
         workstationList.appendChild(workstationDiv);
     });
-
     const firstTitle = workstationList.querySelector('.workstation-title');
     const svgContainer = document.getElementById('svg-container');
-
     if (firstTitle && svgContainer) {
         requestAnimationFrame(() => {
             const svgTop = svgContainer.getBoundingClientRect().top;
             const titleTop = firstTitle.getBoundingClientRect().top;
-
             const currentPadding = parseFloat(getComputedStyle(workstationList).paddingTop) || 0;
             const offset = svgTop - titleTop;
             const newPadding = Math.max(0, currentPadding + offset);
-
             workstationList.style.paddingTop = `${newPadding}px`;
         });
     }
@@ -683,11 +810,21 @@ function setupEventListeners() {
  */
 function setupUIEventListeners() {
     leftToggle.addEventListener('click', () => {
+        const redrawOnTransitionEnd = () => {
+            updateUI();
+            leftSidebar.removeEventListener('transitionend', redrawOnTransitionEnd);
+        };
+        leftSidebar.addEventListener('transitionend', redrawOnTransitionEnd);
         leftSidebar.classList.toggle('collapsed');
         const isCollapsed = leftSidebar.classList.contains('collapsed');
         leftToggle.innerHTML = isCollapsed ? '&raquo;' : '&laquo;';
     });
     rightToggle.addEventListener('click', () => {
+        const redrawOnTransitionEnd = () => {
+            updateUI();
+            rightSidebar.removeEventListener('transitionend', redrawOnTransitionEnd);
+        };
+        rightSidebar.addEventListener('transitionend', redrawOnTransitionEnd);
         rightSidebar.classList.toggle('collapsed');
         const isCollapsed = rightSidebar.classList.contains('collapsed');
         rightToggle.innerHTML = isCollapsed ? '&laquo;' : '&raquo;';
@@ -695,33 +832,31 @@ function setupUIEventListeners() {
     tabs.addEventListener('click', (e) => {
         if (e.target.classList.contains('tab-btn')) {
             const targetTab = e.target.dataset.tab;
-
             sessionStorage.setItem("activeTab", targetTab);
-
             tabs.querySelector('.active').classList.remove('active');
             e.target.classList.add('active');
             visPanels.forEach(panel => {
                 panel.style.display = panel.id === `${targetTab}-panel` ? 'block' : 'none';
             });
-
+            workstationList.scrollTop = 0;
             stopAllSimulations();
-
-            if (targetTab === 'overview') {
-                drawOverviewPanel();
-            } else if (targetTab === 'precedence') {
-                drawPrecedenceChart();
+            if (targetTab === 'layout') {
+                drawLayoutVisualization();
             } else if (targetTab === 'schedule') {
                 drawScheduleVisualization();
             } else if (targetTab === 'efficiency') {
                 drawEfficiencyPanel();
-            } else if (targetTab === 'layout') {
-                drawLayoutVisualization();
             } else if (targetTab === 'profit') {
                 drawProfitPanel();
+            } else if (targetTab === 'precedence') {
+                drawPrecedenceChart();
+                const invalidPrecedenceMap = validatePrecedence();
+                invalidPrecedenceNodes = new Set(Array.from(invalidPrecedenceMap.keys()));
+                updatePrecedenceChartColors();
+                updatePrecedenceChartLinks(invalidPrecedenceMap);
             }
         }
     });
-
     workstationList.addEventListener('scroll', () => {
         const scrollTop = workstationList.scrollTop;
         const schedulePanel = document.getElementById('schedule-panel');
@@ -730,6 +865,25 @@ function setupUIEventListeners() {
             contentGroup.setAttribute('transform', `translate(0, ${-scrollTop})`);
         }
     });
+}
+
+
+/**
+ * UI - Controls tab shift visibility
+ */
+function handleVisibilityChange() {
+    if (document.hidden) {
+        stopAllSimulations();
+    } else {
+        renderActiveTab();
+    }
+}
+
+/**
+ * UI - Setup EventListeners.
+ */
+function setupVisibilityListener() {
+    document.addEventListener('visibilitychange', handleVisibilityChange, false);
 }
 
 /**
@@ -752,44 +906,23 @@ function setupDragAndDrop() {
 }
 
 /**
- * Precedence - Sets node colors based on if elements are arranged before their predecessors.
- */
-function updatePrecedenceChartColors() {
-    if (!precedenceChartNodes) {
-        return;
-    }
-    precedenceChartNodes.selectAll('circle')
-        .transition()
-        .duration(300)
-        .style('fill', d => {
-            return invalidPrecedenceNodes.has(d.id) ? '#e74c3c' : 'steelblue';
-        });
-}
-
-/**
  * Overview - Gives a summary of the project, data sources, and visualization tabs
  */
 function drawOverviewPanel() {
     const svg = d3.select("#overview-panel");
-    svg.selectAll("*").remove(); // clear any previous content
-
-    // Use foreignObject so we can put HTML inside the SVG container
+    svg.selectAll("*").remove();
     const fo = svg.append("foreignObject")
         .attr("x", 0)
         .attr("y", 0)
         .attr("width", "100%")
         .attr("height", "100%");
-
     const container = fo.append("xhtml:div")
         .attr("class", "overview-container");
-
     container.html(`
     <h2>Factory Flow to Fortune - Assembly Line Optimization</h2>
-    
     <section class="overview-section overview-intro">
       <p class="overview-desc">An interactive visualization system for optimizing refrigerator assembly line operations. This tool helps analyze production efficiency, identify bottlenecks, and maximize profitability through data-driven assembly line configuration.</p>
     </section>
-
     <section class="overview-section">
       <h3>Project Objectives</h3>
       <p>Design and optimize assembly line configurations to achieve maximum efficiency and profitability:</p>
@@ -801,7 +934,6 @@ function drawOverviewPanel() {
         <li><strong>Quality Assurance</strong> – Maintain proper assembly sequence precedence</li>
       </ul>
     </section>
-
     <section class="overview-section">
       <h3>Manufacturing Data</h3>
       <p>The system processes real assembly line data including:</p>
@@ -813,7 +945,6 @@ function drawOverviewPanel() {
         <li><strong>Financial Parameters</strong> – Labor costs, material costs, and profit margins</li>
       </ul>
     </section>
-
     <section class="overview-section">
       <h3>Key Performance Indicators</h3>
       <p>Real-time metrics calculated from your current configuration:</p>
@@ -825,7 +956,6 @@ function drawOverviewPanel() {
         <li><strong>Daily Gross Profit</strong> – Financial performance projections</li>
       </ul>
     </section>
-
     <section class="overview-section">
       <h3>Current System Status</h3>
       <p>Real-time display of your current configuration settings:</p>
@@ -837,7 +967,6 @@ function drawOverviewPanel() {
         <li><strong>Production Target:</strong> Meeting demand requirements efficiently</li>
       </ul>
     </section>
-
     <section class="overview-section">
       <h3>Visualization Dashboard</h3>
       <p>Interactive tabs provide comprehensive analysis views:</p>
@@ -849,7 +978,6 @@ function drawOverviewPanel() {
         <li><strong>Profit Optimization</strong> – Demand vs. profitability analysis and forecasting</li>
       </ul>
     </section>
-
     <section class="overview-section">
       <h3>Interactive Controls</h3>
       <p>Modify parameters to test different scenarios:</p>
@@ -861,7 +989,6 @@ function drawOverviewPanel() {
         <li><strong>Cost Parameters</strong> – Update labor rates and material costs</li>
       </ul>
     </section>
-
     <section class="overview-section">
       <h3>Getting Started Guide</h3>
       <p>Follow these steps to optimize your assembly line:</p>
@@ -892,7 +1019,6 @@ function drawOverviewPanel() {
         </div>
       </div>
     </section>
-
     <section class="overview-section">
       <h3>Optimization Tips</h3>
       <p>Key strategies for achieving optimal assembly line performance:</p>
@@ -927,6 +1053,43 @@ function drawOverviewPanel() {
 }
 
 /**
+ * Precedence - Sets node colors based on if elements are arranged before their predecessors.
+ */
+function updatePrecedenceChartColors() {
+    if (!precedenceChartNodes) {
+        return;
+    }
+    precedenceChartNodes.selectAll('circle')
+        .each(function (d) {
+            const circle = d3.select(this);
+            const isError = invalidPrecedenceNodes.has(d.id);
+            circle.interrupt("blink");
+            if (isError) {
+                function blink() {
+                    circle.transition("blink")
+                        .duration(700)
+                        .attr("stroke", "#ff5c5cff")
+                        .attr("stroke-width", 30)
+                        .style("fill", "#e74c3c")
+                        .transition("blink")
+                        .duration(700)
+                        .attr("stroke", "#e74c3c")
+                        .attr("stroke-width", 10)
+                        .style("fill", "#e74c3c")
+                        .on("end", blink);
+                }
+                blink();
+            } else {
+                circle.transition()
+                    .duration(500)
+                    .attr("stroke", "#2c3e50")
+                    .attr("stroke-width", 1.5)
+                    .style("fill", "#ffffff");
+            }
+        });
+}
+
+/**
  * Precedence - Generates a Precedence DAG for Elements connected by precedence.
  */
 function drawPrecedenceChart() {
@@ -947,10 +1110,8 @@ function drawPrecedenceChart() {
             links.push({ source: pId, target: d.id });
         });
     });
-
     const svg = d3.select("#precedence-panel");
     svg.selectAll("*").remove();
-
     svg.append('defs').selectAll('marker')
         .data(['arrowhead', 'arrowhead-highlight'])
         .join('marker')
@@ -964,60 +1125,47 @@ function drawPrecedenceChart() {
         .append('path')
         .attr('d', 'M0,-5L10,0L0,5')
         .attr('fill', d => d === 'arrowhead-highlight' ? '#e74c3c' : '#999');
-
     const width = document.getElementById('svg-container').clientWidth;
     const height = document.getElementById('svg-container').clientHeight;
-
     const simulation = d3.forceSimulation(nodes)
         .force("link", d3.forceLink(links).id(d => d.id).distance(d => {
-            // Define the specific links that need a shorter distance.
             const specialLinks = {
                 '13-14': true,
                 '14-15': true,
                 '14-18': true
             };
-            // Create a key from the link's source and target IDs.
             const linkKey = `${d.source.id}-${d.target.id}`;
             return specialLinks[linkKey] ? 5 : 40;
         }))
         .force("charge", d3.forceManyBody().strength(-500))
         .force("center", d3.forceCenter(width / 2, height / 2))
         .force("collide", d3.forceCollide().radius(d => (d.r || 50) + 8).strength(1));
-
     const link = svg.append("g")
         .attr("stroke", "#999").attr("stroke-opacity", 0.8)
         .selectAll("line").data(links).join("line")
         .attr("stroke-width", 2.5)
         .attr("marker-end", "url(#arrowhead)");
-
     precedenceChartNodes = svg.append("g").selectAll("g").data(nodes).join("g");
-
     precedenceChartNodes.append("circle")
         .attr("r", 12).attr("stroke", "#fff").attr("stroke-width", 1.5).attr("fill", "steelblue");
-
     precedenceChartNodes.append("text")
         .text(d => d.id).attr("text-anchor", "middle").attr("dy", "0.35em")
         .style("fill", "white").style("font-size", "10px").style("pointer-events", "none");
-
     precedenceChartNodes.call(d3.drag()
         .on("start", dragstarted).on("drag", dragged).on("end", dragended));
-
     simulation.on("tick", () => {
         link.each(function (d) {
             const targetRadius = (d.target.r || 12) + 3;
             const dx = d.target.x - d.source.x;
             const dy = d.target.y - d.source.y;
             const distance = Math.sqrt(dx * dx + dy * dy);
-
             let x2 = d.target.x;
             let y2 = d.target.y;
-
             if (distance > 0) {
                 const ratio = (distance - targetRadius) / distance;
                 x2 = d.source.x + dx * ratio;
                 y2 = d.source.y + dy * ratio;
             }
-
             d3.select(this)
                 .attr("x1", d.source.x)
                 .attr("y1", d.source.y)
@@ -1041,21 +1189,16 @@ function drawPrecedenceChart() {
         event.subject.fx = null;
         event.subject.fy = null;
     }
-
     renderPrecedenceLegend();
 }
-
 
 /**
  * Precedence - Sets link styles based on the specific paths that violate precedence.
  */
 function updatePrecedenceChartLinks() {
     if (!precedenceChartNodes) return;
-
     const allLinks = d3.select("#precedence-panel").selectAll('g > line');
-
     if (invalidPrecedenceNodes.size === 0) {
-        // Reset all links to default style if there are no errors
         allLinks
             .transition().duration(300)
             .attr('stroke', '#999')
@@ -1063,16 +1206,12 @@ function updatePrecedenceChartLinks() {
             .attr('marker-end', 'url(#arrowhead)');
         return;
     }
-
-    // Step 1: Get the current visual order of all elements from the DOM.
     const elementOrderMap = new Map();
     let orderIndex = 0;
     document.querySelectorAll('.element-row').forEach(row => {
         const taskId = parseInt(row.dataset.taskId);
         elementOrderMap.set(taskId, orderIndex++);
     });
-
-    // Step 2: Build a map of direct successors for path traversal.
     const directPredecessorsData = [
         { id: 1, predecessors: [] }, { id: 2, predecessors: [1] }, { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] },
         { id: 5, predecessors: [2, 3] }, { id: 6, predecessors: [1] }, { id: 7, predecessors: [6] }, { id: 8, predecessors: [1] },
@@ -1091,34 +1230,25 @@ function updatePrecedenceChartLinks() {
             directSuccessorsMap.get(pId).add(el.id);
         });
     });
-
-    // Helper function to get all successors of a node, with memoization for performance.
     const fullSuccessorMemo = new Map();
     function getAllSuccessors(taskId) {
         if (fullSuccessorMemo.has(taskId)) return fullSuccessorMemo.get(taskId);
-
         const successors = directSuccessorsMap.get(taskId) || new Set();
         const allSuccessors = new Set(successors);
         successors.forEach(sId => {
             getAllSuccessors(sId).forEach(gsId => allSuccessors.add(gsId));
         });
-
         fullSuccessorMemo.set(taskId, allSuccessors);
         return allSuccessors;
     }
-
-    // Step 3: Identify all nodes that lie on a path between a violating node
-    // and a specific predecessor that has been placed *after* it.
     const violatingPathNodes = new Set();
     for (const violatingNodeId of invalidPrecedenceNodes) {
         const allPredecessors = precedenceMap.get(violatingNodeId) || new Set();
-
         for (const predecessorId of allPredecessors) {
             if (elementOrderMap.get(predecessorId) > elementOrderMap.get(violatingNodeId)) {
                 violatingPathNodes.add(violatingNodeId);
                 violatingPathNodes.add(predecessorId);
                 const successorsOfLatePred = getAllSuccessors(predecessorId);
-
                 for (const potentialPathNodeId of successorsOfLatePred) {
                     if (allPredecessors.has(potentialPathNodeId)) {
                         violatingPathNodes.add(potentialPathNodeId);
@@ -1127,16 +1257,12 @@ function updatePrecedenceChartLinks() {
             }
         }
     }
-
-    // Step 4: Sort links to draw highlighted ones on top, then apply styles.
     allLinks
         .sort((a, b) => {
-            // Determine if links a and b are part of a violating path
             const aIsHighlighted = violatingPathNodes.has(a.source.id) && violatingPathNodes.has(a.target.id);
             const bIsHighlighted = violatingPathNodes.has(b.source.id) && violatingPathNodes.has(b.target.id);
-
-            if (aIsHighlighted && !bIsHighlighted) return 1;  // a is drawn on top of b
-            if (!aIsHighlighted && bIsHighlighted) return -1; // b is drawn on top of a
+            if (aIsHighlighted && !bIsHighlighted) return 1; 
+            if (!aIsHighlighted && bIsHighlighted) return -1;
             return 0;
         })
         .each(function (d) {
@@ -1144,21 +1270,14 @@ function updatePrecedenceChartLinks() {
             d3.select(this)
                 .transition().duration(300)
                 .attr('stroke', isHighlighted ? '#e74c3c' : '#999')
-                .attr('stroke-width', isHighlighted ? 5.5 : 2.5) // Increased width
+                .attr('stroke-width', isHighlighted ? 5.5 : 2.5) 
                 .attr('marker-end', isHighlighted ? 'url(#arrowhead-highlight)' : 'url(#arrowhead)');
         });
 }
 
-/* =======================
-    PERT node sizing
-    ======================= */
-
-const PERT_LABOR_FALLBACK = {
-    1: 0.8, 2: 1.5, 3: 1.0, 4: 1.3, 5: 0.5, 6: 0.7, 7: 0.7, 8: 0.52, 9: 0.325, 10: 0.96, 11: 0.3, 12: 2.0,
-    13: 2.5, 14: 1.5, 15: 2.2, 16: 1.2, 17: 0.5, 18: 0.8, 19: 1.1, 20: 0.325, 21: 0.325, 22: 1.3, 23: 0.14,
-    24: 0.585, 25: 1.3, 26: 1.0, 27: 0.7, 28: 1.0, 29: 0.7, 30: 0.5, 31: 0.4
-};
-
+/**
+ * Precedence - Generate Labor Times from tasks
+ */
 function getPertLaborTime(id) {
     try {
         const t = state?.taskData?.get?.(id)?.laborTime;
@@ -1167,11 +1286,13 @@ function getPertLaborTime(id) {
     return PERT_LABOR_FALLBACK[id];
 }
 
+/**
+ * Precedence - Set Node Sizes based on Labor Time
+ */
 function sizePERTNodesOnce() {
     const panel = d3.select('#precedence-panel');
     const groups = panel.selectAll('g');
     if (groups.empty()) return;
-
     const times = [];
     groups.each(d => {
         if (!d || d.id == null) return;
@@ -1179,12 +1300,10 @@ function sizePERTNodesOnce() {
         if (Number.isFinite(lt)) times.push(lt);
     });
     if (!times.length) return;
-
     const toRadius = d3.scaleLinear()
         .domain([d3.min(times), d3.max(times)])
         .range([14, 56])
         .nice();
-
     groups.each(function (d) {
         const id = d && d.id != null ? +d.id : NaN;
         const lt = getPertLaborTime(id);
@@ -1195,6 +1314,9 @@ function sizePERTNodesOnce() {
     });
 }
 
+/**
+ * Precedence - Modify Sizing of Nodes Automatically
+ */
 function enableAutoPERTSizing() {
     const tabsEl = document.getElementById('tabs');
     if (tabsEl) {
@@ -1205,7 +1327,6 @@ function enableAutoPERTSizing() {
             }
         });
     }
-
     const panelEl = document.getElementById('precedence-panel');
     if (panelEl) {
         const obs = new MutationObserver(() => {
@@ -1215,22 +1336,11 @@ function enableAutoPERTSizing() {
         obs.observe(panelEl, { childList: true, subtree: true });
     }
 }
-
 enableAutoPERTSizing();
 
-/* ==========================
-    PERT node pies
-    ========================== */
-
-const PERT_PIE_COLORS = {
-    super: '#3498db',
-    ultra: '#f1c40f',
-    mega: '#e74c3c',
-    idle: '#e5e7e9'
-};
-
-const PERT_PIE_STROKE = '#ffffff';
-
+/**
+ * Precedence - Pull in Row-Date
+ */
 function getPertRow(id) {
     const row = state?.taskData?.get?.(id);
     if (row) {
@@ -1244,6 +1354,9 @@ function getPertRow(id) {
     return null;
 }
 
+/**
+ * Precedence - Select Node Groups
+ */
 function selectPertNodeGroups() {
     if (precedenceChartNodes && typeof precedenceChartNodes.size === 'function' && precedenceChartNodes.size() > 0) {
         return precedenceChartNodes;
@@ -1251,6 +1364,9 @@ function selectPertNodeGroups() {
     return d3.select('#precedence-panel').selectAll('g').filter(d => d && d.id != null);
 }
 
+/**
+ * Precedence - Build Radius Scales for Node Groups
+ */
 function buildRadiusScaleForNodeGroups(groups) {
     if (!groups || groups.empty()) return null;
     const vals = [];
@@ -1259,10 +1375,8 @@ function buildRadiusScaleForNodeGroups(groups) {
         if (Number.isFinite(t)) vals.push(t);
     });
     if (!vals.length) return null;
-
     return d3.scaleLinear().domain([d3.min(vals), d3.max(vals)]).range([14, 56]).nice();
 }
-
 let pertTooltip = d3.select('body').select('.pert-tooltip');
 if (pertTooltip.empty()) {
     pertTooltip = d3.select('body').append('div')
@@ -1274,34 +1388,35 @@ if (pertTooltip.empty()) {
         .style('opacity', 0);
 }
 
+/**
+ * Precedence - Set of Helper Functions
+ */
 function fmtPct(x) { return isFinite(x) ? `${(x * 100).toFixed(0)}%` : '—'; }
 function fmtNum(x, d = 2) { return isFinite(x) ? x.toFixed(d) : '—'; }
 function swatch(color) {
     return `<span style="display:inline-block;width:10px;height:10px;background:${color};border:1px solid rgba(255,255,255,0.85);margin-right:6px;border-radius:2px;"></span>`;
 }
 
+/**
+ * Precedence - Draw Nodes
+ */
 function drawPERTNodePiesOnce() {
     const groups = selectPertNodeGroups();
     const rScale = buildRadiusScaleForNodeGroups(groups);
     if (!rScale) return;
-
     const arc = d3.arc().innerRadius(0);
     const pie = d3.pie().sort(null).value(d => d.value);
-
     groups.each(function (d) {
         if (!d || d.id == null) return;
         const g = d3.select(this);
         const id = +d.id;
         const r = rScale(getPertLaborTime(id));
         d.r = r;
-
         g.select('circle')
             .attr('r', r).attr('fill', '#ffffff').attr('fill-opacity', 0.001)
             .attr('stroke', '#2c3e50').attr('stroke-width', 1.5).style('pointer-events', 'all');
-
         const row = getPertRow(id);
         if (!row) return;
-
         const { elementTime: ET, super: sup, mega: meg, ultra: ult } = row;
         const slices = [
             { key: 'super', value: ET * sup, color: PERT_PIE_COLORS.super, share: sup },
@@ -1309,13 +1424,11 @@ function drawPERTNodePiesOnce() {
             { key: 'ultra', value: ET * ult, color: PERT_PIE_COLORS.ultra, share: ult },
             { key: 'idle', value: Math.max(0, ET * (1 - (sup + meg + ult))), color: PERT_PIE_COLORS.idle, share: Math.max(0, 1 - (sup + meg + ult)) }
         ].filter(s => s.value > 1e-6);
-
         g.selectAll('path.__pert_pie').remove();
         const arcGen = arc.outerRadius(r);
         g.selectAll('path.__pert_pie').data(pie(slices)).join('path')
             .attr('class', '__pert_pie').attr('d', arcGen).style('pointer-events', 'none')
             .style('fill', a => a.data.color).style('stroke', PERT_PIE_STROKE).style('stroke-width', '0.9px');
-
         g.on('mouseenter', (event) => {
             pertTooltip.style('opacity', 1).html(
                 `<div style="font-weight:700;margin-bottom:6px;">Element ${id}</div>
@@ -1330,11 +1443,13 @@ function drawPERTNodePiesOnce() {
             pertTooltip.style('opacity', 0);
         });
     });
-
     addPERTLabelBackgrounds();
     restylePERTNodeLabelsStrong();
 }
 
+/**
+ * Precedence - Add Labels
+ */
 function addPERTLabelBackgrounds() {
     const groups = selectPertNodeGroups();
     if (!groups) return;
@@ -1350,6 +1465,9 @@ function addPERTLabelBackgrounds() {
     });
 }
 
+/**
+ * Precedence - Set Label Settings
+ */
 function restylePERTNodeLabelsStrong() {
     const groups = selectPertNodeGroups();
     if (!groups) return;
@@ -1364,6 +1482,9 @@ function restylePERTNodeLabelsStrong() {
     });
 }
 
+/**
+ * Precedence - Generate Automatic Pie Charts in the Nodes
+ */
 function enableAutoPERTPies() {
     const tabsEl = document.getElementById('tabs');
     if (tabsEl) {
@@ -1377,7 +1498,6 @@ function enableAutoPERTPies() {
             }
         });
     }
-
     const panelEl = document.getElementById('precedence-panel');
     if (panelEl) {
         const obs = new MutationObserver(() => {
@@ -1393,41 +1513,37 @@ function enableAutoPERTPies() {
 
 enableAutoPERTPies();
 
+/**
+ * Precedence - Create a Legend
+ */
 function renderPrecedenceLegend() {
     const svg = d3.select('#precedence-panel');
     svg.select('#precedence-legend').remove();
-
     const boxW = 180, boxH = 140;
-
     const g = svg.append('g')
         .attr('id', 'precedence-legend')
         .attr('transform', `translate(20, 20)`)
         .style('pointer-events', 'none');
-
     g.append('rect')
         .attr('width', boxW).attr('height', boxH)
         .attr('rx', 10).attr('fill', 'rgba(255,255,255,0.92)').attr('stroke', '#ccc');
-
     g.append('text')
-        .text('Precedence Legend').attr('x', 12).attr('y', 22)
+        .text('Build Ratios').attr('x', 12).attr('y', 22)
         .style('font-weight', 700).style('font-size', '13px').attr('fill', '#333');
-
     const items = [
         { label: 'Super', color: PERT_PIE_COLORS.super },
         { label: 'Ultra', color: PERT_PIE_COLORS.ultra },
         { label: 'Mega', color: PERT_PIE_COLORS.mega },
         { label: 'Idle', color: PERT_PIE_COLORS.idle },
     ];
-
-    const rowY0 = 46;
+    const rowY0 = 35;
     items.forEach((it, i) => {
         const row = g.append('g').attr('transform', `translate(12, ${rowY0 + i * 22})`);
         row.append('rect').attr('width', 14).attr('height', 14)
             .attr('fill', it.color).attr('stroke', '#fff').attr('stroke-width', 1);
         row.append('text').text(it.label).attr('x', 20).attr('y', 12)
-            .style('font-size', '12px').attr('fill', '#333');
+            .style('font-size', '12px').style('font-weight', 650).attr('fill', '#333');
     });
-
     const sizeG = g.append('g').attr('transform', `translate(12, ${rowY0 + items.length * 22 + 8})`);
     sizeG.append('text').text('Node size = Labor time').attr('x', 0).attr('y', 0)
         .style('font-size', '12px').style('font-weight', 600).attr('fill', '#333');
@@ -1440,7 +1556,6 @@ function renderPrecedenceLegend() {
 async function calculateOptimalProfitData() {
     if (isProfitCalculating) return;
     isProfitCalculating = true;
-
     const finInputs = {
         laborCost: parseFloat(laborCostInput.value),
         superSell: parseFloat(superSellInput.value),
@@ -1451,41 +1566,29 @@ async function calculateOptimalProfitData() {
         megaCogs: parseFloat(megaCogsInput.value),
     };
     const key = JSON.stringify(finInputs);
-
-    // If cache is valid for current financial inputs, do nothing.
     if (profitMaximizationCache.key === key) {
         isProfitCalculating = false;
         return;
     }
-
-    // If the profit tab is active, show a loading message.
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     if (activeTab === 'profit') {
-        drawProfitPanel(); // This will show the loading state
+        drawProfitPanel();
     }
-
     return new Promise(resolve => {
         setTimeout(() => {
             const profitData = [];
             const marginData = [];
             const originalStateConfig = state.configData;
-
             try {
-                state.configData = originalConfigData; // Use default configs for calculation
-
+                state.configData = originalConfigData; 
                 for (let demand = 1; demand <= 576; demand++) {
                     let maxProfit = -Infinity;
                     let maxMargin = -Infinity;
-
-                    // Brute-force search for the optimal combination of hours and employees
                     for (let opHours = 1; opHours <= 24; opHours += 0.25) {
                         const taktTime = (opHours * 60) / demand;
                         for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
                             if (!originalConfigData[numEmployees] || Object.keys(originalConfigData[numEmployees]).length === 0) continue;
-
                             const bottleneckTime = calculateWorkstationDetails(numEmployees).bottleneckTime;
-
-                            // Only calculate profit if this configuration is feasible (meets Takt Time)
                             if (bottleneckTime <= taktTime) {
                                 const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
                                 if (metrics) {
@@ -1503,13 +1606,11 @@ async function calculateOptimalProfitData() {
                     marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0 });
                 }
             } finally {
-                state.configData = originalStateConfig; // Restore user's config
+                state.configData = originalStateConfig;
             }
-
             const calculatedData = { profitData, marginData };
             profitMaximizationCache = { key, data: calculatedData };
             isProfitCalculating = false;
-
             if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
                 drawProfitPanel();
             }
@@ -1518,7 +1619,6 @@ async function calculateOptimalProfitData() {
     });
 }
 
-
 /**
  * Profit - Draws the Gross Profit and Gross Profit Margin charts from cached data.
  */
@@ -1526,7 +1626,6 @@ function drawProfitPanel() {
     const svg = d3.select("#profit-panel");
     const { clientWidth: width, clientHeight: height } = document.getElementById('svg-container');
     svg.selectAll("*").remove();
-
     if (!profitMaximizationCache.data || isProfitCalculating) {
         svg.append("text")
             .attr("x", width / 2).attr("y", height / 2)
@@ -1535,33 +1634,26 @@ function drawProfitPanel() {
             .text("Calculating optimal profit scenarios, please wait...");
         return;
     }
-
     const data = profitMaximizationCache.data;
-
     const margin = { top: 40, right: 60, bottom: 40, left: 80 };
     const chartHeight = (height / 2) - margin.top - margin.bottom;
     const chartWidth = width - margin.left - margin.right;
     const xScale = d3.scaleLinear().domain([1, 576]).range([0, chartWidth]);
-
     const profitChart = svg.append("g").attr("transform", `translate(${margin.left}, ${margin.top})`);
     const yProfitScale = d3.scaleLinear().domain(d3.extent(data.profitData, d => d.value)).nice().range([chartHeight, 0]);
     const profitLine = d3.line().x(d => xScale(d.demand)).y(d => yProfitScale(d.value));
-
     profitChart.append("g").attr("transform", `translate(0, ${chartHeight})`).call(d3.axisBottom(xScale));
     profitChart.append("g").call(d3.axisLeft(yProfitScale).tickFormat(d3.format("$,.0f")));
     profitChart.append("path").datum(data.profitData).attr("fill", "none").attr("stroke", "#27ae60").attr("stroke-width", 2).attr("d", profitLine);
     profitChart.append("text").attr("x", chartWidth / 2).attr("y", -15).attr("text-anchor", "middle").style("font-size", "14px").style("font-weight", "bold").text("Max Gross Profit by Demand");
-
     const marginChart = svg.append("g").attr("transform", `translate(${margin.left}, ${margin.top + height / 2})`);
     const yMarginScale = d3.scaleLinear().domain([d3.min(data.marginData, d => d.value) > 0 ? 0 : d3.min(data.marginData, d => d.value), d3.max(data.marginData, d => d.value)]).nice().range([chartHeight, 0]);
     const marginLine = d3.line().x(d => xScale(d.demand)).y(d => yMarginScale(d.value));
-
     marginChart.append("g").attr("transform", `translate(0, ${chartHeight})`).call(d3.axisBottom(xScale).tickFormat(d3.format("d")));
     marginChart.append("g").call(d3.axisLeft(yMarginScale).tickFormat(d => `${d.toFixed(0)}%`));
     marginChart.append("path").datum(data.marginData).attr("fill", "none").attr("stroke", "#2980b9").attr("stroke-width", 2).attr("d", marginLine);
     marginChart.append("text").attr("x", chartWidth / 2).attr("y", -15).attr("text-anchor", "middle").style("font-size", "14px").style("font-weight", "bold").text("Max Gross Profit Margin by Demand");
     marginChart.append("text").attr("x", chartWidth / 2).attr("y", chartHeight + margin.bottom - 5).attr("text-anchor", "middle").style("font-size", "12px").text("Daily Demand (Units)");
-
     const focus = svg.append("g").style("display", "none");
     focus.append("line").attr("class", "focus-line").attr("y1", margin.top).attr("y2", height - margin.bottom).attr("stroke", "#e74c3c").attr("stroke-dasharray", "3,3");
     const profitCircle = focus.append("circle").attr("r", 4).attr("fill", "#27ae60").attr("stroke", "white");
@@ -1571,12 +1663,10 @@ function drawProfitPanel() {
     const tooltipText1 = tooltip.append("text").attr("x", 10).attr("y", 20).attr("fill", "white").style("font-size", "12px");
     const tooltipText2 = tooltip.append("text").attr("x", 10).attr("y", 35).attr("fill", "white").style("font-size", "12px");
     const tooltipText3 = tooltip.append("text").attr("x", 10).attr("y", 50).attr("fill", "white").style("font-size", "12px");
-
     svg.append("rect").attr("width", width).attr("height", height).style("fill", "none").style("pointer-events", "all")
         .on("mouseover", () => focus.style("display", null))
         .on("mouseout", () => focus.style("display", "none"))
         .on("mousemove", mousemove);
-
     const bisectDemand = d3.bisector(d => d.demand).left;
     function mousemove(event) {
         const x0 = xScale.invert(d3.pointer(event)[0] - margin.left);
@@ -1586,19 +1676,15 @@ function drawProfitPanel() {
         const d1 = data.profitData[i];
         const d = (x0 - d0.demand > d1.demand - x0) ? d1 : d0;
         const m = data.marginData[d.demand - 1];
-
         const focusX = xScale(d.demand) + margin.left;
         const profitY = yProfitScale(d.value) + margin.top;
         const marginY = yMarginScale(m.value) + margin.top + height / 2;
-
         focus.select(".focus-line").attr("transform", `translate(${focusX}, 0)`);
         profitCircle.attr("transform", `translate(${focusX}, ${profitY})`);
         marginCircle.attr("transform", `translate(${focusX}, ${marginY})`);
-
         let tooltipX = focusX + 15;
         if (tooltipX + 150 > width) tooltipX = focusX - 165;
         tooltip.attr("transform", `translate(${tooltipX}, ${margin.top + 20})`);
-
         tooltipText1.text(`Demand: ${d.demand}`);
         tooltipText2.text(`Profit: ${d3.format("$,.0f")(d.value)}`);
         tooltipText3.text(`Margin: ${m.value.toFixed(1)}%`);
@@ -1622,40 +1708,40 @@ function doesElementBuildModel(elementId, modelId) {
 function stopAllSimulations() {
     if (animationState.layout.frameId) {
         cancelAnimationFrame(animationState.layout.frameId);
-        animationState.layout = { frameId: null, isRunning: false };
+        animationState.layout.frameId = null;
+        animationState.layout.isRunning = false;
     }
     if (animationState.schedule.frameId) {
         cancelAnimationFrame(animationState.schedule.frameId);
-        animationState.schedule = { frameId: null, isRunning: false };
+        animationState.schedule.frameId = null;
+        animationState.schedule.isRunning = false;
     }
 }
 
 /**
-* Layout - Initialize the Simulation for a given configuration.
-*/
+ * Layout - Initialize the Simulation for a given configuration.
+ */
 function startSimulation(config) {
     stopAllSimulations();
-
     let {
         svg, g, masterPathNode, productionQueue, totalDurationMs, launchDelayMs,
-        binConfig, opHours, clockDisplay, scale, elementMap
+        binConfig, opHours, scale, elementMap
     } = config;
-
     if (!masterPathNode || totalDurationMs <= 0 || launchDelayMs <= 0) {
         console.warn("Animation aborted due to invalid parameters.");
         return;
     }
-
     animationState.layout.isRunning = true;
-    const realWorkdayDurationMs = (opHours * 60 * 60 * 1000) / 60;
     const modelColors = { 1: '#3498db', 2: '#f1c40f', 3: '#e74c3c' };
     const modelBorders = { 1: '#f39c12', 2: '#8e44ad', 3: '#1abc9c' };
-
+    const simWorkdayDurationMs = opHours * 60 * 1000;
     animationState.layout = {
-        ...config,
+        svg, g, masterPathNode, productionQueue, totalDurationMs, launchDelayMs,
+        binConfig, opHours, scale, elementMap,
         isRunning: true,
-        startTime: performance.now(),
-        nextLaunchTime: performance.now(),
+        lastFrameTime: performance.now(),
+        totalSimTimeMs: 0,
+        nextLaunchTime: 0,
         productsOnLine: [],
         queueIndex: 0,
         finishedGoodsCount: 0,
@@ -1664,30 +1750,33 @@ function startSimulation(config) {
 
     function animationLoop(currentTime) {
         if (!animationState.layout.isRunning) return;
-
-        const elapsedRealTimeMs = currentTime - animationState.layout.startTime;
-        const elapsedSimTimeMs = elapsedRealTimeMs * 60;
-        const simSeconds = elapsedSimTimeMs / 1000;
-        const totalSimHours = Math.floor(simSeconds / 3600);
-        const totalSimMinutes = Math.floor((simSeconds % 3600) / 60);
-        clockDisplay.text(`${String(totalSimHours).padStart(2, '0')}:${String(totalSimMinutes).padStart(2, '0')}`);
-
-        if (elapsedRealTimeMs < realWorkdayDurationMs && currentTime >= animationState.layout.nextLaunchTime && animationState.layout.queueIndex < animationState.layout.productionQueue.length) {
+        const speedMultiplier = animationState.speedMultiplier;
+        const realDeltaMs = currentTime - animationState.layout.lastFrameTime;
+        animationState.layout.lastFrameTime = currentTime;
+        const simDeltaMs = realDeltaMs * speedMultiplier;
+        animationState.layout.totalSimTimeMs += simDeltaMs;
+        const elapsedSimTimeMsForClock = animationState.layout.totalSimTimeMs * 60;
+        const simSeconds = elapsedSimTimeMsForClock / 1000;
+        const simMinutes = simSeconds / 60;
+        const simHours = simMinutes / 60;
+        const minuteAngle = (simMinutes % 60) / 60 * 360;
+        const hourAngle = ((simHours % 12) / 12 * 360);
+        d3.select("#sim-clock-minute-hand").attr("transform", `rotate(${minuteAngle})`);
+        d3.select("#sim-clock-hour-hand").attr("transform", `rotate(${hourAngle})`);
+        if (animationState.layout.totalSimTimeMs >= animationState.layout.nextLaunchTime && animationState.layout.queueIndex < animationState.layout.productionQueue.length) {
             const modelId = animationState.layout.productionQueue[animationState.layout.queueIndex];
             animationState.layout.productsOnLine.push({
                 modelId: modelId,
-                launchTime: currentTime,
+                launchTime: animationState.layout.totalSimTimeMs,
                 element: createProductShape(g, modelId, modelColors, modelBorders)
             });
             animationState.layout.queueIndex++;
             animationState.layout.nextLaunchTime += animationState.layout.launchDelayMs;
         }
-
         for (let i = animationState.layout.productsOnLine.length - 1; i >= 0; i--) {
             const product = animationState.layout.productsOnLine[i];
-            const elapsedTime = currentTime - product.launchTime;
+            const elapsedTime = animationState.layout.totalSimTimeMs - product.launchTime;
             const progress = elapsedTime / animationState.layout.totalDurationMs;
-
             if (progress >= 1) {
                 placeInBin(product.element, animationState.layout.finishedGoodsCount, animationState.layout.binConfig, svg, scale);
                 animationState.layout.finishedGoodsCount++;
@@ -1703,8 +1792,7 @@ function startSimulation(config) {
                 product.element.attr('fill', builds ? modelColors[product.modelId] : '#cccccc');
             }
         }
-
-        if (animationState.layout.productsOnLine.length > 0 || (animationState.layout.queueIndex < animationState.layout.productionQueue.length && elapsedRealTimeMs < realWorkdayDurationMs)) {
+        if (animationState.layout.productsOnLine.length > 0 || animationState.layout.queueIndex < animationState.layout.productionQueue.length) {
             animationState.layout.frameId = requestAnimationFrame(animationLoop);
         } else {
             animationState.layout.isRunning = false;
@@ -1719,9 +1807,8 @@ function startSimulation(config) {
 function createProductShape(container, modelId, modelColors, modelBorders) {
     const modelShapes = { 1: 'square', 2: 'triangle', 3: 'circle' };
     const shapeType = modelShapes[modelId];
-    const shapeSize = 1.3;
+    const shapeSize = 1.6;
     let shape;
-
     if (shapeType === 'circle') {
         shape = container.append("circle").attr("r", shapeSize / 2);
     } else if (shapeType === 'square') {
@@ -1730,11 +1817,11 @@ function createProductShape(container, modelId, modelColors, modelBorders) {
         const h = shapeSize * (Math.sqrt(3) / 2);
         shape = container.append("polygon").attr("points", `0,${-h / 1.5} ${shapeSize / 1.5},${h / 2} ${-shapeSize / 1.5},${h / 2}`);
     }
-
     if (shape) {
         shape.attr("fill", modelColors[modelId])
             .attr("stroke", modelBorders[modelId])
-            .attr("stroke-width", 0.1);
+            .attr("stroke-width", 0.25)
+            .style("filter", "url(#smooth-shadow)");
     }
     return shape;
 }
@@ -1746,36 +1833,28 @@ function placeInBin(element, count, binConfig, svg, scale) {
     const { binPixelX, binPixelY_bottom, itemsPerRow, productPixelSize, padding } = binConfig;
     const row = Math.floor(count / itemsPerRow);
     const col = count % itemsPerRow;
-
     svg.node().appendChild(element.node());
-
-    // Calculate new position in pixels
     const newX = binPixelX + (padding / 2) + (col * productPixelSize) + (productPixelSize / 2);
     const newY = binPixelY_bottom - (padding / 2) - (row * productPixelSize) - (productPixelSize / 2);
-    const newScale = productPixelSize / 1.3;
-
-    element.attr('transform', `translate(${newX}, ${newY}) rotate(0) scale(${newScale})`);
+    const newScale = productPixelSize / 1.8;
+    element.transition().duration(300)
+        .attr('transform', `translate(${newX}, ${newY}) rotate(0) scale(${newScale})`);
 }
 
 /**
-* Layout - Renders the U-shaped assembly line layout and initializes the animation.
-*/
+ * Layout - Renders the U-shaped assembly line layout and initializes the animation.
+ */
 function drawLayoutVisualization() {
     stopAllSimulations();
     const numEmployees = parseInt(numEmployeesInput.value);
     const svg = d3.select("#layout-panel");
     svg.selectAll("*").remove();
-
-
     const config = state.configData[numEmployees];
     if (!config || Object.keys(config).length === 0) {
         svg.append("text").attr("x", "50%").attr("y", "50%").attr("text-anchor", "middle").attr("fill", "black")
             .text("No configuration data for this number of workstations.");
         return;
     }
-
-
-    // Check for invalid workstation spacing
     let isLayoutValid = true;
     for (const stationId in config) {
         const elements = config[stationId];
@@ -1787,8 +1866,6 @@ function drawLayoutVisualization() {
             break;
         }
     }
-
-
     if (!isLayoutValid) {
         demandStatusEl.textContent = "Invalid Spacing";
         demandStatusEl.className = "status failure";
@@ -1796,27 +1873,20 @@ function drawLayoutVisualization() {
             .text("Error: A workstation's length is less than 13 feet.");
         return;
     }
-
-
     const opInputs = { dailyDemand: parseInt(dailyDemandInput.value), opHours: parseFloat(opHoursInput.value), numEmployees: parseInt(numEmployeesInput.value) };
     const finInputs = { laborCost: parseFloat(laborCostInput.value) };
     const results = calculateMetrics(opInputs, finInputs);
     const { clientWidth: containerWidth, clientHeight: containerHeight } = document.getElementById('svg-container');
-
-
-    // Generate workstation geometry
     const isEven = numEmployees % 2 === 0;
     const numLeft = isEven ? numEmployees / 2 : Math.floor(numEmployees / 2);
     const middleWsId = isEven ? null : numLeft + 1;
     let connectionPoint;
-
     const allPaths = [], allPoints = [];
+    workstationBorders = [];
     for (let i = 1; i <= numEmployees; i++) {
         const wsId = i;
         const elements = config[wsId];
         if (!elements || elements.length === 0) continue;
-
-
         const totalElementTime = elements.reduce((sum, elId) => sum + (state.taskData.get(elId)?.elementTime || 0), 0);
         const totalLengthFt = totalElementTime * 15;
         let p;
@@ -1851,170 +1921,199 @@ function drawLayoutVisualization() {
             }
         }
         allPoints.push(...p);
-
-        // Generate the unique color scale for this workstation's elements.
+        if (p && p.length > 1) {
+            let borderPathString = "M " + p[0].x + " " + p[0].y;
+            for (let j = 1; j < p.length; j++) {
+                borderPathString += " L " + p[j].x + " " + p[j].y;
+            }
+            workstationBorders.push({ wsID: i, path: borderPathString });
+        }
         const elementColorScale = generateElementColorScale(i - 1, numEmployees, elements.length);
-
         let currentPathPosFt = 0;
         elements.forEach((elId, index) => {
             const task = state.taskData.get(elId);
-
-            // Determine line cap based on element's position in the workstation.
             let lineCap = 'round';
             if (index === 0 || index === elements.length - 1) {
                 lineCap = 'butt';
             }
-
             allPaths.push({
                 wsId: i,
                 elId: elId,
                 path: generateSubPath(p, currentPathPosFt, (task?.elementTime || 0) * 15),
-                color: elementColorScale(index), // Use the new color scale
-                lineCap: lineCap // Store the determined line cap.
+                color: elementColorScale(index),
+                lineCap: lineCap
             });
             currentPathPosFt += (task?.elementTime || 0) * 15;
         });
     }
-
-
-    // Calculate Bounding Box and Scaling for Assembly Line
     if (allPoints.length === 0) return;
     const minX_ft = d3.min(allPoints, d => d.x);
     const maxX_ft = d3.max(allPoints, d => d.x);
     const minY_ft = d3.min(allPoints, d => d.y);
     const maxY_ft = d3.max(allPoints, d => d.y);
     if ((maxX_ft - minX_ft) <= 0 || (maxY_ft - minY_ft) <= 0) return;
-
-
     const lineBBox = { width: maxX_ft - minX_ft, height: maxY_ft - minY_ft };
     const uiPadding = 20;
-    const rightPanelWidth = 180;
-
-
+    const rightPanelWidth = 200;
     const availableWidth = containerWidth - rightPanelWidth - uiPadding;
     const availableHeight = containerHeight - (uiPadding * 2);
     const scale = Math.min(availableWidth / lineBBox.width, availableHeight / lineBBox.height);
-
-
     const scaledLineWidth = lineBBox.width * scale;
     const leftPadding = ((containerWidth - rightPanelWidth) - scaledLineWidth) / 2;
-    const translateX = leftPadding - (minX_ft * scale);
+    const translateX = (leftPadding - (minX_ft * scale)) + 20;
     const translateY = uiPadding - (minY_ft * scale);
     const g = svg.append("g").attr("transform", `translate(${translateX}, ${translateY}) scale(${scale})`).attr("fill", "none");
-
-
-    // Draw UI Overlay (Dashboard, Bin, Legend) in Pixel Space
-    const clockGroup = svg.append("g").attr("transform", `translate(${uiPadding}, ${uiPadding + 10})`);
-    clockGroup.append("rect").attr("x", -10).attr("y", -22).attr("width", 100).attr("height", 30).attr("fill", "rgba(0,0,0,0.5)").attr("rx", 5);
-    const clockDisplay = clockGroup.append("text").attr("id", "sim-clock-display").attr("fill", "white").style("font-size", "18px").style("font-family", "monospace").text("00:00");
-
-    // Enhanced Speedometer
+    const clockX = containerWidth - (rightPanelWidth / 2) - uiPadding + 28;
+    const clockY = uiPadding + 50;
+    const clockRadius = 60;
+    const clockGroup = svg.append("g").attr("transform", `translate(${clockX}, ${clockY})`);
+    clockGroup.append("circle")
+        .attr("r", clockRadius)
+        .attr("fill", "#ecf0f1")
+        .attr("stroke", "#333")
+        .attr("stroke-width", 2);
+    for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * 2 * Math.PI;
+        const tickLength = i % 3 === 0 ? 8 : 4;
+        clockGroup.append("line")
+            .attr("x1", Math.sin(angle) * (clockRadius - tickLength))
+            .attr("y1", -Math.cos(angle) * (clockRadius - tickLength))
+            .attr("x2", Math.sin(angle) * clockRadius)
+            .attr("y2", -Math.cos(angle) * clockRadius)
+            .attr("stroke", "#333")
+            .attr("stroke-width", i % 3 === 0 ? 2 : 1);
+    }
+    clockGroup.append("line")
+        .attr("id", "sim-clock-hour-hand")
+        .attr("y2", -clockRadius * 0.5)
+        .attr("stroke", "#e74c3c")
+        .attr("stroke-width", 4)
+        .attr("stroke-linecap", "round");
+    clockGroup.append("line")
+        .attr("id", "sim-clock-minute-hand")
+        .attr("y2", -clockRadius * 0.8)
+        .attr("stroke", "#e74c3c")
+        .attr("stroke-width", 2)
+        .attr("stroke-linecap", "round");
+    clockGroup.append("circle")
+        .attr("r", 4)
+        .attr("fill", "#34495e");
+    const sliderHeight = clockRadius * 2;
+    const sliderYStart = -sliderHeight / 2;
+    const sliderYEnd = sliderHeight / 2;
+    const defaultValue = 1.0;
+    const minVal = 0.1;
+    const maxVal = 8.0;
+    const sliderGroup = svg.append("g")
+        .attr("transform", `translate(${clockX + clockRadius + 20}, ${clockY})`);
+    const speedScale = d3.scaleLinear()
+        .domain([maxVal, minVal])
+        .range([sliderYStart, sliderYEnd])
+        .clamp(true);
+    sliderGroup.append("line")
+        .attr("class", "track")
+        .attr("y1", sliderYStart)
+        .attr("y2", sliderYEnd)
+        .attr("stroke", "#aaa")
+        .attr("stroke-width", 4)
+        .attr("stroke-linecap", "round");
+    const handle = sliderGroup.append("circle")
+        .attr("id", "d3-layout-slider-handle")
+        .attr("class", "handle")
+        .attr("r", 8)
+        .attr("fill", "#3498db")
+        .attr("stroke", "#fff")
+        .attr("stroke-width", 2)
+        .attr("cy", speedScale(animationState.speedMultiplier));
+    const interactionArea = sliderGroup.append("rect")
+        .attr("y", sliderYStart)
+        .attr("height", sliderHeight)
+        .attr("x", -10)
+        .attr("width", 20)
+        .style("fill", "transparent")
+        .style("cursor", "grab");
+    interactionArea.call(d3.drag().on("drag", function (event) {
+        const [, my] = d3.pointer(event, this.parentNode);
+        const newValue = speedScale.invert(my);
+        const newY = speedScale(newValue);
+        animationState.speedMultiplier = newValue;
+        d3.select(this.parentNode).select(".handle")
+            .attr("cy", newY)
+    }));
+    interactionArea.on("wheel", function (event) {
+        event.preventDefault();
+        const scrollStep = 0.1;
+        const currentValue = animationState.speedMultiplier;
+        const change = event.deltaY > 0 ? -scrollStep : scrollStep;
+        let newValue = currentValue + change;
+        newValue = Math.max(minVal, Math.min(maxVal, newValue));
+        animationState.speedMultiplier = newValue;
+        d3.select(this.parentNode).select(".handle").transition().duration(50).attr("cy", speedScale(newValue));
+    });
+    const binConfig = { productPixelSize: 14, itemsPerRow: 10, padding: 5 };
+    binConfig.binPixelWidth = (binConfig.itemsPerRow * binConfig.productPixelSize) - 5 + (2 * binConfig.padding);
+    binConfig.binPixelX = containerWidth - binConfig.binPixelWidth - uiPadding;
+    binConfig.binPixelY_bottom = containerHeight - uiPadding + 15;
+    const binTopY = binConfig.binPixelY_bottom - (containerHeight * 0.70);
+    const actualBinHeight = binConfig.binPixelY_bottom - binTopY;
     const speedoX = containerWidth - (rightPanelWidth / 2) - uiPadding;
-    const speedoY = 80;
-    const speedoGroup = svg.append("g").attr("transform", `translate(${speedoX + 28}, ${speedoY})`);
     const speedoRadius = 60;
-    const speedoDomain = [0, 15]; // The full range of the speedometer
-    const colorThresholds = { slow: 4, medium: 10 }; // Thresholds for color changes
-
-    // Scale for needle rotation in degrees
+    const speedoY = binTopY - speedoRadius + 9;
+    const speedoGroup = svg.append("g").attr("transform", `translate(${speedoX + 28}, ${speedoY})`);
+    const speedoDomain = [0, 15];
+    const colorThresholds = { slow: 4, medium: 10 };
     const degreeScale = d3.scaleLinear().domain(speedoDomain).range([-90, 90]);
-    // Scale for drawing arcs in radians
     const radianScale = d3.scaleLinear().domain(speedoDomain).range([-Math.PI / 2, Math.PI / 2]);
-
     const arcGenerator = d3.arc()
         .innerRadius(speedoRadius * 0.7)
         .outerRadius(speedoRadius)
         .cornerRadius(3);
-
-    // Define the colored arc segments using HCL for better control over luminance (darkness)
     const arcs = [
-        { start: speedoDomain[0], end: colorThresholds.slow, color: d3.hcl(200, 70, 70).toString() },    // Light Blue 🔵
-        { start: colorThresholds.slow, end: colorThresholds.medium, color: d3.hcl(145, 70, 60).toString() }, // Darker Green 🟢
-        { start: colorThresholds.medium, end: speedoDomain[1], color: d3.hcl(25, 80, 50).toString() }      // Darkest Orange-Red 🔴
+        { start: speedoDomain[0], end: colorThresholds.slow, color: d3.hcl(200, 70, 70).toString() },
+        { start: colorThresholds.slow, end: colorThresholds.medium, color: d3.hcl(145, 70, 60).toString() },
+        { start: colorThresholds.medium, end: speedoDomain[1], color: d3.hcl(25, 80, 50).toString() }
     ];
-
-    // Draw the colored arcs
-    speedoGroup.selectAll("path.color-arc")
-        .data(arcs)
-        .join("path")
+    speedoGroup.selectAll("path.color-arc").data(arcs).join("path")
         .attr("class", "color-arc")
         .attr("fill", d => d.color)
-        .attr("d", d => arcGenerator({
-            startAngle: radianScale(d.start),
-            endAngle: radianScale(d.end)
-        }));
-
-    // Add tick labels with improved readability
+        .attr("d", d => arcGenerator({ startAngle: radianScale(d.start), endAngle: radianScale(d.end) }));
     const ticks = degreeScale.ticks(6);
-    speedoGroup.selectAll("text.tick-label")
-        .data(ticks)
-        .join("text")
+    speedoGroup.selectAll("text.tick-label").data(ticks).join("text")
         .attr("class", "tick-label")
         .attr("x", d => Math.sin(radianScale(d)) * (speedoRadius + 15))
         .attr("y", d => -Math.cos(radianScale(d)) * (speedoRadius + 15))
-        .attr("text-anchor", "middle")
-        .attr("dominant-baseline", "central")
-        .style("font-size", "12px")
-        .style("font-weight", "500")
-        .attr("fill", "#333")
+        .attr("text-anchor", "middle").attr("dominant-baseline", "central")
+        .style("font-size", "12px").style("font-weight", "700").attr("fill", "#333")
         .text(d => d);
-
-    // Draw the needle
     speedoGroup.append("line").attr("id", "speedo-needle")
-        .attr("y1", 10)
-        .attr("y2", -speedoRadius * 0.9)
-        .attr("stroke", "#34495e")
-        .attr("stroke-width", 3)
-        .attr("stroke-linecap", "round")
+        .attr("y1", 10).attr("y2", -speedoRadius * 0.9)
+        .attr("stroke", "#34495e").attr("stroke-width", 4).attr("stroke-linecap", "round")
         .attr("transform", `rotate(${degreeScale(Math.min(speedoDomain[1], results.conveyorSpeed || 0))})`);
-
-    // Add a center pivot for the needle
     speedoGroup.append("circle")
-        .attr("r", 8)
-        .attr("fill", "#34495e")
-        .attr("stroke", "white")
-        .attr("stroke-width", 2);
-
-    // Digital readout text, shifted down for better clearance
+        .attr("r", 8).attr("fill", "#34495e")
+        .attr("stroke", "white").attr("stroke-width", 2);
     speedoGroup.append("text")
         .text(`${(results.conveyorSpeed || 0).toFixed(1)}`)
-        .attr("y", speedoRadius * 0.55) // Shifted down
-        .attr("text-anchor", "middle")
-        .style("font-size", "22px")
-        .style("font-weight", "bold")
-        .attr("fill", "#2c3e50");
+        .attr("y", speedoRadius * 0.55).attr("text-anchor", "middle")
+        .style("font-size", "22px").style("font-weight", "bold").attr("fill", "#2c3e50");
     speedoGroup.append("text")
         .text("ft/min")
-        .attr("y", speedoRadius * 0.8) // Shifted down
-        .attr("text-anchor", "middle")
-        .style("font-size", "12px") // Easier to read
-        .attr("fill", "#666");
-
-    const binConfig = { productPixelSize: 12, itemsPerRow: 10, padding: 5 };
-    binConfig.binPixelWidth = (binConfig.itemsPerRow * binConfig.productPixelSize) + (2 * binConfig.padding);
-    binConfig.binPixelX = containerWidth - binConfig.binPixelWidth - uiPadding;
-    binConfig.binPixelY_bottom = containerHeight - uiPadding;
-    const binTopY = binConfig.binPixelY_bottom - (containerHeight * 0.70);
-    const actualBinHeight = binConfig.binPixelY_bottom - binTopY;
-
+        .attr("y", speedoRadius * 0.8).attr("text-anchor", "middle")
+        .style("font-size", "12px").attr("fill", "#666");
     svg.append("rect").attr("x", binConfig.binPixelX).attr("y", binTopY).attr("width", binConfig.binPixelWidth).attr("height", actualBinHeight).attr("fill", "#E5E7E9").attr("stroke", "#666").attr("stroke-width", 1);
     svg.append("text").text("Finished Goods").attr("x", binConfig.binPixelX + binConfig.binPixelWidth / 2).attr("y", binTopY + actualBinHeight / 2).attr("text-anchor", "middle").attr("dominant-baseline", "middle").style("font-size", "16px").attr("fill", "#333");
-
     const legendGroup = svg.append("g").attr("transform", `translate(${uiPadding}, ${containerHeight - 130})`);
     legendGroup.append("rect").attr("width", 160).attr("height", 120).attr("fill", "rgba(255,255,255,0.8)").attr("rx", 5).attr("stroke", "#ccc");
-    legendGroup.append("text").text("Legend").attr("x", 10).attr("y", 20).style("font-weight", "bold").attr("fill", "black");
+    legendGroup.append("text").text("Built Models").attr("x", 10).attr("y", 20).style("font-weight", "bold").attr("fill", "black");
     const legendModels = [{ id: 1, name: "Super" }, { id: 2, name: "Ultra" }, { id: 3, name: "Mega" }];
     const modelColors = { 1: '#3498db', 2: '#f1c40f', 3: '#e74c3c' };
     const modelBorders = { 1: '#f39c12', 2: '#8e44ad', 3: '#1abc9c' };
     legendModels.forEach((model, i) => {
         const item = legendGroup.append("g").attr("transform", `translate(20, ${40 + i * 22})`);
         createProductShape(item, model.id, modelColors, modelBorders).attr("transform", "scale(8)");
-        item.append("text").text(model.name).attr("x", 20).attr("y", 4).attr("fill", "black");
+        item.append("text").text(model.name).style('font-weight', 650).attr("x", 20).attr("y", 4).attr("fill", "black");
     });
     legendGroup.append("text").text("Grid: 10ft x 10ft").attr("x", 10).attr("y", 110).style("font-style", "italic").attr("fill", "black");
-
-
-    // Draw Assembly Line & Grid
     const gridGroup = g.append("g");
     const gridBounds = {
         x1: (0 - translateX) / scale, y1: (0 - translateY) / scale,
@@ -2027,53 +2126,29 @@ function drawLayoutVisualization() {
         gridGroup.append("line").attr("x1", gridBounds.x1).attr("y1", y).attr("x2", gridBounds.x2).attr("y2", y);
     }
     gridGroup.selectAll("line").attr("stroke", "rgba(0,0,0,0.1)").attr("stroke-width", 0.2);
-
-    // Separate paths for rendering order.
     const buttPaths = allPaths.filter(p => p.lineCap === 'butt');
     const roundPaths = allPaths.filter(p => p.lineCap === 'round');
-
-    // Helper function to draw the two path layers for each element.
     const drawElementPaths = (selection) => {
-        // Darker background path
         selection.append("path")
-            .attr("d", d => d.path)
-            .attr("stroke", "#333333")
-            .attr("stroke-width", 1.5)
-            .attr("stroke-linecap", d => d.lineCap);
-        // Colored foreground path
+            .attr("d", d => d.path).attr("stroke", "#333333")
+            .attr("stroke-width", 1.5).attr("stroke-linecap", d => d.lineCap);
         selection.append("path")
-            .attr("d", d => d.path)
-            .attr("stroke", d => d.color)
-            .attr("stroke-width", 1)
-            .attr("stroke-linecap", d => d.lineCap)
+            .attr("d", d => d.path).attr("stroke", d => d.color)
+            .attr("stroke-width", 1).attr("stroke-linecap", d => d.lineCap)
             .append("title").text(d => `Element ${d.elId}\nWorkstation ${d.wsId}`);
     };
-
-    // 1. Draw the 'butt' capped elements first.
-    g.selectAll("g.element-group-butt")
-        .data(buttPaths, d => `${d.wsId}-${d.elId}`)
-        .join("g")
-        .attr("class", "element-group-butt")
-        .call(drawElementPaths);
-
-    // 2. Draw the 'round' capped elements on top.
-    g.selectAll("g.element-group-round")
-        .data(roundPaths, d => `${d.wsId}-${d.elId}`)
-        .join("g")
-        .attr("class", "element-group-round")
-        .call(drawElementPaths);
-
-    // Initialize and Start Product Animation
-    const totalDurationSec = (ASSEMBLY_LINE_LENGTH / results.conveyorSpeed);
-    const launchDelaySec = (results.productSpacing / results.conveyorSpeed);
-
-
-    if (isFinite(totalDurationSec) && totalDurationSec > 0 && isFinite(launchDelaySec) && launchDelaySec > 0) {
+    g.selectAll("g.element-group-butt").data(buttPaths, d => `${d.wsId}-${d.elId}`)
+        .join("g").attr("class", "element-group-butt").call(drawElementPaths);
+    g.selectAll("g.element-group-round").data(roundPaths, d => `${d.wsId}-${d.elId}`)
+        .join("g").attr("class", "element-group-round").call(drawElementPaths);
+    g.selectAll("path.workstation-border").data(workstationBorders, d => d.wsId)
+        .join("path").attr("class", "workstation-border").attr("d", d => d.path).attr("fill", "none").attr("stroke", "#34495e").attr("stroke-width", 0.3).attr("stroke-linecap", "butt").attr("opacity", 0.6);
+    const totalDurationMin = (ASSEMBLY_LINE_LENGTH / results.conveyorSpeed);
+    const launchDelayMin = (results.productSpacing / results.conveyorSpeed);
+    if (isFinite(totalDurationMin) && totalDurationMin > 0 && isFinite(launchDelayMin) && launchDelayMin > 0) {
         let masterPathString = "";
         allPaths.forEach((pathData, i) => { masterPathString += i === 0 ? pathData.path : pathData.path.replace('M', ' '); });
         const masterPathNode = g.append("path").attr("d", masterPathString).node();
-
-
         let cumulativeDist = 0;
         const tempPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
         const elementMap = allPaths.map(p => {
@@ -2083,18 +2158,17 @@ function drawLayoutVisualization() {
             cumulativeDist += len;
             return segment;
         });
-
-
         startSimulation({
-            svg, g, masterPathNode, clockDisplay, elementMap,
+            svg, g, masterPathNode, elementMap,
             opHours: opInputs.opHours,
             productionQueue: generateProductionQueue(opInputs.dailyDemand),
-            totalDurationMs: totalDurationSec * 1000,
-            launchDelayMs: launchDelaySec * 1000,
+            totalDurationMs: totalDurationMin * 1000,
+            launchDelayMs: launchDelayMin * 1000,
             binConfig, scale
         });
     }
 }
+
 
 /**
 * Layout - Helper function to generate a sub-path along a larger path defined by points.
@@ -2131,50 +2205,63 @@ function generateSubPath(points, startFt, lengthFt) {
 }
 
 /**
- * Schedule - Gathers data for the Gantt chart.
+ * Schedule - Gathers data for the Gantt chart based on a more accurate physical simulation.
  */
 function runGanttSimulation() {
     const numEmployees = parseInt(numEmployeesInput.value);
     const dailyDemand = parseInt(dailyDemandInput.value);
     const opHours = parseFloat(opHoursInput.value);
     const config = state.configData[numEmployees];
-
     if (!config || Object.keys(config).length === 0 || invalidPrecedenceNodes.size > 0) {
         return { tasks: [] };
     }
-
     const productionQueue = generateProductionQueue(dailyDemand);
     const metrics = calculateMetrics({ dailyDemand, opHours, numEmployees }, {});
     const launchInterval = metrics.effectiveCycleTime;
+    const conveyorSpeed = metrics.conveyorSpeed;
+    if (conveyorSpeed <= 0 || !isFinite(conveyorSpeed)) {
+        return { tasks: [] };
+    }
     let allFinishedTasks = [];
-    let arrivalsForNextStation = productionQueue.map((modelId, index) => ({
-        modelId: modelId,
-        arrivalTime: index * launchInterval,
-        uniqueId: `${modelId}-${index}`
-    }));
-
+    let arrivalsForNextStation = productionQueue.map((modelId, index) => {
+        let arrivalTime = index * launchInterval;
+        if (index === 0 && isNaN(arrivalTime)) {
+            arrivalTime = 0;
+        }
+        return {
+            modelId: modelId,
+            arrivalTime: arrivalTime,
+            uniqueId: `${modelId}-${index}`
+        };
+    });
     const sortedWorkstationIds = Object.keys(config).sort((a, b) => parseInt(a) - parseInt(b));
-
+    const totalElementTimeOfLine = sortedWorkstationIds.reduce((lineSum, stationId) => {
+        const elements = config[stationId] || [];
+        const stationTime = elements.reduce((stationSum, elId) => stationSum + (state.taskData.get(elId)?.elementTime || 0), 0);
+        return lineSum + stationTime;
+    }, 0);
+    const totalPhysicalThroughputTime = ASSEMBLY_LINE_LENGTH / conveyorSpeed;
     for (const stationId of sortedWorkstationIds) {
         const elements = config[stationId] || [];
         if (elements.length === 0) continue;
-
-        let stationFreeTime = 0;
+        let workerFreeTime = 0;
         let processedModels = [];
-
+        const totalElementTimeInStation = elements.reduce((sum, elId) => sum + (state.taskData.get(elId)?.elementTime || 0), 0);
+        let travelTimeMinutes = 0;
+        if (totalElementTimeOfLine > 0) {
+            travelTimeMinutes = (totalElementTimeInStation / totalElementTimeOfLine) * totalPhysicalThroughputTime;
+        }
         arrivalsForNextStation.sort((a, b) => a.arrivalTime - b.arrivalTime);
-
         for (const model of arrivalsForNextStation) {
-            let currentTimeForModel = Math.max(stationFreeTime, model.arrivalTime);
-
+            if (!isFinite(model.arrivalTime)) continue;
+            const startProcessingTime = Math.max(model.arrivalTime, workerFreeTime);
+            let currentTaskTime = startProcessingTime;
             for (const elementId of elements) {
-
                 if (doesElementBuildModel(elementId, model.modelId)) {
                     const task = state.taskData.get(elementId);
                     if (task) {
-                        const taskStartTime = currentTimeForModel;
+                        const taskStartTime = currentTaskTime;
                         const taskEndTime = taskStartTime + task.elementTime;
-
                         allFinishedTasks.push({
                             workstationId: `WS ${stationId}`,
                             modelId: model.modelId,
@@ -2183,19 +2270,18 @@ function runGanttSimulation() {
                             endTime: taskEndTime,
                             uniqueId: model.uniqueId
                         });
-
-                        currentTimeForModel = taskEndTime;
+                        currentTaskTime = taskEndTime;
                     }
                 }
             }
-
-            stationFreeTime = currentTimeForModel;
-            processedModels.push({ ...model, arrivalTime: currentTimeForModel });
+            const endProcessingTime = currentTaskTime;
+            workerFreeTime = endProcessingTime;
+            const endTravelTime = model.arrivalTime + travelTimeMinutes;
+            const exitTime = Math.max(endProcessingTime, endTravelTime);
+            processedModels.push({ ...model, arrivalTime: exitTime });
         }
-
         arrivalsForNextStation = processedModels;
     }
-
     return { tasks: allFinishedTasks };
 }
 
@@ -2203,34 +2289,78 @@ function runGanttSimulation() {
  * Schedule - Renders the scrolling Gantt chart animation, aligned with the left sidebar.
  */
 function drawScheduleVisualization() {
-    stopAllSimulations();
     const svg = d3.select("#schedule-panel");
     svg.selectAll("*").remove();
-
     const simulationResult = runGanttSimulation();
     const { clientWidth: containerWidth, clientHeight: containerHeight } = document.getElementById('svg-container');
-
     if (!simulationResult || simulationResult.tasks.length === 0) {
         svg.append("text").attr("x", containerWidth / 2).attr("y", containerHeight / 2).attr("text-anchor", "middle").attr("fill", "#666")
             .text("No data to display. Check configuration or inputs.");
         return;
     }
-
-    animationState.schedule.isRunning = true;
     const { tasks } = simulationResult;
     const opHours = parseFloat(opHoursInput.value);
-
     const margin = { top: 40, right: 20, bottom: 20, left: 20 };
     const width = containerWidth - margin.left - margin.right;
     const height = containerHeight - margin.top - margin.bottom;
-
     const chart = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
-
-    const clockGroup = svg.append("g").attr("transform", `translate(${margin.left + 10}, 30)`);
+    const clockX = margin.left + 10;
+    const clockY = 30;
+    const clockGroup = svg.append("g").attr("transform", `translate(${clockX}, ${clockY})`);
     clockGroup.append("rect").attr("x", -10).attr("y", -15).attr("width", 100).attr("height", 20).attr("fill", "rgba(0,0,0,0.5)").attr("rx", 5);
     const clockDisplay = clockGroup.append("text").attr("id", "sim-clock-display").attr("fill", "white").style("font-size", "18px").style("font-family", "monospace").text("00:00");
+    const sliderWidth = 120;
+    const sliderXStart = 0;
+    const sliderXEnd = sliderWidth;
+    const minVal = 0.1;
+    const maxVal = 8.0;
+    const sliderGroup = svg.append("g")
+        .attr("transform", `translate(${clockX + 100}, ${clockY - 5})`);
+    const speedScale = d3.scaleLinear()
+        .domain([minVal, maxVal])
+        .range([sliderXStart, sliderXEnd])
+        .clamp(true);
+    sliderGroup.append("line")
+        .attr("class", "track")
+        .attr("x1", sliderXStart)
+        .attr("x2", sliderXEnd)
+        .attr("stroke", "#aaa")
+        .attr("stroke-width", 4)
+        .attr("stroke-linecap", "round");
+    sliderGroup.append("circle")
+        .attr("id", "d3-schedule-slider-handle")
+        .attr("class", "handle")
+        .attr("r", 8)
+        .attr("fill", "#3498db")
+        .attr("stroke", "#fff")
+        .attr("stroke-width", 2)
+        .attr("cx", speedScale(animationState.speedMultiplier));
+    const interactionArea = sliderGroup.append("rect")
+        .attr("x", sliderXStart - 10)
+        .attr("width", sliderWidth + 20)
+        .attr("y", -10)
+        .attr("height", 20)
+        .style("fill", "transparent")
+        .style("cursor", "grab");
+    interactionArea.call(d3.drag().on("drag", function (event) {
+        const [mx] = d3.pointer(event, this.parentNode);
+        const newValue = speedScale.invert(mx);
+        animationState.speedMultiplier = newValue;
+        d3.select(this.parentNode).select(".handle").attr("cx", speedScale(newValue));
+    }));
+    interactionArea.on("wheel", function (event) {
+        event.preventDefault();
+        const scrollStep = 0.1;
+        const currentValue = animationState.speedMultiplier;
+        const change = event.deltaY > 0 ? -scrollStep : scrollStep;
+        let newValue = currentValue + change;
+        newValue = Math.max(minVal, Math.min(maxVal, newValue));
+        animationState.speedMultiplier = newValue;
+        d3.select(this.parentNode).select(".handle")
+            .transition().duration(50)
+            .attr("cx", speedScale(newValue));
+    });
     const contentGroup = chart.append("g").attr("class", "schedule-content-group");
-    const gridGroup = contentGroup.append("g").attr("class", "vertical-grid");
     const yOffset = document.getElementById('svg-container').getBoundingClientRect().top + margin.top;
     const elementGeometry = new Map();
     document.querySelectorAll('.element-row').forEach(elRow => {
@@ -2241,25 +2371,20 @@ function drawScheduleVisualization() {
         const barY = (centerY - barHeight / 2) - yOffset;
         elementGeometry.set(taskId, { y: barY, height: barHeight });
     });
-
     document.querySelectorAll('.workstation-title').forEach(title => {
         const rect = title.getBoundingClientRect();
         const centerY = rect.top + rect.height / 2;
         const lineY = centerY - yOffset;
-
         contentGroup.append("line")
             .attr("x1", -margin.left).attr("x2", width + margin.right)
             .attr("y1", lineY).attr("y2", lineY)
             .attr("stroke", "#34495e").attr("stroke-width", 3).attr("stroke-opacity", 0.75);
     });
-
     const VIEW_WINDOW_MINS = 10;
     const xScale = d3.scaleLinear().range([0, width]);
     const modelColors = d3.scaleOrdinal().domain([1, 2, 3]).range(['#3498db', '#f1c40f', '#e74c3c']);
-
     const timeMarker = chart.append("line").attr("x1", 0).attr("x2", 0).attr("y1", -margin.top).attr("y2", height + margin.bottom).attr("stroke", "red").attr("stroke-width", 2);
     timeMarker.append("title").text("Current Simulation Time");
-
     contentGroup.append("g").attr("class", "task-bars")
         .selectAll(".bar").data(tasks).enter().append("rect")
         .attr("class", "bar")
@@ -2267,36 +2392,38 @@ function drawScheduleVisualization() {
         .attr("height", d => elementGeometry.get(d.taskId)?.height || 0)
         .attr("fill", d => modelColors(d.modelId))
         .attr("stroke", "#333").attr("stroke-width", 0.5);
-
     const maxTime = tasks.length > 0 ? d3.max(tasks, d => d.endTime) : (opHours * 60);
     const totalSimDurationMinutes = maxTime;
-    const totalRealSimDurationMs = (totalSimDurationMinutes * 60000) / 60;
-
-    const animationStartTime = performance.now();
-
+    animationState.schedule = {
+        isRunning: true,
+        lastFrameTime: performance.now(),
+        totalSimTimeMins: 0,
+        frameId: null
+    };
     function animationLoop(currentTime) {
         if (!animationState.schedule.isRunning) return;
-
-        const elapsedRealTimeMs = currentTime - animationStartTime;
-        const cappedElapsedRealTimeMs = Math.min(elapsedRealTimeMs, totalRealSimDurationMs);
-        const elapsedSimTimeMinutes = (cappedElapsedRealTimeMs * 60) / 60000;
-
+        const speedMultiplier = animationState.speedMultiplier;
+        const realDeltaMs = currentTime - animationState.schedule.lastFrameTime;
+        animationState.schedule.lastFrameTime = currentTime;
+        const simDeltaMs = realDeltaMs * 60 * speedMultiplier;
+        animationState.schedule.totalSimTimeMins += simDeltaMs / 60000;
+        const elapsedSimTimeMinutes = animationState.schedule.totalSimTimeMins;
+        if (elapsedSimTimeMinutes > totalSimDurationMinutes) {
+            animationState.schedule.isRunning = false;
+            const finalHours = String(Math.floor(totalSimDurationMinutes / 60)).padStart(2, '0');
+            const finalMinutes = String(Math.floor(totalSimDurationMinutes % 60)).padStart(2, '0');
+            clockDisplay.text(`${finalHours}:${finalMinutes}`);
+            return;
+        }
         const h = String(Math.floor(elapsedSimTimeMinutes / 60)).padStart(2, '0');
         const m = String(Math.floor(elapsedSimTimeMinutes % 60)).padStart(2, '0');
         clockDisplay.text(`${h}:${m}`);
-
-        const viewStartTime = (elapsedRealTimeMs * 60) / 60000;
+        const viewStartTime = elapsedSimTimeMinutes;
         xScale.domain([viewStartTime, viewStartTime + VIEW_WINDOW_MINS]);
-
         contentGroup.selectAll(".bar")
             .attr("x", d => xScale(d.startTime))
             .attr("width", d => Math.max(0, xScale(d.endTime) - xScale(d.startTime)));
-
-        if (elapsedRealTimeMs < totalRealSimDurationMs) {
-            animationState.schedule.frameId = requestAnimationFrame(animationLoop);
-        } else {
-            animationState.schedule.isRunning = false;
-        }
+        animationState.schedule.frameId = requestAnimationFrame(animationLoop);
     }
     workstationList.dispatchEvent(new Event('scroll'));
     animationState.schedule.frameId = requestAnimationFrame(animationLoop);
@@ -2306,7 +2433,6 @@ function drawScheduleVisualization() {
  * Efficiency - Draws the per-workstation and line-level efficiency charts.
  */
 function drawEfficiencyPanel() {
-    // Set up a global tooltip element if it doesn't exist
     let tooltip = d3.select("body").select(".eff-tooltip");
     if (tooltip.empty()) {
         tooltip = d3.select("body").append("div")
@@ -2342,7 +2468,6 @@ function drawEfficiencyPanel() {
     const root = svg.selectAll("g#eff-root")
         .data([null])
         .join(enter => enter.append("g").attr("id", "eff-root"));
-
     const defs = root.selectAll("defs").data([null]).join("defs");
     const boxGradient = defs.selectAll("#box-gradient").data([null])
         .join("linearGradient")
@@ -2385,7 +2510,6 @@ function drawEfficiencyPanel() {
     const singleRowUnitHeight = availableHeight / totalRowWeights;
     const summaryRowHeight = singleRowUnitHeight * summaryRowWeight;
     const workstationRowHeight = singleRowUnitHeight;
-
     const pieRadius = Math.min(availableWidth / (4 * 2) * 0.7, workstationRowHeight * 0.35);
     const clockRadius = pieRadius * 0.5;
     const positionMap = [];
@@ -2534,7 +2658,7 @@ function drawEfficiencyPanel() {
             .style("font-size", `${Math.max(Math.min(clockRadius * 0.4, workstationRowHeight * 0.06), 10)}px`)
             .text(d => `${d.toFixed(1)}h idle`);
     });
-    // === SUMMARY ROW ===
+
     const summaryWidth = availableWidth;
     const summaryHeight = summaryRowHeight - (2 * padding);
     const summaryX = panelWidth / 2;
@@ -2556,8 +2680,6 @@ function drawEfficiencyPanel() {
         .attr("y", -summaryHeight / 2)
         .attr("width", summaryWidth)
         .attr("height", summaryHeight);
-
-    // Key Metrics Display
     const metricsGroup = summary.selectAll("g.key-metrics").data([null])
         .join("g")
         .attr("class", "key-metrics")
@@ -2567,9 +2689,7 @@ function drawEfficiencyPanel() {
     const chartAreaHeight = summaryHeight - titleAreaHeight;
     const chartAreaWidth = colWidth * 0.8;
     const labelFontSize = Math.min(summaryHeight * 0.14, 14);
-
     const chartContainerY = -summaryHeight / 2 + titleAreaHeight + chartAreaHeight / 2;
-    // --- MIDDLE COLUMN (PIE CHART) ---
     const summaryPieGroup = summary.selectAll("g.pie-group").data([null])
         .join("g").attr("class", "pie-group")
         .attr("transform", `translate(0, ${chartContainerY})`);
@@ -2609,7 +2729,6 @@ function drawEfficiencyPanel() {
         .style("font-weight", "bold")
         .style("font-size", `${Math.max(Math.min(summaryPieRadius * 0.25, 12), 8)}px`)
         .text(d => `${d.toFixed(1)}%`);
-
     summary.selectAll("text.pie-label").data(["Overall Efficiency"])
         .join("text").attr("class", "pie-label")
         .attr("text-anchor", "middle")
@@ -2617,61 +2736,89 @@ function drawEfficiencyPanel() {
         .style("font-size", `${labelFontSize}px`)
         .style("font-weight", "bold")
         .text(d => d);
-    // --- LEFT & RIGHT COLUMN DATA ---
     const bottleneckCycleTime = d3.max(results.workstations, d => d.cycleTime) || 0;
     const idleTimesPerCycle = results.workstations.map(ws => bottleneckCycleTime - ws.cycleTime);
-    // --- LEFT COLUMN (BOX PLOT) ---
     const boxPlotGroup = summary.selectAll("g.box-plot-group").data([null])
         .join("g").attr("class", "box-plot-group")
         .attr("transform", `translate(${-colWidth}, ${chartContainerY})`);
-    const q1 = d3.quantile(idleTimesPerCycle, 0.25);
-    const median = d3.quantile(idleTimesPerCycle, 0.5);
-    const q3 = d3.quantile(idleTimesPerCycle, 0.75);
-    const min = d3.min(idleTimesPerCycle);
-    const max = d3.max(idleTimesPerCycle);
+    const q1 = d3.quantile(idleTimesPerCycle, 0.25) || 0;
+    const median = d3.quantile(idleTimesPerCycle, 0.5) || 0;
+    const q3 = d3.quantile(idleTimesPerCycle, 0.75) || 0;
+    const min = d3.min(idleTimesPerCycle) || 0;
+    const max = d3.max(idleTimesPerCycle) || 0;
     const xBox = d3.scaleLinear()
         .domain([0, max * 1.1 || 1])
         .range([-chartAreaWidth / 2, chartAreaWidth / 2]);
-
-    boxPlotGroup.selectAll(".x-axis").remove();
-
     const boxHeight = chartAreaHeight * 0.4;
-
-    // Center line (drawn first to be in the back)
+    const axisPadding = 20;
+    const axisYPosition = (boxHeight / 2) + axisPadding;
+    const titleTopMargin = 18;
+    const xAxisGroup = boxPlotGroup.selectAll("g.x-axis").data([null])
+        .join("g")
+        .attr("class", "x-axis")
+        .attr("transform", `translate(0, ${axisYPosition})`);
+    const tickValues = xBox.ticks(4).filter(d => d > 0);
+    xAxisGroup.transition().duration(750)
+        .call(d3.axisBottom(xBox)
+            .tickValues(tickValues)
+            .tickFormat(d => `${d.toFixed(1)}m`)
+            .tickSizeOuter(0)
+        );
+    xAxisGroup.selectAll("text")
+        .style("font-size", "12px")
+        .style("font-weight", "700");
+    summary.selectAll("text.box-label").data([results])
+        .join("text").attr("class", "box-label")
+        .attr("text-anchor", "middle")
+        .attr("transform", `translate(${-colWidth}, 0)`)
+        .attr("y", -summaryHeight / 2 + titleTopMargin)
+        .style("font-size", `${labelFontSize}px`)
+        .style("font-weight", "bold")
+        .html(d => `Total Idle Time: <tspan fill="#e74c3c">${(d.totalIdleTime / 60).toFixed(1)}h</tspan> | Idle Time CV: <tspan fill="#e74c3c">${d.idleTimeCv.toFixed(1)}%</tspan>`);
+    summary.selectAll("text.box-plot-title").data(["Balance Loss per Cycle"])
+        .join("text")
+        .attr("class", "box-plot-title")
+        .attr("text-anchor", "middle")
+        .attr("transform", `translate(${-colWidth}, 0)`)
+        .attr("y", -summaryHeight / 2 + titleTopMargin + 35)
+        .style("font-size", `${labelFontSize}px`)
+        .style("font-weight", "bold")
+        .text(d => d);
     boxPlotGroup.selectAll("line.center-line").data([null])
         .join("line").attr("class", "center-line")
-        .attr("x1", xBox(min)).attr("x2", xBox(max))
-        .attr("stroke", "#34495e").attr("stroke-width", 3);
-    // Whiskers
-    boxPlotGroup.selectAll("line.whisker").data([min, max])
-        .join("line").attr("class", "whisker")
-        .attr("y1", -boxHeight / 2).attr("y2", boxHeight / 2)
-        .attr("x1", d => xBox(d)).attr("x2", d => xBox(d))
+        .attr("y1", 0).attr("y2", 0)
         .attr("stroke", "#34495e").attr("stroke-width", 3)
-        .attr("stroke-linecap", "round");
-
-    // Box (drawn over the center line)
+        .transition().duration(750)
+        .attr("x1", xBox(min)).attr("x2", xBox(max));
+    boxPlotGroup.selectAll("line.whisker").data([{ val: min, key: 'min' }, { val: max, key: 'max' }], d => d.key)
+        .join("line").attr("class", "whisker")
+        .attr("y1", -boxHeight / 2)
+        .attr("y2", d => d.key === 'min' ? axisYPosition : boxHeight / 2)
+        .attr("stroke", "#34495e").attr("stroke-width", 3)
+        .attr("stroke-linecap", "round")
+        .transition().duration(750)
+        .attr("x1", d => xBox(d.val)).attr("x2", d => xBox(d.val));
     boxPlotGroup.selectAll("rect.box").data([null])
         .join("rect").attr("class", "box")
-        .attr("x", xBox(q1)).attr("width", xBox(q3) - xBox(q1))
         .attr("y", -boxHeight / 2).attr("height", boxHeight)
         .attr("stroke", "#34495e").attr("stroke-width", 4)
         .style("fill", "url(#box-gradient)")
-
-    // Median line
+        .transition().duration(750)
+        .attr("x", xBox(q1)).attr("width", xBox(q3) - xBox(q1));
     boxPlotGroup.selectAll("line.median-line").data([median])
         .join("line").attr("class", "median-line")
         .attr("y1", -boxHeight / 2).attr("y2", boxHeight / 2)
-        .attr("x1", d => xBox(d)).attr("x2", d => xBox(d))
-        .attr("stroke", "#34495e").attr("stroke-width", 5)
-        .attr("stroke-linecap", "round");
-    // Tooltip logic
+        .attr("stroke", "#07283f").attr("stroke-width", 5)
+        .attr("stroke-linecap", "round")
+        .transition().duration(750)
+        .attr("x1", d => xBox(d)).attr("x2", d => xBox(d));
     const tooltipContent = `
-        <strong>Min:</strong> ${min.toFixed(2)}<br>
-        <strong>Q1:</strong> ${q1.toFixed(2)}<br>
-        <strong>Median:</strong> ${median.toFixed(2)}<br>
-        <strong>Q3:</strong> ${q3.toFixed(2)}<br>
-        <strong>Max:</strong> ${max.toFixed(2)}
+        <div style="font-weight:bold; margin-bottom: 5px; text-align:center; border-bottom: 1px solid #fff; padding-bottom: 4px;">Idle Time per Cycle</div>
+        <strong>Min:</strong> ${min.toFixed(2)} min<br>
+        <strong>Q1:</strong> ${q1.toFixed(2)} min<br>
+        <strong>Median:</strong> ${median.toFixed(2)} min<br>
+        <strong>Q3:</strong> ${q3.toFixed(2)} min<br>
+        <strong>Max:</strong> ${max.toFixed(2)} min
     `;
     boxPlotGroup.selectAll("rect.tooltip-receiver").data([null])
         .join("rect")
@@ -2688,23 +2835,12 @@ function drawEfficiencyPanel() {
                 .style("top", (event.pageY - 28) + "px");
         })
         .on("mouseout", () => tooltip.style("opacity", 0));
-
-    summary.selectAll("text.box-label").data([results])
-        .join("text").attr("class", "box-label")
-        .attr("text-anchor", "middle")
-        .attr("transform", `translate(${-colWidth}, 0)`)
-        .attr("y", -summaryHeight / 2 + titleAreaHeight - 10)
-        .style("font-size", `${labelFontSize}px`)
-        .style("font-weight", "bold")
-        .html(d => `Total Idle Time: <tspan fill="#e74c3c">${(d.totalIdleTime / 60).toFixed(1)}</tspan> h | Idle Time CV: <tspan fill="#e74c3c">${d.idleTimeCv.toFixed(1)}%</tspan>`);
-    // --- RIGHT COLUMN (BAR CHART) ---
     const barChartMargin = { top: 10, right: 5, bottom: 35, left: 40 };
     const barChartInnerWidth = chartAreaWidth - barChartMargin.left - barChartMargin.right;
     const barChartInnerHeight = chartAreaHeight - barChartMargin.top - barChartMargin.bottom;
     const barChartGroup = summary.selectAll("g.bar-chart-group").data([null])
         .join("g").attr("class", "bar-chart-group")
         .attr("transform", `translate(${colWidth - chartAreaWidth / 2 + barChartMargin.left}, ${chartContainerY - chartAreaHeight / 2 + barChartMargin.top})`);
-
     const xBar = d3.scaleBand()
         .domain(results.workstations.map(d => d.id))
         .range([0, barChartInnerWidth])
@@ -2712,7 +2848,6 @@ function drawEfficiencyPanel() {
     const yBar = d3.scaleLinear()
         .domain([0, d3.max(results.workstations, d => d.dailyIdleTime) * 1.1 || 1])
         .range([barChartInnerHeight, 0]);
-
     barChartGroup.selectAll(".x-axis").data([null]).join("g")
         .attr("class", "x-axis")
         .attr("transform", `translate(0, ${barChartInnerHeight})`)
@@ -2732,16 +2867,34 @@ function drawEfficiencyPanel() {
         .style("font-weight", "600");
     barChartGroup.selectAll("rect.bar")
         .data(results.workstations, d => d.id)
-        .join("rect")
-        .attr("class", "bar")
-        .attr("x", d => xBar(d.id))
-        .attr("y", d => yBar(d.dailyIdleTime))
-        .attr("width", xBar.bandwidth())
-        .attr("height", d => barChartInnerHeight - yBar(d.dailyIdleTime))
-        .style("fill", "url(#box-gradient)")
-        .attr("stroke", "#34495e")
-        .attr("stroke-width", 1.8);
-
+        .join(
+            enter => enter.append("rect")
+                .attr("class", "bar")
+                .attr("x", d => xBar(d.id))
+                .attr("width", xBar.bandwidth())
+                .attr("y", yBar(0))
+                .attr("height", 0)
+                .style("fill", "url(#box-gradient)")
+                .attr("stroke", "#34495e")
+                .attr("stroke-width", 1.8)
+                .call(enter => enter.transition().duration(750)
+                    .attr("y", d => yBar(d.dailyIdleTime))
+                    .attr("height", d => barChartInnerHeight - yBar(d.dailyIdleTime))
+                ),
+            update => update
+                .call(update => update.transition().duration(750)
+                    .attr("x", d => xBar(d.id))
+                    .attr("width", xBar.bandwidth())
+                    .attr("y", d => yBar(d.dailyIdleTime))
+                    .attr("height", d => barChartInnerHeight - yBar(d.dailyIdleTime))
+                ),
+            exit => exit
+                .call(exit => exit.transition().duration(750)
+                    .attr("y", yBar(0))
+                    .attr("height", 0)
+                    .remove()
+                )
+        );
     const minDailyIdleTime = d3.min(results.workstations, d => d.dailyIdleTime);
     summary.selectAll("text.bar-label").data([results])
         .join("text").attr("class", "bar-label")
@@ -2751,160 +2904,6 @@ function drawEfficiencyPanel() {
         .style("font-size", `${labelFontSize}px`)
         .style("font-weight", "bold")
         .html(d => `Workstation Balance Loss: <tspan fill="#e74c3c">${d.balanceDelay.toFixed(1)}%</tspan>`);
-}
-
-function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
-    let isDragging = false;
-    let startY, startValue;
-
-    // Default values mapping - customize these based on your application's needs
-    const defaultValues = {
-        'dailyDemand': 180,
-        'opHours': 15.0,
-        'numEmployees': 8,
-        'laborCost': 25.0,
-        'superSell': 1250,
-        'superCogs': 450,
-        'ultraSell': 1500,
-        'ultraCogs': 550,
-        'megaSell': 1800,
-        'megaCogs': 650
-    };
-
-    // Get min/max constraints from the input element
-    const getConstraints = () => {
-        const min = input.hasAttribute('min') ? parseFloat(input.min) : -Infinity;
-        const max = input.hasAttribute('max') ? parseFloat(input.max) : Infinity;
-        const stepValue = parseFloat(input.step) || 1;
-        return { min, max, step: stepValue };
-    };
-
-    input.addEventListener("mousedown", (e) => {
-        if (e.button === 1) { // middle mouse button for dragging
-            e.preventDefault();
-            e.stopPropagation();
-            isDragging = true;
-            startY = e.clientY;
-            startValue = parseFloat(input.value) || 0;
-
-            const onMouseMove = (ev) => {
-                if (!isDragging) return;
-                const deltaY = startY - ev.clientY; // dragging up increases
-                const constraints = getConstraints();
-                let newVal = startValue + deltaY * sensitivity * step;
-
-                // Clamp to min/max constraints
-                newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
-
-                // Format based on input type and step
-                if (input.type === 'range' || constraints.step === 1) {
-                    input.value = Math.round(newVal).toString();
-                } else if (constraints.step < 1) {
-                    const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
-                    input.value = newVal.toFixed(decimals);
-                } else {
-                    input.value = newVal.toFixed(2);
-                }
-
-                input.dispatchEvent(new Event("input", { bubbles: true })); // trigger updates
-            };
-
-            const onMouseUp = () => {
-                isDragging = false;
-                document.removeEventListener("mousemove", onMouseMove);
-                document.removeEventListener("mouseup", onMouseUp);
-            };
-
-            document.addEventListener("mousemove", onMouseMove);
-            document.addEventListener("mouseup", onMouseUp);
-        }
-    });
-
-    // Mouse wheel scrolling support
-    input.addEventListener("wheel", (e) => {
-        if (document.activeElement === input) {
-            e.preventDefault();
-            const constraints = getConstraints();
-            const direction = e.deltaY > 0 ? -1 : 1;
-            let currentValue = parseFloat(input.value) || 0;
-            let newVal = currentValue + (direction * constraints.step);
-
-            // Clamp to min/max constraints
-            newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
-
-            // Format based on input type and step
-            if (input.type === 'range' || constraints.step === 1) {
-                input.value = Math.round(newVal).toString();
-            } else if (constraints.step < 1) {
-                const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
-                input.value = newVal.toFixed(decimals);
-            } else {
-                input.value = newVal.toFixed(2);
-            }
-
-            input.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-    });
-
-    // Ctrl+click to reset to default value (Houdini-style)
-    input.addEventListener("click", (e) => {
-        if (e.ctrlKey) {
-            e.preventDefault();
-            const inputId = input.id;
-            const defaultValue = defaultValues[inputId];
-
-            if (defaultValue !== undefined) {
-                const constraints = getConstraints();
-                // Ensure default value is within constraints
-                const clampedDefault = Math.max(constraints.min, Math.min(constraints.max, defaultValue));
-
-                // Format the value appropriately based on input type
-                if (input.type === 'range' || constraints.step === 1) {
-                    input.value = Math.round(clampedDefault).toString();
-                } else if (constraints.step < 1) {
-                    const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
-                    input.value = clampedDefault.toFixed(decimals);
-                } else {
-                    input.value = clampedDefault.toFixed(2);
-                }
-
-                // Trigger the input event to update the UI
-                input.dispatchEvent(new Event("input", { bubbles: true }));
-
-                // Visual feedback - briefly highlight the input
-                input.style.backgroundColor = '#90EE90'; // light green
-                setTimeout(() => {
-                    input.style.backgroundColor = '';
-                }, 200);
-            }
-        }
-    });
-}
-
-function restoreActiveTab() {
-    const savedTab = sessionStorage.getItem("activeTab");
-    const defaultTab = "overview";
-    const targetTab = savedTab || defaultTab;
-
-    // Set active button
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-    const btn = document.querySelector(`.tab-btn[data-tab="${targetTab}"]`);
-    if (btn) btn.classList.add("active");
-
-    // Show correct panel
-    visPanels.forEach(panel => {
-        panel.style.display = panel.id === `${targetTab}-panel` ? "block" : "none";
-    });
-}
-
-function renderActiveTab() {
-    const activeTab = document.querySelector('.tab-btn.active').dataset.tab;
-    if (activeTab === 'overview') drawOverviewPanel();
-    else if (activeTab === 'precedence') drawPrecedenceChart();
-    else if (activeTab === 'schedule') drawScheduleVisualization();
-    else if (activeTab === 'efficiency') drawEfficiencyPanel();
-    else if (activeTab === 'layout') drawLayoutVisualization();
-    else if (activeTab === 'profit') drawProfitPanel();
 }
 
 // Run the application
