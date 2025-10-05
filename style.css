@@ -42,7 +42,7 @@ body {
 }
 
 .sidebar {
-  width: 300px;
+  width: clamp(280px, 15vw, 400px);
   background-color: var(--sidebar-bg);
   box-shadow: var(--shadow);
   display: flex;
