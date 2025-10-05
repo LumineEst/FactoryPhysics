@@ -14,6 +14,17 @@ const COLOR_CONSTANTS = {
     hueVary: 10
 };
 
+const PRECEDENCE_DATA = [
+    { id: 1, predecessors: [] }, { id: 2, predecessors: [1] }, { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] },
+    { id: 5, predecessors: [2, 3] }, { id: 6, predecessors: [1] }, { id: 7, predecessors: [6] }, { id: 8, predecessors: [1] },
+    { id: 9, predecessors: [8] }, { id: 10, predecessors: [1] }, { id: 11, predecessors: [1] }, { id: 12, predecessors: [10, 11] },
+    { id: 13, predecessors: [4, 5, 7, 9, 12] }, { id: 14, predecessors: [13] }, { id: 15, predecessors: [14] }, { id: 16, predecessors: [15] },
+    { id: 17, predecessors: [16] }, { id: 18, predecessors: [14] }, { id: 19, predecessors: [18] }, { id: 20, predecessors: [19] },
+    { id: 21, predecessors: [20] }, { id: 22, predecessors: [18] }, { id: 23, predecessors: [22] }, { id: 24, predecessors: [23] },
+    { id: 25, predecessors: [19, 22] }, { id: 26, predecessors: [19, 22] }, { id: 27, predecessors: [25, 26] }, { id: 28, predecessors: [27] },
+    { id: 29, predecessors: [15] }, { id: 30, predecessors: [17, 21, 24, 27, 29] }, { id: 31, predecessors: [30] },
+];
+
 const PERT_LABOR_FALLBACK = {
     1: 0.8, 2: 1.5, 3: 1.0, 4: 1.3, 5: 0.5, 6: 0.7, 7: 0.7, 8: 0.52, 9: 0.325, 10: 0.96, 11: 0.3, 12: 2.0,
     13: 2.5, 14: 1.5, 15: 2.2, 16: 1.2, 17: 0.5, 18: 0.8, 19: 1.1, 20: 0.325, 21: 0.325, 22: 1.3, 23: 0.14,
@@ -97,7 +108,6 @@ async function main() {
     calculateOptimalProfitData();
 }
 
-// Data Loading from local files
 async function loadData() {
     try {
         const [pertData, configsRaw] = await Promise.all([
@@ -115,23 +125,22 @@ async function loadData() {
             });
         });
         for (let i = 3; i <= 13; i++) {
-            state.configData[i] = {};
             originalConfigData[i] = {};
         }
         configsRaw.forEach(row => {
             for (let i = 3; i <= 13; i++) {
-                const wsKey = `${i}_Workstation`,
-                    elKey = `${i}_Element`;
-                const workstation = row[wsKey],
-                    element = parseInt(row[elKey]);
+                const workstation = row[`${i}_Workstation`];
+                const element = parseInt(row[`${i}_Element`]);
+
                 if (workstation && !isNaN(element)) {
-                    if (!state.configData[i][workstation]) state.configData[i][workstation] = [];
-                    state.configData[i][workstation].push(element);
-                    if (!originalConfigData[i][workstation]) originalConfigData[i][workstation] = [];
+                    if (!originalConfigData[i][workstation]) {
+                        originalConfigData[i][workstation] = [];
+                    }
                     originalConfigData[i][workstation].push(element);
                 }
             }
         });
+        state.configData = JSON.parse(JSON.stringify(originalConfigData));
         console.log("Local CSV data loaded successfully.");
     } catch (error) {
         console.error("Fatal Error: Could not load local data files.", error);
@@ -525,7 +534,7 @@ function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
         return { min, max, step: stepValue };
     };
     input.addEventListener("mousedown", (e) => {
-        if (e.button === 1) { 
+        if (e.button === 1) {
             e.preventDefault();
             e.stopPropagation();
             isDragging = true;
@@ -1093,19 +1102,9 @@ function updatePrecedenceChartColors() {
  * Precedence - Generates a Precedence DAG for Elements connected by precedence.
  */
 function drawPrecedenceChart() {
-    const rawData = [
-        { id: 1, predecessors: [] }, { id: 2, predecessors: [1] }, { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] },
-        { id: 5, predecessors: [2, 3] }, { id: 6, predecessors: [1] }, { id: 7, predecessors: [6] }, { id: 8, predecessors: [1] },
-        { id: 9, predecessors: [8] }, { id: 10, predecessors: [1] }, { id: 11, predecessors: [1] }, { id: 12, predecessors: [10, 11] },
-        { id: 13, predecessors: [4, 5, 7, 9, 12] }, { id: 14, predecessors: [13] }, { id: 15, predecessors: [14] }, { id: 16, predecessors: [15] },
-        { id: 17, predecessors: [16] }, { id: 18, predecessors: [14] }, { id: 19, predecessors: [18] }, { id: 20, predecessors: [19] },
-        { id: 21, predecessors: [20] }, { id: 22, predecessors: [18] }, { id: 23, predecessors: [22] }, { id: 24, predecessors: [23] },
-        { id: 25, predecessors: [19, 22] }, { id: 26, predecessors: [19, 22] }, { id: 27, predecessors: [25, 26] }, { id: 28, predecessors: [27] },
-        { id: 29, predecessors: [15] }, { id: 30, predecessors: [17, 21, 24, 27, 29] }, { id: 31, predecessors: [30] },
-    ];
-    const nodes = rawData.map(d => ({ id: d.id }));
+    const nodes = PRECEDENCE_DATA.map(d => ({ id: d.id }));
     const links = [];
-    rawData.forEach(d => {
+    PRECEDENCE_DATA.forEach(d => {
         d.predecessors.forEach(pId => {
             links.push({ source: pId, target: d.id });
         });
@@ -1212,18 +1211,8 @@ function updatePrecedenceChartLinks() {
         const taskId = parseInt(row.dataset.taskId);
         elementOrderMap.set(taskId, orderIndex++);
     });
-    const directPredecessorsData = [
-        { id: 1, predecessors: [] }, { id: 2, predecessors: [1] }, { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] },
-        { id: 5, predecessors: [2, 3] }, { id: 6, predecessors: [1] }, { id: 7, predecessors: [6] }, { id: 8, predecessors: [1] },
-        { id: 9, predecessors: [8] }, { id: 10, predecessors: [1] }, { id: 11, predecessors: [1] }, { id: 12, predecessors: [10, 11] },
-        { id: 13, predecessors: [4, 5, 7, 9, 12] }, { id: 14, predecessors: [13] }, { id: 15, predecessors: [14] }, { id: 16, predecessors: [15] },
-        { id: 17, predecessors: [16] }, { id: 18, predecessors: [14] }, { id: 19, predecessors: [18] }, { id: 20, predecessors: [19] },
-        { id: 21, predecessors: [20] }, { id: 22, predecessors: [18] }, { id: 23, predecessors: [22] }, { id: 24, predecessors: [23] },
-        { id: 25, predecessors: [19, 22] }, { id: 26, predecessors: [19, 22] }, { id: 27, predecessors: [25, 26] }, { id: 28, predecessors: [27] },
-        { id: 29, predecessors: [15] }, { id: 30, predecessors: [17, 21, 24, 27, 29] }, { id: 31, predecessors: [30] },
-    ];
     const directSuccessorsMap = new Map();
-    directPredecessorsData.forEach(el => {
+    PRECEDENCE_DATA.forEach(el => {
         if (!directSuccessorsMap.has(el.id)) directSuccessorsMap.set(el.id, new Set());
         el.predecessors.forEach(pId => {
             if (!directSuccessorsMap.has(pId)) directSuccessorsMap.set(pId, new Set());
@@ -1261,7 +1250,7 @@ function updatePrecedenceChartLinks() {
         .sort((a, b) => {
             const aIsHighlighted = violatingPathNodes.has(a.source.id) && violatingPathNodes.has(a.target.id);
             const bIsHighlighted = violatingPathNodes.has(b.source.id) && violatingPathNodes.has(b.target.id);
-            if (aIsHighlighted && !bIsHighlighted) return 1; 
+            if (aIsHighlighted && !bIsHighlighted) return 1;
             if (!aIsHighlighted && bIsHighlighted) return -1;
             return 0;
         })
@@ -1270,7 +1259,7 @@ function updatePrecedenceChartLinks() {
             d3.select(this)
                 .transition().duration(300)
                 .attr('stroke', isHighlighted ? '#e74c3c' : '#999')
-                .attr('stroke-width', isHighlighted ? 5.5 : 2.5) 
+                .attr('stroke-width', isHighlighted ? 5.5 : 2.5)
                 .attr('marker-end', isHighlighted ? 'url(#arrowhead-highlight)' : 'url(#arrowhead)');
         });
 }
@@ -1313,30 +1302,6 @@ function sizePERTNodesOnce() {
         g.select('text').style('font-size', Math.max(10, Math.min(18, r * 0.33)) + 'px');
     });
 }
-
-/**
- * Precedence - Modify Sizing of Nodes Automatically
- */
-function enableAutoPERTSizing() {
-    const tabsEl = document.getElementById('tabs');
-    if (tabsEl) {
-        tabsEl.addEventListener('click', (e) => {
-            const btn = e.target;
-            if (btn.classList?.contains('tab-btn') && btn.dataset.tab === 'precedence') {
-                requestAnimationFrame(() => setTimeout(sizePERTNodesOnce, 50));
-            }
-        });
-    }
-    const panelEl = document.getElementById('precedence-panel');
-    if (panelEl) {
-        const obs = new MutationObserver(() => {
-            clearTimeout(obs.__t);
-            obs.__t = setTimeout(sizePERTNodesOnce, 100);
-        });
-        obs.observe(panelEl, { childList: true, subtree: true });
-    }
-}
-enableAutoPERTSizing();
 
 /**
  * Precedence - Pull in Row-Date
@@ -1483,35 +1448,31 @@ function restylePERTNodeLabelsStrong() {
 }
 
 /**
- * Precedence - Generate Automatic Pie Charts in the Nodes
+ * Precedence - Sets up listeners to automatically redraw the PERT chart when the tab is active.
  */
-function enableAutoPERTPies() {
+function setupPrecedenceTabObserver(callback) {
     const tabsEl = document.getElementById('tabs');
+    const panelEl = document.getElementById('precedence-panel');
     if (tabsEl) {
         tabsEl.addEventListener('click', (e) => {
             const btn = e.target;
             if (btn.classList?.contains('tab-btn') && btn.dataset.tab === 'precedence') {
-                requestAnimationFrame(() => setTimeout(() => {
-                    sizePERTNodesOnce();
-                    drawPERTNodePiesOnce();
-                }, 50));
+                requestAnimationFrame(() => setTimeout(callback, 50));
             }
         });
     }
-    const panelEl = document.getElementById('precedence-panel');
     if (panelEl) {
         const obs = new MutationObserver(() => {
             clearTimeout(obs.__t);
-            obs.__t = setTimeout(() => {
-                sizePERTNodesOnce();
-                drawPERTNodePiesOnce();
-            }, 100);
+            obs.__t = setTimeout(callback, 100);
         });
         obs.observe(panelEl, { childList: true, subtree: true });
     }
 }
-
-enableAutoPERTPies();
+setupPrecedenceTabObserver(() => {
+    sizePERTNodesOnce();
+    drawPERTNodePiesOnce();
+});
 
 /**
  * Precedence - Create a Legend
@@ -1580,7 +1541,7 @@ async function calculateOptimalProfitData() {
             const marginData = [];
             const originalStateConfig = state.configData;
             try {
-                state.configData = originalConfigData; 
+                state.configData = originalConfigData;
                 for (let demand = 1; demand <= 576; demand++) {
                     let maxProfit = -Infinity;
                     let maxMargin = -Infinity;
@@ -1953,8 +1914,8 @@ function drawLayoutVisualization() {
     const maxY_ft = d3.max(allPoints, d => d.y);
     if ((maxX_ft - minX_ft) <= 0 || (maxY_ft - minY_ft) <= 0) return;
     const lineBBox = { width: maxX_ft - minX_ft, height: maxY_ft - minY_ft };
-    const uiPadding = 20;
-    const rightPanelWidth = 200;
+    const uiPadding = containerWidth * 0.02;
+    const rightPanelWidth = containerWidth * 0.14;
     const availableWidth = containerWidth - rightPanelWidth - uiPadding;
     const availableHeight = containerHeight - (uiPadding * 2);
     const scale = Math.min(availableWidth / lineBBox.width, availableHeight / lineBBox.height);
@@ -1963,9 +1924,9 @@ function drawLayoutVisualization() {
     const translateX = (leftPadding - (minX_ft * scale)) + 20;
     const translateY = uiPadding - (minY_ft * scale);
     const g = svg.append("g").attr("transform", `translate(${translateX}, ${translateY}) scale(${scale})`).attr("fill", "none");
-    const clockX = containerWidth - (rightPanelWidth / 2) - uiPadding + 28;
-    const clockY = uiPadding + 50;
-    const clockRadius = 60;
+    const clockX = containerWidth - (rightPanelWidth / 2) - uiPadding + (containerWidth * 0.02);
+    const clockY = (uiPadding * 2.2);
+    const clockRadius = Math.min(60, rightPanelWidth * 0.3);
     const clockGroup = svg.append("g").attr("transform", `translate(${clockX}, ${clockY})`);
     clockGroup.append("circle")
         .attr("r", clockRadius)
@@ -2050,7 +2011,7 @@ function drawLayoutVisualization() {
         animationState.speedMultiplier = newValue;
         d3.select(this.parentNode).select(".handle").transition().duration(50).attr("cy", speedScale(newValue));
     });
-    const binConfig = { productPixelSize: 14, itemsPerRow: 10, padding: 5 };
+    const binConfig = { productPixelSize: Math.max(14, containerWidth * 0.01), itemsPerRow: 10, padding: Math.max(5, containerWidth * 0.005) };
     binConfig.binPixelWidth = (binConfig.itemsPerRow * binConfig.productPixelSize) - 5 + (2 * binConfig.padding);
     binConfig.binPixelX = containerWidth - binConfig.binPixelWidth - uiPadding;
     binConfig.binPixelY_bottom = containerHeight - uiPadding + 15;
@@ -2309,7 +2270,7 @@ function drawScheduleVisualization() {
     const clockGroup = svg.append("g").attr("transform", `translate(${clockX}, ${clockY})`);
     clockGroup.append("rect").attr("x", -10).attr("y", -15).attr("width", 100).attr("height", 20).attr("fill", "rgba(0,0,0,0.5)").attr("rx", 5);
     const clockDisplay = clockGroup.append("text").attr("id", "sim-clock-display").attr("fill", "white").style("font-size", "18px").style("font-family", "monospace").text("00:00");
-    const sliderWidth = 120;
+    const sliderWidth = Math.min(150, containerWidth * 0.15);
     const sliderXStart = 0;
     const sliderXEnd = sliderWidth;
     const minVal = 0.1;
