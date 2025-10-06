@@ -1221,7 +1221,7 @@ function drawPrecedenceChart() {
 
             const transform = d3.zoomIdentity.translate(translateX, translateY).scale(scale);
 
-            svg.transition().duration(750).call(zoom.transform, transform);
+            svg.transition().duration(250).call(zoom.transform, transform);
             // --- FIX END ---
         });
 
@@ -3446,8 +3446,8 @@ const drawInvestmentPanel = (function () {
     function renderInvestmentResults(results) {
         const resultsNode = d3.select('.inv-results-column').node();
         if (!resultsNode) return;
-        const totalHeight = resultsNode.clientHeight;
-        const topThirdHeight = Math.floor((totalHeight / 3) - 10);
+        const totalHeight = resultsNode.clientHeight * 0.95;
+        const topThirdHeight = Math.floor(totalHeight / 3);
         const bottomTwoThirdsHeight = totalHeight - topThirdHeight;
 
         const scorecardHeight = 95;
