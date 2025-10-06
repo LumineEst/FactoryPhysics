@@ -94,7 +94,7 @@ async function main() {
     setupEventListeners();
     setupUIEventListeners();
     setupVisibilityListener();
-    initializeAndRunProfitCalculation();
+    initializeAndRunProfitCalculation(); // Handles cached or new calculation
     state.invalidPrecedenceMap = validatePrecedence();
     invalidPrecedenceNodes = new Set(Array.from(state.invalidPrecedenceMap.keys()));
     restoreActiveTab();
@@ -106,7 +106,6 @@ async function main() {
     document.querySelectorAll("input[type='range']").forEach(input => {
         enableMiddleDragNumberInput(input, 1, 1);
     });
-    calculateOptimalProfitData();
 }
 
 async function loadData() {
@@ -132,7 +131,6 @@ async function loadData() {
             for (let i = 3; i <= 13; i++) {
                 const workstation = row[`${i}_Workstation`];
                 const element = parseInt(row[`${i}_Element`]);
-
                 if (workstation && !isNaN(element)) {
                     if (!originalConfigData[i][workstation]) {
                         originalConfigData[i][workstation] = [];
@@ -1585,13 +1583,31 @@ async function calculateOptimalProfitData() {
     });
 }
 
-/**
- * Profit - Draws the Gross Profit and Gross Profit Margin charts from cached data.
- */
 function drawProfitPanel() {
     const svg = d3.select("#profit-panel");
     const { clientWidth: width, clientHeight: height } = document.getElementById('svg-container');
     svg.selectAll("*").remove();
+
+    // Add CSS for the tooltip if it doesn't exist
+    if (!document.getElementById('profit-tooltip-style')) {
+        const style = document.createElement('style');
+        style.id = 'profit-tooltip-style';
+        style.innerHTML = `
+.profit-tooltip {
+position: absolute; text-align: left; padding: 6px 8px;
+font: 12px sans-serif; background: rgba(44, 62, 80, 0.9);
+color: white; border-radius: 6px; pointer-events: none; line-height: 1.4;
+}
+.profit-tooltip strong { font-size: 13px; }
+.lost-profit-area { fill: #c0392b; opacity: 0.3; }
+.profit-breakdown-group .axis text { font-size: 10px; }
+.profit-breakdown-group .axis-label { font-size: 12px; font-weight: 600; fill: #34495e; }
+.profit-breakdown-group .pie-title { font-size: 14px; font-weight: bold; text-anchor: middle; }
+.profit-breakdown-group .breakdown-border { fill: none; stroke: #34495e; stroke-width: 2; stroke-dasharray: 5,5; rx: 10; }
+`;
+        document.head.appendChild(style);
+    }
+
     if (!profitMaximizationCache.data || isProfitCalculating) {
         svg.append("text")
             .attr("x", width / 2).attr("y", height / 2)
@@ -1600,61 +1616,192 @@ function drawProfitPanel() {
             .text("Calculating optimal profit scenarios, please wait...");
         return;
     }
+
     const data = profitMaximizationCache.data;
-    const margin = { top: 40, right: 60, bottom: 40, left: 80 };
+    const margin = { top: 40, right: 20, bottom: 40, left: 80 };
+
+    // --- Layout Partition ---
+    const breakdownWidth = width * 0.3;
+    const chartsWidth = width - breakdownWidth;
+    const chartWidth = chartsWidth - margin.left - margin.right;
     const chartHeight = (height / 2) - margin.top - margin.bottom;
-    const chartWidth = width - margin.left - margin.right;
+
+    const chartsGroup = svg.append("g").attr("class", "profit-charts-group");
+    const breakdownGroup = svg.append("g").attr("class", "profit-breakdown-group").attr("transform", `translate(${chartsWidth}, 0)`);
+
     const xScale = d3.scaleLinear().domain([1, 576]).range([0, chartWidth]);
-    const profitChart = svg.append("g").attr("transform", `translate(${margin.left}, ${margin.top})`);
+
+    // --- Current Configuration Calculation ---
+    const currentOpInputs = {
+        dailyDemand: parseInt(dailyDemandInput.value),
+        opHours: parseFloat(opHoursInput.value),
+        numEmployees: parseInt(numEmployeesInput.value)
+    };
+    const currentFinInputs = {
+        laborCost: parseFloat(laborCostInput.value),
+        superSell: parseFloat(superSellInput.value),
+        superCogs: parseFloat(superCogsInput.value),
+        ultraSell: parseFloat(ultraSellInput.value),
+        ultraCogs: parseFloat(ultraCogsInput.value),
+        megaSell: parseFloat(megaSellInput.value),
+        megaCogs: parseFloat(megaCogsInput.value),
+    };
+    const currentMetrics = calculateMetrics(currentOpInputs, currentFinInputs);
+    const requestedDemandX = xScale(currentOpInputs.dailyDemand);
+    const actualThroughputX = xScale(currentMetrics.throughputUnitsPerDay);
+    const bisectDemand = d3.bisector(d => d.demand).left;
+
+    // --- Main Chart Drawing (Profit & Margin) ---
+    const profitChart = chartsGroup.append("g").attr("transform", `translate(${margin.left}, ${margin.top})`);
     const yProfitScale = d3.scaleLinear().domain(d3.extent(data.profitData, d => d.value)).nice().range([chartHeight, 0]);
-    const profitLine = d3.line().x(d => xScale(d.demand)).y(d => yProfitScale(d.value));
+    // ... (rest of profit chart drawing)
     profitChart.append("g").attr("transform", `translate(0, ${chartHeight})`).call(d3.axisBottom(xScale));
     profitChart.append("g").call(d3.axisLeft(yProfitScale).tickFormat(d3.format("$,.0f")));
-    profitChart.append("path").datum(data.profitData).attr("fill", "none").attr("stroke", "#27ae60").attr("stroke-width", 2).attr("d", profitLine);
+    profitChart.append("path").datum(data.profitData).attr("fill", "none").attr("stroke", "#27ae60").attr("stroke-width", 2).attr("d", d3.line().x(p => xScale(p.demand)).y(p => yProfitScale(p.value)));
     profitChart.append("text").attr("x", chartWidth / 2).attr("y", -15).attr("text-anchor", "middle").style("font-size", "14px").style("font-weight", "bold").text("Max Gross Profit by Demand");
-    const marginChart = svg.append("g").attr("transform", `translate(${margin.left}, ${margin.top + height / 2})`);
+    const iProfit = bisectDemand(data.profitData, currentOpInputs.dailyDemand, 1);
+    const optimalProfitAtDemand = data.profitData[iProfit > 0 ? iProfit - 1 : 0]?.value || 0;
+    const optimalProfitY = yProfitScale(optimalProfitAtDemand);
+    profitChart.append("line").attr("x1", requestedDemandX).attr("x2", requestedDemandX).attr("y1", 0).attr("y2", chartHeight).attr("stroke", "#34495e").attr("stroke-width", 1).attr("stroke-dasharray", "3, 3");
+    profitChart.append("line").attr("x1", requestedDemandX).attr("x2", requestedDemandX).attr("y1", chartHeight).attr("y2", optimalProfitY).attr("stroke", "#34495e").attr("stroke-width", 2.5);
+    if (currentOpInputs.dailyDemand > currentMetrics.throughputUnitsPerDay) {
+        const iActual = bisectDemand(data.profitData, currentMetrics.throughputUnitsPerDay, 1);
+        const areaData = data.profitData.slice(iActual > 0 ? iActual - 1 : 0, iProfit);
+        if (areaData.length > 0) {
+            const lostProfitArea = d3.area().x(d => xScale(d.demand)).y0(chartHeight).y1(d => yProfitScale(d.value));
+            profitChart.append("path").datum(areaData).attr("class", "lost-profit-area").attr("d", lostProfitArea);
+            profitChart.append("line").attr("x1", actualThroughputX).attr("x2", actualThroughputX).attr("y1", 0).attr("y2", chartHeight).attr("stroke", "#c0392b").attr("stroke-width", 1).attr("stroke-dasharray", "2, 2");
+        }
+    }
+    profitChart.append("circle").attr("cx", actualThroughputX).attr("cy", yProfitScale(currentMetrics.dailyGrossProfit)).attr("r", 5).attr("fill", "red").attr("stroke", "white").attr("stroke-width", 1.5);
+
+    const marginChart = chartsGroup.append("g").attr("transform", `translate(${margin.left}, ${margin.top + height / 2})`);
     const yMarginScale = d3.scaleLinear().domain([d3.min(data.marginData, d => d.value) > 0 ? 0 : d3.min(data.marginData, d => d.value), d3.max(data.marginData, d => d.value)]).nice().range([chartHeight, 0]);
-    const marginLine = d3.line().x(d => xScale(d.demand)).y(d => yMarginScale(d.value));
     marginChart.append("g").attr("transform", `translate(0, ${chartHeight})`).call(d3.axisBottom(xScale).tickFormat(d3.format("d")));
-    marginChart.append("g").call(d3.axisLeft(yMarginScale).tickFormat(d => `${d.toFixed(0)}%`));
-    marginChart.append("path").datum(data.marginData).attr("fill", "none").attr("stroke", "#2980b9").attr("stroke-width", 2).attr("d", marginLine);
+    marginChart.append("g").call(d3.axisLeft(yMarginScale).tickFormat(d => `${d.toFixed(1)}%`));
+    marginChart.append("path").datum(data.marginData).attr("fill", "none").attr("stroke", "#2980b9").attr("stroke-width", 2).attr("d", d3.line().x(p => xScale(p.demand)).y(p => yMarginScale(p.value)));
     marginChart.append("text").attr("x", chartWidth / 2).attr("y", -15).attr("text-anchor", "middle").style("font-size", "14px").style("font-weight", "bold").text("Max Gross Profit Margin by Demand");
     marginChart.append("text").attr("x", chartWidth / 2).attr("y", chartHeight + margin.bottom - 5).attr("text-anchor", "middle").style("font-size", "12px").text("Daily Demand (Units)");
-    const focus = svg.append("g").style("display", "none");
-    focus.append("line").attr("class", "focus-line").attr("y1", margin.top).attr("y2", height - margin.bottom).attr("stroke", "#e74c3c").attr("stroke-dasharray", "3,3");
-    const profitCircle = focus.append("circle").attr("r", 4).attr("fill", "#27ae60").attr("stroke", "white");
-    const marginCircle = focus.append("circle").attr("r", 4).attr("fill", "#2980b9").attr("stroke", "white");
-    const tooltip = focus.append("g");
-    tooltip.append("rect").attr("width", 150).attr("height", 60).attr("rx", 4).attr("fill", "rgba(0,0,0,0.7)");
-    const tooltipText1 = tooltip.append("text").attr("x", 10).attr("y", 20).attr("fill", "white").style("font-size", "12px");
-    const tooltipText2 = tooltip.append("text").attr("x", 10).attr("y", 35).attr("fill", "white").style("font-size", "12px");
-    const tooltipText3 = tooltip.append("text").attr("x", 10).attr("y", 50).attr("fill", "white").style("font-size", "12px");
-    svg.append("rect").attr("width", width).attr("height", height).style("fill", "none").style("pointer-events", "all")
-        .on("mouseover", () => focus.style("display", null))
-        .on("mouseout", () => focus.style("display", "none"))
-        .on("mousemove", mousemove);
-    const bisectDemand = d3.bisector(d => d.demand).left;
-    function mousemove(event) {
-        const x0 = xScale.invert(d3.pointer(event)[0] - margin.left);
-        const i = bisectDemand(data.profitData, x0, 1);
-        if (i <= 0 || i >= data.profitData.length) return;
-        const d0 = data.profitData[i - 1];
-        const d1 = data.profitData[i];
-        const d = (x0 - d0.demand > d1.demand - x0) ? d1 : d0;
-        const m = data.marginData[d.demand - 1];
-        const focusX = xScale(d.demand) + margin.left;
-        const profitY = yProfitScale(d.value) + margin.top;
-        const marginY = yMarginScale(m.value) + margin.top + height / 2;
-        focus.select(".focus-line").attr("transform", `translate(${focusX}, 0)`);
-        profitCircle.attr("transform", `translate(${focusX}, ${profitY})`);
-        marginCircle.attr("transform", `translate(${focusX}, ${marginY})`);
-        let tooltipX = focusX + 15;
-        if (tooltipX + 150 > width) tooltipX = focusX - 165;
-        tooltip.attr("transform", `translate(${tooltipX}, ${margin.top + 20})`);
-        tooltipText1.text(`Demand: ${d.demand}`);
-        tooltipText2.text(`Profit: ${d3.format("$,.0f")(d.value)}`);
-        tooltipText3.text(`Margin: ${m.value.toFixed(1)}%`);
+    const iMargin = bisectDemand(data.marginData, currentOpInputs.dailyDemand, 1);
+    const optimalMarginAtDemand = data.marginData[iMargin > 0 ? iMargin - 1 : 0]?.value || 0;
+    const optimalMarginY = yMarginScale(optimalMarginAtDemand);
+    marginChart.append("line").attr("x1", requestedDemandX).attr("x2", requestedDemandX).attr("y1", 0).attr("y2", chartHeight).attr("stroke", "#34495e").attr("stroke-width", 1).attr("stroke-dasharray", "3, 3");
+    marginChart.append("line").attr("x1", requestedDemandX).attr("x2", requestedDemandX).attr("y1", chartHeight).attr("y2", optimalMarginY).attr("stroke", "#34495e").attr("stroke-width", 2.5);
+    if (currentOpInputs.dailyDemand > currentMetrics.throughputUnitsPerDay) {
+        const iActual = bisectDemand(data.marginData, currentMetrics.throughputUnitsPerDay, 1);
+        const areaData = data.marginData.slice(iActual > 0 ? iActual - 1 : 0, iMargin);
+        if (areaData.length > 0) {
+            const lostMarginArea = d3.area().x(d => xScale(d.demand)).y0(chartHeight).y1(d => yMarginScale(d.value));
+            marginChart.append("path").datum(areaData).attr("class", "lost-profit-area").attr("d", lostMarginArea);
+            marginChart.append("line").attr("x1", actualThroughputX).attr("x2", actualThroughputX).attr("y1", 0).attr("y2", chartHeight).attr("stroke", "#c0392b").attr("stroke-width", 1).attr("stroke-dasharray", "2, 2");
+        }
     }
+    marginChart.append("circle").attr("cx", actualThroughputX).attr("cy", yMarginScale(currentMetrics.grossProfitMargin)).attr("r", 5).attr("fill", "red").attr("stroke", "white").attr("stroke-width", 1.5);
+
+    const tooltip = d3.select("body").selectAll(".profit-tooltip").data([null]).join("div").attr("class", "profit-tooltip").style("opacity", 0);
+    const profitOverlay = chartsGroup.append("rect").attr("transform", `translate(${margin.left}, ${margin.top})`).attr("width", chartWidth).attr("height", chartHeight).style("fill", "none").style("pointer-events", "all");
+    const marginOverlay = chartsGroup.append("rect").attr("transform", `translate(${margin.left}, ${margin.top + height / 2})`).attr("width", chartWidth).attr("height", chartHeight).style("fill", "none").style("pointer-events", "all");
+    profitOverlay.on("mouseover", () => tooltip.style("opacity", 1)).on("mouseout", () => tooltip.style("opacity", 0)).on("mousemove", profitMousemove);
+    marginOverlay.on("mouseover", () => tooltip.style("opacity", 1)).on("mouseout", () => tooltip.style("opacity", 0)).on("mousemove", marginMousemove);
+    function profitMousemove(event) { const x0 = xScale.invert(d3.pointer(event)[0]); const i = bisectDemand(data.profitData, x0, 1); if (i <= 0 || i >= data.profitData.length) return; const d0 = data.profitData[i - 1]; const d1 = data.profitData[i]; const d = (x0 - d0.demand > d1.demand - x0) ? d1 : d0; tooltip.html(`<strong>Demand: ${d.demand}</strong><br/>Optimal Profit: ${d3.format("$,.0f")(d.value)}<br/>Configuration: ${d.config.emp} W, ${d.config.hrs} hrs`).style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px"); }
+    function marginMousemove(event) { const x0 = xScale.invert(d3.pointer(event)[0]); const i = bisectDemand(data.marginData, x0, 1); if (i <= 0 || i >= data.marginData.length) return; const d0 = data.marginData[i - 1]; const d1 = data.marginData[i]; const d = (x0 - d0.demand > d1.demand - x0) ? d1 : d0; tooltip.html(`<strong>Demand: ${d.demand}</strong><br/>Optimal Margin: ${d.value.toFixed(1)}%<br/>Configuration: ${d.config.emp} W, ${d.config.hrs} hrs`).style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px"); }
+
+    // --- Per-Model Breakdown Panel ---
+    const totalUnits = currentMetrics.throughputUnitsPerDay;
+    const totalLabor = currentOpInputs.numEmployees * currentOpInputs.opHours * currentFinInputs.laborCost;
+    const perModelData = [];
+    const models = [{ key: 'super', sell: 'superSell', cogs: 'superCogs' }, { key: 'ultra', sell: 'ultraSell', cogs: 'ultraCogs' }, { key: 'mega', sell: 'megaSell', cogs: 'megaCogs' }];
+    models.forEach(model => {
+        const units = totalUnits * BUILD_RATIOS[model.key];
+        const sales = units * currentFinInputs[model.sell];
+        const cogs = units * currentFinInputs[model.cogs];
+        const labor = totalLabor * BUILD_RATIOS[model.key];
+        perModelData.push({ label: model.key.charAt(0).toUpperCase() + model.key.slice(1), value: sales - cogs - labor, sales, cogs, labor });
+    });
+    const totalSales = perModelData.reduce((sum, d) => sum + d.sales, 0);
+    const totalCogs = perModelData.reduce((sum, d) => sum + d.cogs, 0);
+    const totalProfit = perModelData.reduce((sum, d) => sum + d.value, 0);
+
+    const topHalf = breakdownGroup.append("g");
+    const bottomHalf = breakdownGroup.append("g").attr("transform", `translate(0, ${height / 2})`);
+    const panelPadding = breakdownWidth * 0.1; // Increase padding to shrink content
+
+    // --- Bottom Half: Bar Chart ---
+    const barMargin = { top: 30, right: 25, bottom: 40, left: 60 };
+    const barContentHeight = (height / 2) - (panelPadding * 2);
+    const barContentWidth = breakdownWidth - (panelPadding * 2);
+    const barHeight = barContentHeight - barMargin.top - barMargin.bottom;
+    const barWidth = barContentWidth - barMargin.left - barMargin.right;
+
+    bottomHalf.append("rect").attr("class", "breakdown-border")
+        .attr("x", panelPadding / 2).attr("y", panelPadding / 2)
+        .attr("width", breakdownWidth - panelPadding)
+        .attr("height", height / 2 - panelPadding);
+    const barChartGroup = bottomHalf.append("g").attr("transform", `translate(${barMargin.left + 30 + panelPadding / 2}, ${barMargin.top + 10 + panelPadding / 2})`);
+
+    const xBar = d3.scaleBand().domain(perModelData.map(d => d.label)).range([0, barWidth]).padding(0.2);
+    const yBar = d3.scaleLinear().domain([0, d3.max(perModelData, d => d.value)]).nice().range([barHeight, 0]);
+    barChartGroup.append("g").call(d3.axisLeft(yBar).ticks(5).tickFormat(d3.format("$,.0f")));
+    barChartGroup.append("g").attr("transform", `translate(0, ${barHeight})`).call(d3.axisBottom(xBar));
+    barChartGroup.append("text").attr("class", "axis-label").attr("text-anchor", "middle").attr("x", barWidth / 2).attr("y", barHeight + barMargin.bottom - 5).text("Model");
+    barChartGroup.append("text").attr("class", "axis-label").attr("transform", "rotate(-90)").attr("text-anchor", "middle").attr("y", -barMargin.left + 15).attr("x", -barHeight / 2).text("Gross Profit ($)");
+    const bars = barChartGroup.selectAll("rect").data(perModelData).join("rect")
+        .attr("x", d => xBar(d.label)).attr("y", d => yBar(Math.max(0, d.value))).attr("width", xBar.bandwidth()).attr("height", d => barHeight - yBar(Math.max(0, d.value)))
+        .attr("fill", d => PERT_PIE_COLORS[d.label.toLowerCase()]);
+    bars.on("mouseover", () => tooltip.style("opacity", 1)).on("mouseout", () => tooltip.style("opacity", 0))
+        .on("mousemove", (event, d) => tooltip.html(`<strong>${d.label} Profit</strong><br/>${d3.format("$,.0f")(d.value)}`).style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px"));
+
+    // --- Top Half: Pie Charts ---
+    const pieColors = { Profit: '#2ecc71', Labor: '#f39c12', COGS: '#e74c3c' };
+    const pieChartData = [
+        { title: 'Overall', data: { Profit: totalProfit, Labor: totalLabor, COGS: totalCogs } },
+        { title: 'Super', data: { Profit: perModelData[0].value, Labor: perModelData[0].labor, COGS: perModelData[0].cogs } },
+        { title: 'Ultra', data: { Profit: perModelData[1].value, Labor: perModelData[1].labor, COGS: perModelData[1].cogs } },
+        { title: 'Mega', data: { Profit: perModelData[2].value, Labor: perModelData[2].labor, COGS: perModelData[2].cogs } }
+    ];
+    const pieGrid = topHalf.append("g");
+    pieGrid.append("rect").attr("class", "breakdown-border").attr("x", panelPadding / 2).attr("y", panelPadding / 2).attr("width", breakdownWidth - panelPadding).attr("height", height / 2 - panelPadding);
+
+    const topHalfHeight = height / 2;
+    const pieContentWidth = breakdownWidth - (panelPadding * 2);
+    const pieContentHeight = topHalfHeight - (panelPadding * 2);
+
+    const pieRadius = Math.min(pieContentWidth / 4, pieContentHeight / 4) * 0.8;
+    const gridPositions = [
+        { x: panelPadding + (pieContentWidth * 0.25), y: panelPadding + (pieContentHeight * 0.3) },
+        { x: panelPadding + (pieContentWidth * 0.75), y: panelPadding + (pieContentHeight * 0.3) },
+        { x: panelPadding + (pieContentWidth * 0.25), y: panelPadding + (pieContentHeight * 0.75) },
+        { x: panelPadding + (pieContentWidth * 0.75), y: panelPadding + (pieContentHeight * 0.75) }
+    ];
+
+    const pie = d3.pie().value(d => d.value).sort(null);
+    const arc = d3.arc().innerRadius(0).outerRadius(pieRadius);
+    pieChartData.forEach((chartData, i) => {
+        const pieGroup = pieGrid.append("g").attr("transform", `translate(${gridPositions[i].x}, ${gridPositions[i].y - 15})`);
+        const dataForPie = Object.entries(chartData.data).map(([key, value]) => ({ label: key, value: Math.max(0, value) }));
+        const totalValue = dataForPie.reduce((sum, d) => sum + d.value, 0);
+        pieGroup.selectAll("path").data(pie(dataForPie)).join("path")
+            .attr("d", arc)
+            .attr("fill", d => pieColors[d.data.label])
+            .on("mouseover", () => tooltip.style("opacity", 1)).on("mouseout", () => tooltip.style("opacity", 0))
+            .on("mousemove", (event, d) => {
+                const percent = totalValue > 0 ? (d.data.value / totalValue * 100).toFixed(1) : 0;
+                tooltip.html(`<strong>${chartData.title}: ${d.data.label}</strong><br/>
+${d3.format("$,.0f")(d.data.value)} (${percent}%)`)
+                    .style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+            });
+        pieGroup.append("text").attr("class", "pie-title").attr("y", -pieRadius - 8).text(chartData.title);
+    });
+
+    const legendGroup = topHalf.append("g").attr("transform", `translate(${panelPadding}, ${topHalfHeight - panelPadding - 15})`);
+    const legendData = Object.entries(pieColors).map(([label, color]) => ({ label, color }));
+    const legendItemWidth = (breakdownWidth - 2 * panelPadding) / legendData.length;
+    const legendItems = legendGroup.selectAll(".legend-item").data(legendData).join("g")
+        .attr("class", "legend-item")
+        .attr("transform", (d, i) => `translate(${i * legendItemWidth}, 0)`);
+    legendItems.append("rect").attr("width", 13).attr("height", 13).attr("fill", d => d.color);
+    legendItems.append("text").attr("x", 18).attr("y", 11).style("font-size", "12px").style("font-weight", "600").text(d => d.label);
 }
 
 function getFinancialInputsKey() {
@@ -1707,7 +1854,7 @@ async function calculateOptimalProfitData() {
 
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     if (activeTab === 'profit') {
-        drawProfitPanel(); // Show the loading message
+        drawProfitPanel();
     }
 
     return new Promise(resolve => {
@@ -1718,28 +1865,32 @@ async function calculateOptimalProfitData() {
             try {
                 state.configData = originalConfigData;
                 for (let demand = 1; demand <= 576; demand++) {
-                    let maxProfit = -Infinity;
-                    let maxMargin = -Infinity;
+                    let maxProfit = -Infinity, maxMargin = -Infinity;
+                    let maxProfitConfig = { emp: 0, hrs: 0 }, maxMarginConfig = { emp: 0, hrs: 0 };
+
                     for (let opHours = 1; opHours <= 24; opHours += 0.25) {
                         const taktTime = (opHours * 60) / demand;
                         for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
                             if (!originalConfigData[numEmployees] || Object.keys(originalConfigData[numEmployees]).length === 0) continue;
+
                             const bottleneckTime = calculateWorkstationDetails(numEmployees).bottleneckTime;
-                            if (bottleneckTime <= taktTime) {
+                            if (bottleneckTime > 0 && bottleneckTime <= taktTime) {
                                 const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
                                 if (metrics) {
                                     if (metrics.dailyGrossProfit > maxProfit) {
                                         maxProfit = metrics.dailyGrossProfit;
+                                        maxProfitConfig = { emp: numEmployees, hrs: opHours };
                                     }
                                     if (metrics.grossProfitMargin > maxMargin) {
                                         maxMargin = metrics.grossProfitMargin;
+                                        maxMarginConfig = { emp: numEmployees, hrs: opHours };
                                     }
                                 }
                             }
                         }
                     }
-                    profitData.push({ demand, value: isFinite(maxProfit) ? maxProfit : 0 });
-                    marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0 });
+                    profitData.push({ demand, value: isFinite(maxProfit) ? maxProfit : 0, config: maxProfitConfig });
+                    marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0, config: maxMarginConfig });
                 }
             } finally {
                 state.configData = originalStateConfig;
@@ -1763,7 +1914,6 @@ async function calculateOptimalProfitData() {
         }, 50);
     });
 }
-
 
 /**
  * Layout - Determines if a given element works on a given model.
