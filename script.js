@@ -94,6 +94,7 @@ async function main() {
     setupEventListeners();
     setupUIEventListeners();
     setupVisibilityListener();
+    initializeAndRunProfitCalculation();
     state.invalidPrecedenceMap = validatePrecedence();
     invalidPrecedenceNodes = new Set(Array.from(state.invalidPrecedenceMap.keys()));
     restoreActiveTab();
@@ -195,16 +196,15 @@ function flattenPrecedenceTree() {
     return fullPredecessorMap;
 }
 
-/**
- * Backend - Input Change Helper.
- */
 function handleInputChange(driverId) {
     if (isRecalculating) return;
     isRecalculating = true;
+
     const isFinancialDriver = ['laborCost', 'superSell', 'superCogs', 'ultraSell', 'ultraCogs', 'megaSell', 'megaCogs'].includes(driverId);
-    if (isFinancialDriver && !isProfitCalculating) {
+    if (isFinancialDriver) {
         calculateOptimalProfitData();
     }
+
     try {
         let dailyDemand = parseInt(dailyDemandInput.value) || 1;
         let opHours = parseFloat(opHoursInput.value) || 1;
@@ -866,6 +866,8 @@ function setupUIEventListeners() {
                 updatePrecedenceChartLinks(invalidPrecedenceMap);
             } else if (targetTab === 'investment') {
                 drawInvestmentPanel();
+            } else if (targetTab === 'overview') {
+                drawOverviewPanel();
             }
         }
     });
@@ -1654,6 +1656,114 @@ function drawProfitPanel() {
         tooltipText3.text(`Margin: ${m.value.toFixed(1)}%`);
     }
 }
+
+function getFinancialInputsKey() {
+    const finInputs = {
+        laborCost: parseFloat(laborCostInput.value),
+        superSell: parseFloat(superSellInput.value),
+        superCogs: parseFloat(superCogsInput.value),
+        ultraSell: parseFloat(ultraSellInput.value),
+        ultraCogs: parseFloat(ultraCogsInput.value),
+        megaSell: parseFloat(megaSellInput.value),
+        megaCogs: parseFloat(megaCogsInput.value),
+    };
+    return 'profitDataCache-' + JSON.stringify(finInputs);
+}
+
+function initializeAndRunProfitCalculation() {
+    const cacheKey = getFinancialInputsKey();
+    try {
+        const cachedData = sessionStorage.getItem(cacheKey);
+        if (cachedData) {
+            console.log("Loading profit data from session cache.");
+            profitMaximizationCache = { key: cacheKey, data: JSON.parse(cachedData) };
+            if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
+                drawProfitPanel();
+            }
+        } else {
+            console.log("No valid cache found. Calculating optimal profit data for the first time.");
+            calculateOptimalProfitData();
+        }
+    } catch (e) {
+        console.error("Could not access session storage. Recalculating profit data.", e);
+        calculateOptimalProfitData();
+    }
+}
+
+async function calculateOptimalProfitData() {
+    if (isProfitCalculating) return;
+    isProfitCalculating = true;
+
+    const finInputs = {
+        laborCost: parseFloat(laborCostInput.value),
+        superSell: parseFloat(superSellInput.value),
+        superCogs: parseFloat(superCogsInput.value),
+        ultraSell: parseFloat(ultraSellInput.value),
+        ultraCogs: parseFloat(ultraCogsInput.value),
+        megaSell: parseFloat(megaSellInput.value),
+        megaCogs: parseFloat(megaCogsInput.value),
+    };
+    const key = getFinancialInputsKey();
+
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+    if (activeTab === 'profit') {
+        drawProfitPanel(); // Show the loading message
+    }
+
+    return new Promise(resolve => {
+        setTimeout(() => {
+            const profitData = [];
+            const marginData = [];
+            const originalStateConfig = state.configData;
+            try {
+                state.configData = originalConfigData;
+                for (let demand = 1; demand <= 576; demand++) {
+                    let maxProfit = -Infinity;
+                    let maxMargin = -Infinity;
+                    for (let opHours = 1; opHours <= 24; opHours += 0.25) {
+                        const taktTime = (opHours * 60) / demand;
+                        for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
+                            if (!originalConfigData[numEmployees] || Object.keys(originalConfigData[numEmployees]).length === 0) continue;
+                            const bottleneckTime = calculateWorkstationDetails(numEmployees).bottleneckTime;
+                            if (bottleneckTime <= taktTime) {
+                                const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
+                                if (metrics) {
+                                    if (metrics.dailyGrossProfit > maxProfit) {
+                                        maxProfit = metrics.dailyGrossProfit;
+                                    }
+                                    if (metrics.grossProfitMargin > maxMargin) {
+                                        maxMargin = metrics.grossProfitMargin;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    profitData.push({ demand, value: isFinite(maxProfit) ? maxProfit : 0 });
+                    marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0 });
+                }
+            } finally {
+                state.configData = originalStateConfig;
+            }
+
+            const calculatedData = { profitData, marginData };
+            profitMaximizationCache = { key, data: calculatedData };
+
+            try {
+                sessionStorage.setItem(key, JSON.stringify(calculatedData));
+                console.log("Profit data saved to session cache.");
+            } catch (e) {
+                console.error("Could not save profit data to session storage.", e);
+            }
+
+            isProfitCalculating = false;
+            if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
+                drawProfitPanel();
+            }
+            resolve();
+        }, 50);
+    });
+}
+
 
 /**
  * Layout - Determines if a given element works on a given model.
@@ -2475,7 +2585,7 @@ function drawEfficiencyPanel() {
     const singleRowUnitHeight = availableHeight / totalRowWeights;
     const summaryRowHeight = singleRowUnitHeight * summaryRowWeight;
     const workstationRowHeight = singleRowUnitHeight;
-    const pieRadius = Math.min(availableWidth / 12, workstationRowHeight/ 3);
+    const pieRadius = Math.min(availableWidth / 12, workstationRowHeight / 3);
     const clockRadius = pieRadius * 0.5;
     const positionMap = [];
     let stationIndex = 0;
@@ -3182,7 +3292,7 @@ const drawInvestmentPanel = (function () {
         const resultsNode = d3.select('.inv-results-column').node();
         if (!resultsNode) return;
         const totalHeight = resultsNode.clientHeight;
-        const topThirdHeight = Math.floor((totalHeight / 3) -10);
+        const topThirdHeight = Math.floor((totalHeight / 3) - 10);
         const bottomTwoThirdsHeight = totalHeight - topThirdHeight;
 
         const scorecardHeight = 95;
