@@ -286,7 +286,7 @@ function calculateWorkstationDetails(numEmployees) {
  */
 function calculateMetrics(op, fin) {
     const wsDetails = calculateWorkstationDetails(op.numEmployees);
-    const fullTotalOpMinutes = op.opHours * 60;
+    const fullTotalOpMinutes = Math.floor(op.opHours * 4)*15;
     const bottleneckCycleTime = wsDetails.bottleneckTime;
     const productSpacing = wsDetails.fastestTime === Infinity ? 0 : wsDetails.fastestTime * 15;
     if (productSpacing <= 0 || bottleneckCycleTime <= 0) {
