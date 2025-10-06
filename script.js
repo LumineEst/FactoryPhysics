@@ -2557,7 +2557,8 @@ function drawEfficiencyPanel() {
         .attr("stop-color", d => d.color);
     function getLayoutConfig(n) {
         switch (n) {
-            case 1: case 2: case 3: return [n];
+            case 1: case 2: return [n];
+            case 3: return [4, 5, 4];
             case 4: return [4, 5, 4];
             case 5: return [4, 5, 4];
             case 6: return [4, 5, 4];
