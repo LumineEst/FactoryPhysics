@@ -1102,8 +1102,48 @@ function updatePrecedenceChartColors() {
 }
 
 /**
- * Precedence - Generates a Precedence DAG for Elements connected by precedence.
- */
+* Creates a custom D3 force that repels nodes from the container edges.
+*/
+function boundingForce(width, height) {
+    let nodes;
+    const margin = 10; // Padding from the edge
+    const strength = 5; // How strongly to push back
+
+    // This is the actual force function called on each 'tick' of the simulation
+    function force() {
+        for (const node of nodes) {
+            // Only apply the force to nodes that are not fixed/pinned by dragging
+            if (node.fx === null && node.fy === null) {
+                const r = node.r || 50; // Use the node's radius for more accurate bounding
+                const xBoundary = r + margin;
+                const yBoundary = r + margin;
+
+                // Nudge the node back if it crosses a boundary
+                if (node.x < xBoundary) {
+                    node.vx += strength;
+                } else if (node.x > width - xBoundary) {
+                    node.vx -= strength;
+                }
+                if (node.y < yBoundary) {
+                    node.vy += strength;
+                } else if (node.y > height - yBoundary) {
+                    node.vy -= strength;
+                }
+            }
+        }
+    }
+
+    // This 'initialize' function is called by D3 to give our force the array of nodes
+    force.initialize = (_) => {
+        nodes = _;
+    };
+
+    return force;
+}
+
+/**
+* Precedence - Generates a Precedence DAG for Elements connected by precedence.
+*/
 function drawPrecedenceChart() {
     const nodes = PRECEDENCE_DATA.map(d => ({ id: d.id }));
     const links = [];
@@ -1112,8 +1152,10 @@ function drawPrecedenceChart() {
             links.push({ source: pId, target: d.id });
         });
     });
+
     const svg = d3.select("#precedence-panel");
     svg.selectAll("*").remove();
+
     svg.append('defs').selectAll('marker')
         .data(['arrowhead', 'arrowhead-highlight'])
         .join('marker')
@@ -1127,34 +1169,73 @@ function drawPrecedenceChart() {
         .append('path')
         .attr('d', 'M0,-5L10,0L0,5')
         .attr('fill', d => d === 'arrowhead-highlight' ? '#e74c3c' : '#999');
+
     const width = document.getElementById('svg-container').clientWidth;
     const height = document.getElementById('svg-container').clientHeight;
-    const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(d => {
-            const specialLinks = {
-                '13-14': true,
-                '14-15': true,
-                '14-18': true
-            };
-            const linkKey = `${d.source.id}-${d.target.id}`;
-            return specialLinks[linkKey] ? 5 : 40;
-        }))
-        .force("charge", d3.forceManyBody().strength(-500))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collide", d3.forceCollide().radius(d => (d.r || 50) + 8).strength(1));
-    const link = svg.append("g")
+
+    const mainGroup = svg.append("g");
+
+    const link = mainGroup.append("g")
         .attr("stroke", "#999").attr("stroke-opacity", 0.8)
         .selectAll("line").data(links).join("line")
         .attr("stroke-width", 2.5)
         .attr("marker-end", "url(#arrowhead)");
-    precedenceChartNodes = svg.append("g").selectAll("g").data(nodes).join("g");
+
+    precedenceChartNodes = mainGroup.append("g").selectAll("g").data(nodes).join("g");
+
+    const margin = 150;
+    const node1 = nodes.find(n => n.id === 1);
+    if (node1) {
+        node1.fx = margin;
+        node1.fy = height - margin;
+    }
+    const node31 = nodes.find(n => n.id === 31);
+    if (node31) {
+        node31.fx = width - margin;
+        node31.fy = margin;
+    }
+
+    const simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(function (d) {
+            // --- FIX START ---
+            // Check if the link is between nodes 13 and 14
+            if ((d.source.id === 13 && d.target.id === 14) || (d.source.id === 14 && d.target.id === 13)) {
+                return 3; // Return half the normal distance
+            }
+            return 40; // Return the normal distance for all other links
+            // --- FIX END ---
+        }))
+        .force("charge", d3.forceManyBody().strength(-500))
+        .force("center", d3.forceCenter(width / 2, height / 2).strength(0.1))
+        .force("collide", d3.forceCollide().radius(d => (d.r || 50) + 8).strength(1))
+        .force("bound", boundingForce(width, height));
+
     precedenceChartNodes.append("circle")
         .attr("r", 12).attr("stroke", "#fff").attr("stroke-width", 1.5).attr("fill", "steelblue");
+
     precedenceChartNodes.append("text")
         .text(d => d.id).attr("text-anchor", "middle").attr("dy", "0.35em")
         .style("fill", "white").style("font-size", "10px").style("pointer-events", "none");
+
+    function dragstarted(event) {
+        event.sourceEvent.stopPropagation();
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        event.subject.fx = event.subject.x;
+        event.subject.fy = event.subject.y;
+    }
+    function dragged(event) {
+        event.subject.fx = event.x;
+        event.subject.fy = event.y;
+    }
+    function dragended(event) {
+        if (!event.active) simulation.alphaTarget(0);
+        event.subject.fx = null;
+        event.subject.fy = null;
+    }
+
     precedenceChartNodes.call(d3.drag()
         .on("start", dragstarted).on("drag", dragged).on("end", dragended));
+
     simulation.on("tick", () => {
         link.each(function (d) {
             const targetRadius = (d.target.r || 12) + 3;
@@ -1177,20 +1258,16 @@ function drawPrecedenceChart() {
         precedenceChartNodes.attr("transform", d => `translate(${d.x}, ${d.y})`);
     });
 
-    function dragstarted(event) {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        event.subject.fx = event.subject.x;
-        event.subject.fy = event.subject.y;
+    const zoom = d3.zoom()
+        .scaleExtent([0.1, 8])
+        .on("zoom", zoomed);
+
+    function zoomed(event) {
+        mainGroup.attr("transform", event.transform);
     }
-    function dragged(event) {
-        event.subject.fx = event.x;
-        event.subject.fy = event.y;
-    }
-    function dragended(event) {
-        if (!event.active) simulation.alphaTarget(0);
-        event.subject.fx = null;
-        event.subject.fy = null;
-    }
+
+    svg.call(zoom);
+
     renderPrecedenceLegend();
 }
 
@@ -1943,8 +2020,8 @@ function stopAllSimulations() {
 }
 
 /**
- * Layout - Initialize the Simulation for a given configuration.
- */
+* Layout - Initialize the Simulation for a given configuration.
+*/
 function startSimulation(config) {
     stopAllSimulations();
     let {
@@ -1958,7 +2035,6 @@ function startSimulation(config) {
     animationState.layout.isRunning = true;
     const modelColors = { 1: '#3498db', 2: '#f1c40f', 3: '#e74c3c' };
     const modelBorders = { 1: '#f39c12', 2: '#8e44ad', 3: '#1abc9c' };
-    const simWorkdayDurationMs = opHours * 60 * 1000;
     animationState.layout = {
         svg, g, masterPathNode, productionQueue, totalDurationMs, launchDelayMs,
         binConfig, opHours, scale, elementMap,
@@ -2002,7 +2078,7 @@ function startSimulation(config) {
             const elapsedTime = animationState.layout.totalSimTimeMs - product.launchTime;
             const progress = elapsedTime / animationState.layout.totalDurationMs;
             if (progress >= 1) {
-                placeInBin(product.element, animationState.layout.finishedGoodsCount, animationState.layout.binConfig, svg, scale);
+                placeInBin(product.element, animationState.layout.finishedGoodsCount, animationState.layout.binConfig, animationState.layout.svg);
                 animationState.layout.finishedGoodsCount++;
                 animationState.layout.productsOnLine.splice(i, 1);
             } else {
@@ -2053,21 +2129,34 @@ function createProductShape(container, modelId, modelColors, modelBorders) {
 /**
 * Layout - Moves 'Built' Product into the Finished Goods Bin.
 */
-function placeInBin(element, count, binConfig, svg, scale) {
+function placeInBin(element, count, binConfig, svg) {
     const { binPixelX, binPixelY_bottom, itemsPerRow, productPixelSize, padding } = binConfig;
     const row = Math.floor(count / itemsPerRow);
     const col = count % itemsPerRow;
-    svg.node().appendChild(element.node());
-    const newX = binPixelX + (padding / 2) + (col * productPixelSize) + (productPixelSize / 2);
-    const newY = binPixelY_bottom - (padding / 2) - (row * productPixelSize) - (productPixelSize / 2);
+
+    // Re-parent the DOM node to move it from the scaled group to the main SVG.
+    if (svg && svg.node() && element && element.node()) {
+        svg.node().appendChild(element.node());
+    }
+
+    // Immediately remove the old transform to prevent the "flicker" jump.
+    element.attr('transform', null);
+
+    // Calculate the total size of one "cell" (product + padding).
+    const totalCellSize = productPixelSize + padding;
+
+    // Position the element in the center of its calculated grid cell.
+    const newX = binPixelX + (col * totalCellSize) + (productPixelSize / 2);
+    const newY = binPixelY_bottom - (row * totalCellSize) - (productPixelSize / 2);
     const newScale = productPixelSize / 1.8;
+
     element.transition().duration(300)
         .attr('transform', `translate(${newX}, ${newY}) rotate(0) scale(${newScale})`);
 }
 
 /**
- * Layout - Renders the U-shaped assembly line layout and initializes the animation.
- */
+* Layout - Renders the U-shaped assembly line layout and initializes the animation.
+*/
 function drawLayoutVisualization() {
     stopAllSimulations();
     const numEmployees = parseInt(numEmployeesInput.value);
@@ -2100,13 +2189,19 @@ function drawLayoutVisualization() {
     const opInputs = { dailyDemand: parseInt(dailyDemandInput.value), opHours: parseFloat(opHoursInput.value), numEmployees: parseInt(numEmployeesInput.value) };
     const finInputs = { laborCost: parseFloat(laborCostInput.value) };
     const results = calculateMetrics(opInputs, finInputs);
+
     const { clientWidth: containerWidth, clientHeight: containerHeight } = document.getElementById('svg-container');
+    const leftPanelWidth = containerWidth * 0.8;
+    const rightPanelWidth = containerWidth * 0.2;
+    const rightPanelX = leftPanelWidth;
+    const uiPadding = containerWidth * 0.01;
+
     const isEven = numEmployees % 2 === 0;
     const numLeft = isEven ? numEmployees / 2 : Math.floor(numEmployees / 2);
     const middleWsId = isEven ? null : numLeft + 1;
     let connectionPoint;
     const allPaths = [], allPoints = [];
-    workstationBorders = [];
+    let workstationBorders = [];
     for (let i = 1; i <= numEmployees; i++) {
         const wsId = i;
         const elements = config[wsId];
@@ -2147,9 +2242,7 @@ function drawLayoutVisualization() {
         allPoints.push(...p);
         if (p && p.length > 1) {
             let borderPathString = "M " + p[0].x + " " + p[0].y;
-            for (let j = 1; j < p.length; j++) {
-                borderPathString += " L " + p[j].x + " " + p[j].y;
-            }
+            for (let j = 1; j < p.length; j++) { borderPathString += " L " + p[j].x + " " + p[j].y; }
             workstationBorders.push({ wsID: i, path: borderPathString });
         }
         const elementColorScale = generateElementColorScale(i - 1, numEmployees, elements.length);
@@ -2157,216 +2250,119 @@ function drawLayoutVisualization() {
         elements.forEach((elId, index) => {
             const task = state.taskData.get(elId);
             let lineCap = 'round';
-            if (index === 0 || index === elements.length - 1) {
-                lineCap = 'butt';
-            }
+            if (index === 0 || index === elements.length - 1) { lineCap = 'butt'; }
             allPaths.push({
-                wsId: i,
-                elId: elId,
-                path: generateSubPath(p, currentPathPosFt, (task?.elementTime || 0) * 15),
-                color: elementColorScale(index),
-                lineCap: lineCap
+                wsId: i, elId: elId, path: generateSubPath(p, currentPathPosFt, (task?.elementTime || 0) * 15),
+                color: elementColorScale(index), lineCap: lineCap
             });
             currentPathPosFt += (task?.elementTime || 0) * 15;
         });
     }
     if (allPoints.length === 0) return;
-    const minX_ft = d3.min(allPoints, d => d.x);
-    const maxX_ft = d3.max(allPoints, d => d.x);
-    const minY_ft = d3.min(allPoints, d => d.y);
-    const maxY_ft = d3.max(allPoints, d => d.y);
+    const minX_ft = d3.min(allPoints, d => d.x), maxX_ft = d3.max(allPoints, d => d.x);
+    const minY_ft = d3.min(allPoints, d => d.y), maxY_ft = d3.max(allPoints, d => d.y);
     if ((maxX_ft - minX_ft) <= 0 || (maxY_ft - minY_ft) <= 0) return;
+
     const lineBBox = { width: maxX_ft - minX_ft, height: maxY_ft - minY_ft };
-    const uiPadding = containerWidth * 0.02;
-    const rightPanelWidth = containerWidth * 0.14;
-    const availableWidth = containerWidth - rightPanelWidth - uiPadding;
-    const availableHeight = containerHeight - (uiPadding * 2);
-    const scale = Math.min(availableWidth / lineBBox.width, availableHeight / lineBBox.height);
+    const availableLineWidth = leftPanelWidth - (uiPadding * 2);
+    const availableLineHeight = containerHeight - (uiPadding * 2);
+    const scale = Math.min(availableLineWidth / lineBBox.width, availableLineHeight / lineBBox.height);
     const scaledLineWidth = lineBBox.width * scale;
-    const leftPadding = ((containerWidth - rightPanelWidth) - scaledLineWidth) / 2;
-    const translateX = (leftPadding - (minX_ft * scale)) + 20;
+    const leftPadding = (leftPanelWidth - scaledLineWidth) / 2;
+    const translateX = (leftPadding - (minX_ft * scale));
     const translateY = uiPadding - (minY_ft * scale);
     const g = svg.append("g").attr("transform", `translate(${translateX}, ${translateY}) scale(${scale})`).attr("fill", "none");
-    const clockX = containerWidth - (rightPanelWidth / 2) - uiPadding + (containerWidth * 0.02);
-    const clockY = (uiPadding * 2.2);
-    const clockRadius = Math.min(60, rightPanelWidth * 0.3);
-    const clockGroup = svg.append("g").attr("transform", `translate(${clockX}, ${clockY})`);
-    clockGroup.append("circle")
-        .attr("r", clockRadius)
-        .attr("fill", "#ecf0f1")
-        .attr("stroke", "#333")
-        .attr("stroke-width", 2);
-    for (let i = 0; i < 12; i++) {
-        const angle = (i / 12) * 2 * Math.PI;
-        const tickLength = i % 3 === 0 ? 8 : 4;
-        clockGroup.append("line")
-            .attr("x1", Math.sin(angle) * (clockRadius - tickLength))
-            .attr("y1", -Math.cos(angle) * (clockRadius - tickLength))
-            .attr("x2", Math.sin(angle) * clockRadius)
-            .attr("y2", -Math.cos(angle) * clockRadius)
-            .attr("stroke", "#333")
-            .attr("stroke-width", i % 3 === 0 ? 2 : 1);
+
+    const clockY = containerHeight * 0.075;
+    const clockX = rightPanelX + (rightPanelWidth / 2);
+    const clockRadius = Math.min(rightPanelWidth * 0.4, containerHeight * 0.15 * 0.4);
+
+    const speedoY = containerHeight * 0.225;
+    const speedoX = clockX;
+    const speedoRadius = Math.min(rightPanelWidth * 0.4, containerHeight * 0.15 * 0.4);
+
+    // --- BIN CONFIGURATION & CALCULATION (FIXED) ---
+    const binPadding = 15;
+    const binTopY = containerHeight * 0.30;
+    const binHeight = containerHeight * 0.70 - (binPadding * 2);
+    let binContentWidth = rightPanelWidth - (binPadding * 2);
+    let binContentHeight = binHeight;
+    if (binContentWidth <= 0 || binContentHeight <= 0) { // Safety check
+        binContentWidth = 1;
+        binContentHeight = 1;
     }
-    clockGroup.append("line")
-        .attr("id", "sim-clock-hour-hand")
-        .attr("y2", -clockRadius * 0.5)
-        .attr("stroke", "#e74c3c")
-        .attr("stroke-width", 4)
-        .attr("stroke-linecap", "round");
-    clockGroup.append("line")
-        .attr("id", "sim-clock-minute-hand")
-        .attr("y2", -clockRadius * 0.8)
-        .attr("stroke", "#e74c3c")
-        .attr("stroke-width", 2)
-        .attr("stroke-linecap", "round");
-    clockGroup.append("circle")
-        .attr("r", 4)
-        .attr("fill", "#34495e");
-    const sliderHeight = clockRadius * 2;
-    const sliderYStart = -sliderHeight / 2;
-    const sliderYEnd = sliderHeight / 2;
-    const defaultValue = 1.0;
-    const minVal = 0.1;
-    const maxVal = 8.0;
-    const sliderGroup = svg.append("g")
-        .attr("transform", `translate(${clockX + clockRadius + 20}, ${clockY})`);
-    const speedScale = d3.scaleLinear()
-        .domain([maxVal, minVal])
-        .range([sliderYStart, sliderYEnd])
-        .clamp(true);
-    sliderGroup.append("line")
-        .attr("class", "track")
-        .attr("y1", sliderYStart)
-        .attr("y2", sliderYEnd)
-        .attr("stroke", "#aaa")
-        .attr("stroke-width", 4)
-        .attr("stroke-linecap", "round");
-    const handle = sliderGroup.append("circle")
-        .attr("id", "d3-layout-slider-handle")
-        .attr("class", "handle")
-        .attr("r", 8)
-        .attr("fill", "#3498db")
-        .attr("stroke", "#fff")
-        .attr("stroke-width", 2)
-        .attr("cy", speedScale(animationState.speedMultiplier));
-    const interactionArea = sliderGroup.append("rect")
-        .attr("y", sliderYStart)
-        .attr("height", sliderHeight)
-        .attr("x", -10)
-        .attr("width", 20)
-        .style("fill", "transparent")
-        .style("cursor", "grab");
-    interactionArea.call(d3.drag().on("drag", function (event) {
-        const [, my] = d3.pointer(event, this.parentNode);
-        const newValue = speedScale.invert(my);
-        const newY = speedScale(newValue);
-        animationState.speedMultiplier = newValue;
-        d3.select(this.parentNode).select(".handle")
-            .attr("cy", newY)
-    }));
-    interactionArea.on("wheel", function (event) {
-        event.preventDefault();
-        const scrollStep = 0.1;
-        const currentValue = animationState.speedMultiplier;
-        const change = event.deltaY > 0 ? -scrollStep : scrollStep;
-        let newValue = currentValue + change;
-        newValue = Math.max(minVal, Math.min(maxVal, newValue));
-        animationState.speedMultiplier = newValue;
-        d3.select(this.parentNode).select(".handle").transition().duration(50).attr("cy", speedScale(newValue));
-    });
-    const binConfig = { productPixelSize: Math.max(14, containerWidth * 0.01), itemsPerRow: 10, padding: Math.max(5, containerWidth * 0.005) };
-    binConfig.binPixelWidth = (binConfig.itemsPerRow * binConfig.productPixelSize) - 5 + (2 * binConfig.padding);
-    binConfig.binPixelX = containerWidth - binConfig.binPixelWidth - uiPadding;
-    binConfig.binPixelY_bottom = containerHeight - uiPadding + 15;
-    const binTopY = binConfig.binPixelY_bottom - (containerHeight * 0.70);
-    const actualBinHeight = binConfig.binPixelY_bottom - binTopY;
-    const speedoX = containerWidth - (rightPanelWidth / 2) - uiPadding;
-    const speedoRadius = 60;
-    const speedoY = binTopY - speedoRadius + 9;
-    const speedoGroup = svg.append("g").attr("transform", `translate(${speedoX + 28}, ${speedoY})`);
+    const capacity = 600;
+    const aspectRatio = binContentWidth / binContentHeight;
+    let numRows = Math.round(Math.sqrt(capacity / aspectRatio));
+    if (numRows < 1) numRows = 1;
+    let numCols = Math.ceil(capacity / numRows);
+    if (numCols < 1) numCols = 1;
+    const itemSizeWithPadding = Math.min(binContentWidth / numCols, binContentHeight / numRows);
+    const itemPadding = itemSizeWithPadding * 0.1;
+    const finalItemSize = itemSizeWithPadding - itemPadding;
+
+    const binConfig = {
+        productPixelSize: finalItemSize,
+        itemsPerRow: numCols,
+        padding: itemPadding,
+        binPixelX: rightPanelX + binPadding,
+        binPixelY_bottom: containerHeight - binPadding,
+    };
+    // --- END BIN FIX ---
+
+    const clockGroup = svg.append("g").attr("transform", `translate(${clockX}, ${clockY})`);
+    clockGroup.append("circle").attr("r", clockRadius).attr("fill", "#ecf0f1").attr("stroke", "#333").attr("stroke-width", 2);
+    for (let i = 0; i < 12; i++) { const angle = (i / 12) * 2 * Math.PI; const tickLength = i % 3 === 0 ? 8 : 4; clockGroup.append("line").attr("x1", Math.sin(angle) * (clockRadius - tickLength)).attr("y1", -Math.cos(angle) * (clockRadius - tickLength)).attr("x2", Math.sin(angle) * clockRadius).attr("y2", -Math.cos(angle) * clockRadius).attr("stroke", "#333").attr("stroke-width", i % 3 === 0 ? 2 : 1); }
+    clockGroup.append("line").attr("id", "sim-clock-hour-hand").attr("y2", -clockRadius * 0.5).attr("stroke", "#e74c3c").attr("stroke-width", 4).attr("stroke-linecap", "round");
+    clockGroup.append("line").attr("id", "sim-clock-minute-hand").attr("y2", -clockRadius * 0.8).attr("stroke", "#e74c3c").attr("stroke-width", 2).attr("stroke-linecap", "round");
+    clockGroup.append("circle").attr("r", 4).attr("fill", "#34495e");
+
+    const sliderTopPadding = uiPadding;
+    const sliderHeight = containerHeight * 0.15 - sliderTopPadding;
+    const sliderGroup = svg.append("g").attr("transform", `translate(${clockX + clockRadius + 25}, ${sliderTopPadding})`);
+    const speedScale = d3.scaleLinear().domain([8.0, 0.1]).range([0, sliderHeight]).clamp(true);
+    sliderGroup.append("line").attr("y1", 0).attr("y2", sliderHeight).attr("stroke", "#aaa").attr("stroke-width", 4).attr("stroke-linecap", "round");
+    sliderGroup.append("circle").attr("id", "d3-layout-slider-handle").attr("class", "handle").attr("r", 8).attr("fill", "#3498db").attr("stroke", "#fff").attr("stroke-width", 2).attr("cy", speedScale(animationState.speedMultiplier));
+    const interactionArea = sliderGroup.append("rect").attr("y", 0).attr("height", sliderHeight).attr("x", -10).attr("width", 20).style("fill", "transparent").style("cursor", "grab");
+    interactionArea.call(d3.drag().on("drag", function (event) { const [, my] = d3.pointer(event, this.parentNode); const newValue = speedScale.invert(my); animationState.speedMultiplier = newValue; d3.select("#d3-layout-slider-handle").attr("cy", speedScale(newValue)); }));
+    interactionArea.on("wheel", function (event) { event.preventDefault(); const newValue = Math.max(0.1, Math.min(8.0, animationState.speedMultiplier + (event.deltaY > 0 ? -0.1 : 0.1))); animationState.speedMultiplier = newValue; d3.select("#d3-layout-slider-handle").transition().duration(50).attr("cy", speedScale(newValue)); });
+
+    const speedoGroup = svg.append("g").attr("transform", `translate(${speedoX}, ${speedoY})`);
     const speedoDomain = [0, 15];
-    const colorThresholds = { slow: 4, medium: 10 };
     const degreeScale = d3.scaleLinear().domain(speedoDomain).range([-90, 90]);
     const radianScale = d3.scaleLinear().domain(speedoDomain).range([-Math.PI / 2, Math.PI / 2]);
-    const arcGenerator = d3.arc()
-        .innerRadius(speedoRadius * 0.7)
-        .outerRadius(speedoRadius)
-        .cornerRadius(3);
-    const arcs = [
-        { start: speedoDomain[0], end: colorThresholds.slow, color: d3.hcl(200, 70, 70).toString() },
-        { start: colorThresholds.slow, end: colorThresholds.medium, color: d3.hcl(145, 70, 60).toString() },
-        { start: colorThresholds.medium, end: speedoDomain[1], color: d3.hcl(25, 80, 50).toString() }
-    ];
-    speedoGroup.selectAll("path.color-arc").data(arcs).join("path")
-        .attr("class", "color-arc")
-        .attr("fill", d => d.color)
-        .attr("d", d => arcGenerator({ startAngle: radianScale(d.start), endAngle: radianScale(d.end) }));
+    const arcGenerator = d3.arc().innerRadius(speedoRadius * 0.7).outerRadius(speedoRadius).cornerRadius(3);
+    const arcs = [{ start: 0, end: 4, color: "#3498db" }, { start: 4, end: 10, color: "#2ecc71" }, { start: 10, end: 15, color: "#e74c3c" }];
+    speedoGroup.selectAll("path.color-arc").data(arcs).join("path").attr("fill", d => d.color).attr("d", d => arcGenerator({ startAngle: radianScale(d.start), endAngle: radianScale(d.end) }));
     const ticks = degreeScale.ticks(6);
-    speedoGroup.selectAll("text.tick-label").data(ticks).join("text")
-        .attr("class", "tick-label")
-        .attr("x", d => Math.sin(radianScale(d)) * (speedoRadius + 15))
-        .attr("y", d => -Math.cos(radianScale(d)) * (speedoRadius + 15))
-        .attr("text-anchor", "middle").attr("dominant-baseline", "central")
-        .style("font-size", "12px").style("font-weight", "700").attr("fill", "#333")
-        .text(d => d);
-    speedoGroup.append("line").attr("id", "speedo-needle")
-        .attr("y1", 10).attr("y2", -speedoRadius * 0.9)
-        .attr("stroke", "#34495e").attr("stroke-width", 4).attr("stroke-linecap", "round")
-        .attr("transform", `rotate(${degreeScale(Math.min(speedoDomain[1], results.conveyorSpeed || 0))})`);
-    speedoGroup.append("circle")
-        .attr("r", 8).attr("fill", "#34495e")
-        .attr("stroke", "white").attr("stroke-width", 2);
-    speedoGroup.append("text")
-        .text(`${(results.conveyorSpeed || 0).toFixed(1)}`)
-        .attr("y", speedoRadius * 0.55).attr("text-anchor", "middle")
-        .style("font-size", "22px").style("font-weight", "bold").attr("fill", "#2c3e50");
-    speedoGroup.append("text")
-        .text("ft/min")
-        .attr("y", speedoRadius * 0.8).attr("text-anchor", "middle")
-        .style("font-size", "12px").attr("fill", "#666");
-    svg.append("rect").attr("x", binConfig.binPixelX).attr("y", binTopY).attr("width", binConfig.binPixelWidth).attr("height", actualBinHeight).attr("fill", "#E5E7E9").attr("stroke", "#666").attr("stroke-width", 1);
-    svg.append("text").text("Finished Goods").attr("x", binConfig.binPixelX + binConfig.binPixelWidth / 2).attr("y", binTopY + actualBinHeight / 2).attr("text-anchor", "middle").attr("dominant-baseline", "middle").style("font-size", "16px").attr("fill", "#333");
+    speedoGroup.selectAll("text.tick-label").data(ticks).join("text").attr("x", d => Math.sin(radianScale(d)) * (speedoRadius + 12)).attr("y", d => -Math.cos(radianScale(d)) * (speedoRadius + 12)).attr("text-anchor", "middle").attr("dominant-baseline", "central").style("font-size", "10px").style("font-weight", "700").text(d => d);
+    speedoGroup.append("line").attr("id", "speedo-needle").attr("y1", 10).attr("y2", -speedoRadius * 0.9).attr("stroke", "#34495e").attr("stroke-width", 3).attr("stroke-linecap", "round").attr("transform", `rotate(${degreeScale(Math.min(speedoDomain[1], results.conveyorSpeed || 0))})`);
+    speedoGroup.append("circle").attr("r", 6).attr("fill", "#34495e").attr("stroke", "white").attr("stroke-width", 2);
+    speedoGroup.append("text").text(`${(results.conveyorSpeed || 0).toFixed(1)}`).attr("y", speedoRadius * 0.45).attr("text-anchor", "middle").style("font-size", "18px").style("font-weight", "bold");
+    speedoGroup.append("text").text("ft/min").attr("y", speedoRadius * 0.75).attr("text-anchor", "middle").style("font-size", "10px");
+
+    svg.append("rect").attr("x", rightPanelX + binPadding / 2).attr("y", binTopY).attr("width", rightPanelWidth - binPadding).attr("height", containerHeight * 0.7 - uiPadding).attr("fill", "#E5E7E9").attr("stroke", "#666").attr("stroke-width", 1);
+    svg.append("text").text("Finished Goods").attr("x", rightPanelX + rightPanelWidth / 2).attr("y", binTopY + 20).attr("text-anchor", "middle").style("font-size", "14px").style("font-weight", "bold");
+
     const legendGroup = svg.append("g").attr("transform", `translate(${uiPadding}, ${containerHeight - 130})`);
     legendGroup.append("rect").attr("width", 160).attr("height", 120).attr("fill", "rgba(255,255,255,0.8)").attr("rx", 5).attr("stroke", "#ccc");
     legendGroup.append("text").text("Built Models").attr("x", 10).attr("y", 20).style("font-weight", "bold").attr("fill", "black");
     const legendModels = [{ id: 1, name: "Super" }, { id: 2, name: "Ultra" }, { id: 3, name: "Mega" }];
     const modelColors = { 1: '#3498db', 2: '#f1c40f', 3: '#e74c3c' };
     const modelBorders = { 1: '#f39c12', 2: '#8e44ad', 3: '#1abc9c' };
-    legendModels.forEach((model, i) => {
-        const item = legendGroup.append("g").attr("transform", `translate(20, ${40 + i * 22})`);
-        createProductShape(item, model.id, modelColors, modelBorders).attr("transform", "scale(8)");
-        item.append("text").text(model.name).style('font-weight', 650).attr("x", 20).attr("y", 4).attr("fill", "black");
-    });
+    legendModels.forEach((model, i) => { const item = legendGroup.append("g").attr("transform", `translate(20, ${40 + i * 22})`); createProductShape(item, model.id, modelColors, modelBorders).attr("transform", "scale(8)"); item.append("text").text(model.name).style('font-weight', 650).attr("x", 20).attr("y", 4).attr("fill", "black"); });
     legendGroup.append("text").text("Grid: 10ft x 10ft").attr("x", 10).attr("y", 110).style("font-style", "italic").attr("fill", "black");
     const gridGroup = g.append("g");
-    const gridBounds = {
-        x1: (0 - translateX) / scale, y1: (0 - translateY) / scale,
-        x2: (containerWidth - translateX) / scale, y2: (containerHeight - translateY) / scale
-    };
-    for (let x = Math.floor(gridBounds.x1 / 10) * 10; x <= gridBounds.x2; x += 10) {
-        gridGroup.append("line").attr("x1", x).attr("y1", gridBounds.y1).attr("x2", x).attr("y2", gridBounds.y2);
-    }
-    for (let y = Math.floor(gridBounds.y1 / 10) * 10; y <= gridBounds.y2; y += 10) {
-        gridGroup.append("line").attr("x1", gridBounds.x1).attr("y1", y).attr("x2", gridBounds.x2).attr("y2", y);
-    }
+    const gridBounds = { x1: (0 - translateX) / scale, y1: (0 - translateY) / scale, x2: (containerWidth - translateX) / scale, y2: (containerHeight - translateY) / scale };
+    for (let x = Math.floor(gridBounds.x1 / 10) * 10; x <= gridBounds.x2; x += 10) { gridGroup.append("line").attr("x1", x).attr("y1", gridBounds.y1).attr("x2", x).attr("y2", gridBounds.y2); }
+    for (let y = Math.floor(gridBounds.y1 / 10) * 10; y <= gridBounds.y2; y += 10) { gridGroup.append("line").attr("x1", gridBounds.x1).attr("y1", y).attr("x2", gridBounds.x2).attr("y2", y); }
     gridGroup.selectAll("line").attr("stroke", "rgba(0,0,0,0.1)").attr("stroke-width", 0.2);
     const buttPaths = allPaths.filter(p => p.lineCap === 'butt');
     const roundPaths = allPaths.filter(p => p.lineCap === 'round');
-    const drawElementPaths = (selection) => {
-        selection.append("path")
-            .attr("d", d => d.path).attr("stroke", "#333333")
-            .attr("stroke-width", 1.5).attr("stroke-linecap", d => d.lineCap);
-        selection.append("path")
-            .attr("d", d => d.path).attr("stroke", d => d.color)
-            .attr("stroke-width", 1).attr("stroke-linecap", d => d.lineCap)
-            .append("title").text(d => `Element ${d.elId}\nWorkstation ${d.wsId}`);
-    };
-    g.selectAll("g.element-group-butt").data(buttPaths, d => `${d.wsId}-${d.elId}`)
-        .join("g").attr("class", "element-group-butt").call(drawElementPaths);
-    g.selectAll("g.element-group-round").data(roundPaths, d => `${d.wsId}-${d.elId}`)
-        .join("g").attr("class", "element-group-round").call(drawElementPaths);
-    g.selectAll("path.workstation-border").data(workstationBorders, d => d.wsId)
-        .join("path").attr("class", "workstation-border").attr("d", d => d.path).attr("fill", "none").attr("stroke", "#34495e").attr("stroke-width", 0.3).attr("stroke-linecap", "butt").attr("opacity", 0.6);
+    const drawElementPaths = (selection) => { selection.append("path").attr("d", d => d.path).attr("stroke", "#333333").attr("stroke-width", 1.5).attr("stroke-linecap", d => d.lineCap); selection.append("path").attr("d", d => d.path).attr("stroke", d => d.color).attr("stroke-width", 1).attr("stroke-linecap", d => d.lineCap).append("title").text(d => `Element ${d.elId}\nWorkstation ${d.wsId}`); };
+    g.selectAll("g.element-group-butt").data(buttPaths, d => `${d.wsId}-${d.elId}`).join("g").attr("class", "element-group-butt").call(drawElementPaths);
+    g.selectAll("g.element-group-round").data(roundPaths, d => `${d.wsId}-${d.elId}`).join("g").attr("class", "element-group-round").call(drawElementPaths);
+    g.selectAll("path.workstation-border").data(workstationBorders, d => d.wsId).join("path").attr("class", "workstation-border").attr("d", d => d.path).attr("fill", "none").attr("stroke", "#34495e").attr("stroke-width", 0.3).attr("stroke-linecap", "butt").attr("opacity", 0.6);
     const totalDurationMin = (ASSEMBLY_LINE_LENGTH / results.conveyorSpeed);
     const launchDelayMin = (results.productSpacing / results.conveyorSpeed);
     if (isFinite(totalDurationMin) && totalDurationMin > 0 && isFinite(launchDelayMin) && launchDelayMin > 0) {
@@ -2375,13 +2371,7 @@ function drawLayoutVisualization() {
         const masterPathNode = g.append("path").attr("d", masterPathString).node();
         let cumulativeDist = 0;
         const tempPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        const elementMap = allPaths.map(p => {
-            tempPath.setAttribute('d', p.path);
-            const len = tempPath.getTotalLength();
-            const segment = { elementId: p.elId, startDist: cumulativeDist, endDist: cumulativeDist + len };
-            cumulativeDist += len;
-            return segment;
-        });
+        const elementMap = allPaths.map(p => { tempPath.setAttribute('d', p.path); const len = tempPath.getTotalLength(); const segment = { elementId: p.elId, startDist: cumulativeDist, endDist: cumulativeDist + len }; cumulativeDist += len; return segment; });
         startSimulation({
             svg, g, masterPathNode, elementMap,
             opHours: opInputs.opHours,
@@ -2392,7 +2382,6 @@ function drawLayoutVisualization() {
         });
     }
 }
-
 
 /**
 * Layout - Helper function to generate a sub-path along a larger path defined by points.
@@ -2736,7 +2725,7 @@ function drawEfficiencyPanel() {
     const singleRowUnitHeight = availableHeight / totalRowWeights;
     const summaryRowHeight = singleRowUnitHeight * summaryRowWeight;
     const workstationRowHeight = singleRowUnitHeight;
-    const pieRadius = Math.min(availableWidth / 16, workstationRowHeight / 3);
+    const pieRadius = Math.min(availableWidth / 17.5, workstationRowHeight / 3);
     const clockRadius = pieRadius * 0.5;
     const positionMap = [];
     let stationIndex = 0;
@@ -2753,7 +2742,7 @@ function drawEfficiencyPanel() {
         if (!pos) return `translate(-100, -100)`;
         const y = padding + summaryRowHeight + (pos.row * workstationRowHeight) + (workstationRowHeight / 2);
         const itemWidth = availableWidth / pos.totalCols;
-        const x = padding + (pos.col * itemWidth) + (itemWidth / 2);
+        const x = (1.1 * padding) + (pos.col * itemWidth) + (itemWidth / 2);
         return `translate(${x},${y})`;
     };
     const wsSel = root.selectAll("g.ws")
