@@ -636,6 +636,7 @@ function renderActiveTab() {
     else if (activeTab === 'efficiency') drawEfficiencyPanel();
     else if (activeTab === 'layout') drawLayoutVisualization();
     else if (activeTab === 'profit') drawProfitPanel();
+    else if (activeTab === 'investment') drawInvestmentPanel();
 }
 
 /**
@@ -863,6 +864,8 @@ function setupUIEventListeners() {
                 invalidPrecedenceNodes = new Set(Array.from(invalidPrecedenceMap.keys()));
                 updatePrecedenceChartColors();
                 updatePrecedenceChartLinks(invalidPrecedenceMap);
+            } else if (targetTab === 'investment') {
+                drawInvestmentPanel();
             }
         }
     });
@@ -2429,6 +2432,7 @@ function drawEfficiencyPanel() {
     const root = svg.selectAll("g#eff-root")
         .data([null])
         .join(enter => enter.append("g").attr("id", "eff-root"));
+    root.selectAll("g.ws").interrupt();
     const defs = root.selectAll("defs").data([null]).join("defs");
     const boxGradient = defs.selectAll("#box-gradient").data([null])
         .join("linearGradient")
@@ -2444,15 +2448,15 @@ function drawEfficiencyPanel() {
     function getLayoutConfig(n) {
         switch (n) {
             case 1: case 2: case 3: return [n];
-            case 4: return [2, 2];
-            case 5: return [2, 3];
-            case 6: return [3, 3];
-            case 7: return [3, 4];
-            case 8: return [4, 4];
-            case 9: return [3, 3, 3];
-            case 10: return [3, 4, 3];
-            case 11: return [3, 4, 4];
-            case 12: return [4, 4, 4];
+            case 4: return [4, 5, 4];
+            case 5: return [4, 5, 4];
+            case 6: return [4, 5, 4];
+            case 7: return [4, 5, 4];
+            case 8: return [4, 5, 4];
+            case 9: return [4, 5, 4];
+            case 10: return [4, 5, 4];
+            case 11: return [4, 5, 4];
+            case 12: return [4, 5, 4];
             case 13: return [4, 5, 4];
             default:
                 const rows = []; let temp_n = n;
@@ -2471,7 +2475,7 @@ function drawEfficiencyPanel() {
     const singleRowUnitHeight = availableHeight / totalRowWeights;
     const summaryRowHeight = singleRowUnitHeight * summaryRowWeight;
     const workstationRowHeight = singleRowUnitHeight;
-    const pieRadius = Math.min(availableWidth / (4 * 2) * 0.7, workstationRowHeight * 0.35);
+    const pieRadius = Math.min(availableWidth / 4 * 0.28, workstationRowHeight * 0.35);
     const clockRadius = pieRadius * 0.5;
     const positionMap = [];
     let stationIndex = 0;
@@ -2509,6 +2513,7 @@ function drawEfficiencyPanel() {
         .style("font-weight", "normal")
         .attr("fill", "black");
     const wsMerge = wsEnter.merge(wsSel);
+    wsMerge.style("opacity", 1);
     wsMerge.transition().duration(750)
         .attr("transform", (d, i) => layoutTransform(i));
     wsMerge.select("g.pie")
@@ -2866,6 +2871,538 @@ function drawEfficiencyPanel() {
         .style("font-weight", "bold")
         .html(d => `Workstation Balance Loss: <tspan fill="#e74c3c">${d.balanceDelay.toFixed(1)}%</tspan>`);
 }
+
+// Self-contained module for the Investment Analysis Tab.
+// Encapsulated in an IIFE to prevent global scope pollution.
+const drawInvestmentPanel = (function () {
+    // State management for investment inputs
+    const investmentState = {
+        analysisPeriod: 5,
+        marr: 12.0,
+        taxRate: 25.0,
+        workingDays: 250,
+        p90Demand: 38250,
+        p50Demand: 45000,
+        p10Demand: 51750,
+        mfgOverhead: 550000,
+        sgaExpenses: 350000,
+        costPerFootStraight: 225,
+        costPerBend: 450,
+        installationCost: 10000,
+        salvageValue: 10000,
+        macrsClass: '5-year',
+        runExpansionCase: false
+    };
+
+    // --- MODULE-LEVEL VARIABLES ---
+    const MACRS_RATES = {
+        '5-year': [0.2000, 0.3200, 0.1920, 0.1152, 0.1152, 0.0576],
+        '7-year': [0.1429, 0.2449, 0.1749, 0.1249, 0.0893, 0.0892, 0.0893, 0.0446]
+    };
+    let isListenerAttached = false;
+    let analysisDebounceTimer;
+
+    // --- UTILITY & CALCULATION FUNCTIONS ---
+
+    function formatNumberWithCommas(num) {
+        if (num === null || num === undefined) return '';
+        return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    }
+
+    function parseFormattedNumber(str) {
+        if (typeof str !== 'string') return str;
+        return parseFloat(str.replace(/,/g, '')) || 0;
+    }
+
+    function updateDemandScenariosFromDemand() {
+        const targetDailyDemand = parseFloat(dailyDemandInput.value) || 180;
+        const p50 = Math.round(targetDailyDemand * investmentState.workingDays);
+        const stdDevPercent = 0.15;
+        const p90 = Math.round(p50 * (1 - stdDevPercent));
+        const p10 = Math.round(p50 * (1 + stdDevPercent));
+        investmentState.p90Demand = p90;
+        investmentState.p50Demand = p50;
+        investmentState.p10Demand = p10;
+        const p90Input = document.getElementById('inv-p90Demand');
+        const p50Input = document.getElementById('inv-p50Demand');
+        const p10Input = document.getElementById('inv-p10Demand');
+        if (p90Input) p90Input.value = formatNumberWithCommas(p90);
+        if (p50Input) p50Input.value = formatNumberWithCommas(p50);
+        if (p10Input) p10Input.value = formatNumberWithCommas(p10);
+    }
+
+    function formatMetric(value, format) {
+        if (isNaN(value) || !isFinite(value)) return 'N/A';
+        switch (format) {
+            case 'currency':
+                return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 });
+            case 'percent':
+                return `${(value * 100).toFixed(1)}%`;
+            case 'decimal':
+                return value.toFixed(1);
+            case 'integer':
+                return value.toLocaleString('en-US');
+            default:
+                return value;
+        }
+    }
+
+    function calculateConveyorCost(numWorkstations) {
+        const isEven = numWorkstations % 2 === 0;
+        const numBends = (4 * numWorkstations) - (isEven ? 2 : 0);
+        const costStraights = investmentState.costPerFootStraight * ASSEMBLY_LINE_LENGTH;
+        const costBends = investmentState.costPerBend * numBends;
+        return costStraights + costBends; // Note: Installation cost is separate now
+    }
+
+    function updateCalculatedCosts() {
+        const totalFixed = investmentState.mfgOverhead + investmentState.sgaExpenses;
+        d3.select("#inv-totalFixedCost").text(formatMetric(totalFixed, 'currency') + " / year");
+    }
+
+    function calculateNPV(cashFlows, rate) {
+        let npv = cashFlows[0] || 0;
+        for (let t = 1; t < cashFlows.length; t++) {
+            npv += cashFlows[t] / Math.pow(1 + rate, t);
+        }
+        return npv;
+    }
+
+    function calculateIRR(cashFlows, maxIter = 100, tolerance = 1e-7) {
+        if (!cashFlows || cashFlows.length === 0 || cashFlows[0] >= 0) {
+            return NaN;
+        }
+        let highRate = 1.0;
+        let lowRate = -0.99;
+        let npvHigh = calculateNPV(cashFlows, highRate);
+        let npvLow = calculateNPV(cashFlows, lowRate);
+        let attempts = 0;
+        const maxAttempts = 50;
+        while (npvHigh * npvLow > 0 && attempts < maxAttempts) {
+            if (npvHigh > 0 && npvLow > 0) {
+                highRate *= 2;
+                npvHigh = calculateNPV(cashFlows, highRate);
+            } else if (npvHigh < 0 && npvLow < 0) {
+                highRate *= 2;
+                npvHigh = calculateNPV(cashFlows, highRate);
+            }
+            attempts++;
+        }
+        if (npvHigh * npvLow > 0) {
+            return NaN;
+        }
+        for (let i = 0; i < maxIter; i++) {
+            const midRate = (lowRate + highRate) / 2;
+            const npvMid = calculateNPV(cashFlows, midRate);
+            if (Math.abs(npvMid) < tolerance) {
+                return midRate;
+            }
+            if (npvLow * npvMid < 0) {
+                highRate = midRate;
+                npvHigh = npvMid;
+            } else {
+                lowRate = midRate;
+                npvLow = npvMid;
+            }
+        }
+        return (lowRate + highRate) / 2;
+    }
+
+    function calculatePaybackPeriod(cashFlows) {
+        if (!cashFlows || cashFlows.length < 2) return Infinity;
+        const initialInvestment = Math.abs(cashFlows[0]);
+        if (initialInvestment === 0) return 0;
+        let cumulativeCashFlow = 0;
+        for (let t = 1; t < cashFlows.length; t++) {
+            const lastCumulative = cumulativeCashFlow;
+            cumulativeCashFlow += cashFlows[t];
+            if (cumulativeCashFlow >= initialInvestment) {
+                const currentYearCashFlow = cashFlows[t];
+                if (currentYearCashFlow <= 0) {
+                    if (lastCumulative >= initialInvestment) return t - 1;
+                    continue;
+                }
+                const amountNeeded = initialInvestment - lastCumulative;
+                return (t - 1) + (amountNeeded / currentYearCashFlow);
+            }
+        }
+        return Infinity;
+    }
+
+    // --- CORE LOGIC FUNCTIONS ---
+    function calculateFinancialScenario(annualUnitDemand) {
+        const { analysisPeriod, marr, taxRate, workingDays, macrsClass, runExpansionCase, salvageValue, installationCost } = investmentState;
+        const avgPrice = (superSellInput.value * BUILD_RATIOS.super) + (ultraSellInput.value * BUILD_RATIOS.ultra) + (megaSellInput.value * BUILD_RATIOS.mega);
+        const dailyUnitDemand = workingDays > 0 ? Math.ceil(annualUnitDemand / workingDays) : 0;
+        let unitsToProduce = 0, configForReport = {}, initialInvestment = 0, equipmentCostForDepreciation = 0;
+        const currentEmployees = parseInt(numEmployeesInput.value);
+        const baseOpHours = parseFloat(opHoursInput.value);
+
+        if (!runExpansionCase) {
+            const metrics = calculateMetrics({ dailyDemand: 9999, opHours: baseOpHours, numEmployees: currentEmployees }, {});
+            const maxAnnualCapacity = metrics.throughputUnitsPerDay * workingDays;
+            unitsToProduce = Math.min(annualUnitDemand, maxAnnualCapacity);
+            const lostSales = annualUnitDemand - unitsToProduce;
+            configForReport = { name: `${currentEmployees} Workers, ${baseOpHours} hrs/day`, lostSales: lostSales > 0 ? `(${formatMetric(lostSales, 'integer')} lost sales)` : '', empCount: currentEmployees, opHours: baseOpHours };
+            equipmentCostForDepreciation = calculateConveyorCost(currentEmployees) + installationCost;
+            initialInvestment = -equipmentCostForDepreciation;
+        } else {
+            let optimalConfig = { meetsDemand: false, empCount: 0, opHours: 0 };
+            let minCompositeCost = Infinity;
+            for (let emp = 3; emp <= 13; emp++) {
+                for (let hrs = 1; hrs <= 24; hrs += 0.25) {
+                    const metrics = calculateMetrics({ dailyDemand: dailyUnitDemand, opHours: hrs, numEmployees: emp }, {});
+                    if (metrics.meetsDemand) {
+                        const compositeCost = (hrs * 1000) + emp;
+                        if (compositeCost < minCompositeCost) {
+                            minCompositeCost = compositeCost;
+                            optimalConfig = { name: `${emp} Workers, ${hrs.toFixed(2)} hrs/day`, meetsDemand: true, empCount: emp, opHours: hrs };
+                        }
+                    }
+                }
+            }
+            unitsToProduce = annualUnitDemand;
+            let finalEmpCount = currentEmployees;
+            if (optimalConfig.meetsDemand) {
+                configForReport = { ...optimalConfig, lostSales: '' };
+                finalEmpCount = optimalConfig.empCount;
+            } else {
+                configForReport = { name: `>13 Workers Required`, lostSales: '', empCount: 13, opHours: 24 };
+                finalEmpCount = 13;
+            }
+            const oldLineCost = calculateConveyorCost(currentEmployees);
+            const newLineCost = calculateConveyorCost(finalEmpCount);
+            let adjustment = 0;
+            if (newLineCost < oldLineCost) {
+                const ratio = (oldLineCost - newLineCost) / oldLineCost;
+                adjustment = -(salvageValue * ratio); // Credit based on salvage value ratio
+                equipmentCostForDepreciation = 0; // No new asset to depreciate
+            } else {
+                adjustment = newLineCost - oldLineCost;
+                equipmentCostForDepreciation = adjustment + installationCost; // Depreciate new cost + installation
+            }
+            initialInvestment = -(installationCost + adjustment);
+        }
+        const cashFlows = [initialInvestment];
+        const scenarioOpHours = configForReport.opHours;
+        let scaledMfgOverhead = investmentState.mfgOverhead;
+        let scaledSgaExpenses = investmentState.sgaExpenses;
+        if (scenarioOpHours > baseOpHours) {
+            const scalingFactor = scenarioOpHours / baseOpHours;
+            scaledMfgOverhead *= scalingFactor;
+            scaledSgaExpenses *= scalingFactor;
+        }
+        const macrsSchedule = MACRS_RATES[macrsClass] || [];
+        for (let t = 1; t <= analysisPeriod; t++) {
+            const revenue = unitsToProduce * avgPrice;
+            const avgMaterialCost = (superCogsInput.value * BUILD_RATIOS.super) + (ultraCogsInput.value * BUILD_RATIOS.ultra) + (megaCogsInput.value * BUILD_RATIOS.mega);
+            const totalMaterialCost = unitsToProduce * avgMaterialCost;
+            const laborCost = configForReport.empCount * configForReport.opHours * parseFloat(laborCostInput.value) * workingDays;
+            const cogs = totalMaterialCost + laborCost + scaledMfgOverhead;
+            const grossProfit = revenue - cogs;
+            const taxDepreciation = (t - 1 < macrsSchedule.length && equipmentCostForDepreciation > 0) ? equipmentCostForDepreciation * macrsSchedule[t - 1] : 0;
+            const ebit = grossProfit - scaledSgaExpenses - taxDepreciation;
+            const taxes = ebit > 0 ? ebit * (taxRate / 100) : 0;
+            const nopat = ebit - taxes;
+            const fcf = nopat + taxDepreciation;
+            cashFlows.push(fcf);
+        }
+        if (equipmentCostForDepreciation > 0 && analysisPeriod > 0) {
+            const afterTaxSalvage = salvageValue * (1 - (taxRate / 100));
+            cashFlows[analysisPeriod] += afterTaxSalvage;
+        }
+        const npv = calculateNPV(cashFlows, marr / 100);
+        const irr = calculateIRR(cashFlows);
+        const payback = calculatePaybackPeriod(cashFlows);
+        return { dailyUnitDemand, annualUnitDemand, requiredConfig: configForReport, metrics: { npv, irr, payback, initialInvestment }, cashFlows };
+    }
+
+    function runFullAnalysis() {
+        const resultsDisplay = d3.select("#inv-results-display");
+        const resultsPlaceholder = d3.select("#inv-results-placeholder");
+        resultsPlaceholder.html("<p>Running financial calculations...</p>").style("display", "block");
+        resultsDisplay.style("display", "none");
+        setTimeout(() => {
+            try {
+                const scenarios = {
+                    'P90 (Conservative)': investmentState.p90Demand,
+                    'P50 (Most Likely)': investmentState.p50Demand,
+                    'P10 (Optimistic)': investmentState.p10Demand
+                };
+                const results = {};
+                for (const [name, demandUnits] of Object.entries(scenarios)) {
+                    results[name] = calculateFinancialScenario(demandUnits);
+                }
+                resultsPlaceholder.style("display", "none");
+                resultsDisplay.style("display", "block");
+                renderInvestmentResults(results);
+            } catch (error) {
+                console.error("Error during investment analysis:", error);
+                resultsPlaceholder.html(`<p class="error">An error occurred: ${error.message}</p>`);
+            }
+        }, 50);
+    }
+
+    // --- D3 RENDERING FUNCTIONS ---
+    function renderFunnel(results, containerSelector) {
+        const container = d3.select(containerSelector);
+        container.html("");
+        const chartNode = container.node();
+        if (!chartNode) return;
+        const scenarios = [
+            { label: "Optimistic (P10)", value: results['P10 (Optimistic)'].annualUnitDemand, color: '#c0392b' },
+            { label: "Most Likely (P50)", value: results['P50 (Most Likely)'].annualUnitDemand, color: '#2980b9' },
+            { label: "Conservative (P90)", value: results['P90 (Conservative)'].annualUnitDemand, color: '#27ae60' }
+        ];
+        const margin = { top: 10, right: 20, bottom: 10, left: 20 };
+        const width = chartNode.getBoundingClientRect().width - margin.left - margin.right;
+        const height = chartNode.getBoundingClientRect().height - margin.top - margin.bottom;
+        const svg = container.append("svg").attr("viewBox", `0 0 ${width + margin.left + margin.right} ${height + margin.top + margin.bottom}`);
+        const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+        const maxValue = scenarios[0].value;
+        const sectionHeight = height / scenarios.length;
+        scenarios.forEach((d, i) => {
+            const topWidth = (d.value / maxValue) * width;
+            const bottomWidth = (i < scenarios.length - 1) ? (scenarios[i + 1].value / maxValue) * width : topWidth * 0.95;
+            const x0 = (width - topWidth) / 2;
+            const x1 = (width - bottomWidth) / 2;
+            const y0 = i * sectionHeight;
+            const y1 = (i + 1) * sectionHeight - 2;
+            g.append("path")
+                .attr("d", `M ${x0},${y0} L ${x0 + topWidth},${y0} L ${x1 + bottomWidth},${y1} L ${x1},${y1} Z`)
+                .attr("fill", d.color).attr("fill-opacity", 0.7).attr("stroke", "#333").attr("stroke-width", 1);
+            const textY = y0 + sectionHeight / 2;
+            const textBlock = g.append("text").attr("x", width / 2).attr("y", textY).attr("text-anchor", "middle");
+            textBlock.append("tspan").attr("class", "funnel-label").text(d.label);
+            textBlock.append("tspan").attr("class", "funnel-value").attr("x", width / 2).attr("dy", "1.2em").text(formatNumberWithCommas(d.value) + " u/yr");
+        });
+    }
+
+    function renderInvestmentResults(results) {
+        const resultsNode = d3.select('.inv-results-column').node();
+        if (!resultsNode) return;
+        const totalHeight = resultsNode.clientHeight;
+        const topThirdHeight = Math.floor((totalHeight / 3) -10);
+        const bottomTwoThirdsHeight = totalHeight - topThirdHeight;
+
+        const scorecardHeight = 95;
+        const funnelHeight = topThirdHeight - scorecardHeight;
+
+        d3.select(".inv-scorecard-container").style('height', `${scorecardHeight > 0 ? scorecardHeight : 0}px`);
+        d3.select(".inv-funnel-container").style('height', `${funnelHeight > 0 ? funnelHeight : 0}px`);
+        d3.select(".inv-chart-container").style('height', `${bottomTwoThirdsHeight > 0 ? bottomTwoThirdsHeight : 0}px`);
+        // --- FIX END ---
+
+        const p50Result = results['P50 (Most Likely)'];
+        const scorecardContainer = d3.select(".inv-scorecard-container");
+        scorecardContainer.html("");
+        const isZeroInvestment = p50Result.metrics.initialInvestment >= 0;
+        const displayIRR = isZeroInvestment ? "N/A" : formatMetric(p50Result.metrics.irr, 'percent');
+        const displayPayback = isZeroInvestment ? "Immediate" : formatMetric(p50Result.metrics.payback, 'decimal');
+        scorecardContainer.selectAll(".inv-scorecard")
+            .data([{ label: 'Net Present Value (NPV)', value: formatMetric(p50Result.metrics.npv, 'currency') }, { label: 'Internal Rate of Return (IRR)', value: displayIRR }, { label: 'Payback Period (Years)', value: displayPayback }])
+            .join("div").attr("class", "inv-scorecard").html(d => `<div class="inv-scorecard-label">${d.label}</div><div class="inv-scorecard-value">${d.value}</div>`);
+
+        renderFunnel(results, ".inv-funnel-container");
+
+        const chartContainer = d3.select(".inv-chart-container");
+        chartContainer.html("");
+        d3.select(".inv-tooltip").remove();
+        const chartNode = chartContainer.node();
+        if (!chartNode) return;
+        const margin = { top: 20, right: 30, bottom: 70, left: 80 }, width = chartNode.getBoundingClientRect().width - margin.left - margin.right, height = chartNode.getBoundingClientRect().height - margin.top - margin.bottom;
+        const chartSvg = chartContainer.append("svg").attr("viewBox", `0 0 ${width + margin.left + margin.right} ${height + margin.top + margin.bottom}`);
+        const chartG = chartSvg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+        const cumulativeData = Object.entries(results).map(([name, data]) => {
+            let cumulative = 0;
+            const values = data.cashFlows.map((cf, i) => {
+                cumulative += cf;
+                return { year: i, value: cumulative };
+            });
+            return { name, values };
+        });
+        const x = d3.scaleLinear().domain([0, investmentState.analysisPeriod]).range([0, width]);
+        const y = d3.scaleLinear().domain([d3.min(cumulativeData, d => d3.min(d.values, v => v.value)), d3.max(cumulativeData, d => d3.max(d.values, v => v.value))]).nice().range([height, 0]);
+        chartG.append("g").attr("class", "inv-axis").attr("transform", `translate(0,${height})`).call(d3.axisBottom(x).ticks(investmentState.analysisPeriod).tickFormat(d3.format("d")));
+        chartG.append("g").attr("class", "inv-axis").call(d3.axisLeft(y).tickFormat(d3.format("$,.2s")));
+        const p10Data = cumulativeData.find(d => d.name.includes('P10')).values;
+        const p50Data = cumulativeData.find(d => d.name.includes('P50')).values;
+        const p90Data = cumulativeData.find(d => d.name.includes('P90')).values;
+        const areaP10_P50 = d3.area().x(d => x(d.year)).y0(d => y(p50Data[d.year].value)).y1(d => y(p10Data[d.year].value));
+        const areaP50_P90 = d3.area().x(d => x(d.year)).y0(d => y(p90Data[d.year].value)).y1(d => y(p50Data[d.year].value));
+        chartG.append("path").datum(p10Data).attr("fill", "#c0392b").attr("class", "inv-area").attr("d", areaP10_P50);
+        chartG.append("path").datum(p50Data).attr("fill", "#27ae60").attr("class", "inv-area").attr("d", areaP50_P90);
+        chartG.append("line").attr("class", "inv-break-even").attr("x1", 0).attr("x2", width).attr("y1", y(0)).attr("y2", y(0));
+        const line = d3.line().x(d => x(d.year)).y(d => y(d.value));
+        const color = d3.scaleOrdinal().domain(['P10 (Optimistic)', 'P50 (Most Likely)', 'P90 (Conservative)']).range(['#c0392b', '#2980b9', '#27ae60']);
+        chartG.selectAll(".inv-line").data(cumulativeData).join("path")
+            .attr("class", "inv-line").attr("d", d => line(d.values))
+            .style("stroke", d => color(d.name))
+            .style("stroke-width", d => d.name.includes('P50') ? '4px' : '2.5px');
+        chartSvg.append("text").attr("class", "inv-axis-label").attr("text-anchor", "middle").attr("x", margin.left + width / 2).attr("y", height + margin.top + margin.bottom - 30).text("Analysis Period (Years)");
+        chartSvg.append("text").attr("class", "inv-axis-label").attr("transform", "rotate(-90)").attr("text-anchor", "middle").attr("y", margin.left / 4).attr("x", -(margin.top + height / 2)).text("Cumulative Free Cash Flow");
+        const tooltip = d3.select("body").append("div").attr("class", "inv-tooltip").style("opacity", 0);
+        chartG.selectAll(".inv-hitbox").data(cumulativeData).join("path")
+            .attr("class", "inv-hitbox").attr("d", d => line(d.values))
+            .on("mouseover", (event, d) => {
+                tooltip.transition().duration(200).style("opacity", 1);
+                const scenarioResult = results[d.name];
+                tooltip.html(`<h4>${d.name}</h4>
+<p><strong>NPV:</strong> ${formatMetric(scenarioResult.metrics.npv, 'currency')}</p>
+<p><strong>IRR:</strong> ${scenarioResult.metrics.initialInvestment >= 0 ? "N/A" : formatMetric(scenarioResult.metrics.irr, 'percent')}</p>
+<p><strong>Payback:</strong> ${scenarioResult.metrics.initialInvestment >= 0 ? "Immediate" : formatMetric(scenarioResult.metrics.payback, 'decimal') + ' Yrs'}</p><hr>
+<p><strong>Config:</strong> ${scenarioResult.requiredConfig.name}</p>
+<p><strong>Annual Demand:</strong> ${formatMetric(scenarioResult.annualUnitDemand, 'integer')} u</p>`);
+            })
+            .on("mousemove", (event) => tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px"))
+            .on("mouseout", () => tooltip.transition().duration(500).style("opacity", 0));
+    }
+
+    function draw() {
+        if (!isListenerAttached) {
+            const relevantInputs = [dailyDemandInput, opHoursInput, laborCostInput, superSellInput, superCogsInput, ultraSellInput, ultraCogsInput, megaSellInput, megaCogsInput];
+            relevantInputs.forEach(input => {
+                input.addEventListener('input', () => {
+                    if (input.id === 'dailyDemand') {
+                        updateDemandScenariosFromDemand();
+                    }
+                    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+                    if (activeTab === 'investment') {
+                        clearTimeout(analysisDebounceTimer);
+                        analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
+                    }
+                });
+            });
+            isListenerAttached = true;
+        }
+        updateDemandScenariosFromDemand();
+        const svg = d3.select("#investment-panel");
+        svg.selectAll("*").remove();
+        const fo = svg.append("foreignObject").attr("x", 0).attr("y", 0).attr("width", "100%").attr("height", "100%");
+        const container = fo.append("xhtml:div").attr("class", "inv-container");
+        const inputColumn = container.append("div").attr("class", "inv-input-column");
+        inputColumn.append("h3").attr("class", "inv-column-title").text("Economic Parameters");
+        const inputArea = inputColumn.append("div").attr("class", "inv-inputs");
+        inputArea.html(`
+<div class="inv-input-group">
+<div class="inv-group-header">Project & Fixed Costs</div>
+<label>Analysis Period (Yrs): <input type="number" id="inv-analysisPeriod" step="1" min="1" max="30" value="${investmentState.analysisPeriod}"></label>
+<label>MARR / Discount Rate (%): <input type="number" id="inv-marr" step="0.1" min="0" max="100" value="${investmentState.marr}"></label>
+<label>Corporate Tax Rate (%): <input type="number" id="inv-taxRate" step="0.1" min="0" max="100" value="${investmentState.taxRate}"></label>
+<label>Working Days per Year: <input type="number" id="inv-workingDays" step="1" min="1" max="365" value="${investmentState.workingDays}"></label>
+<label>Mfg. Overhead ($/yr): <input type="text" data-type="currency" id="inv-mfgOverhead" value="${formatNumberWithCommas(investmentState.mfgOverhead)}"></label>
+<label>SG&A Expenses ($/yr): <input type="text" data-type="currency" id="inv-sgaExpenses" value="${formatNumberWithCommas(investmentState.sgaExpenses)}"></label>
+</div>
+<div class="inv-input-group">
+<div class="inv-group-header">Capital Investment</div>
+<label>Cost / ft of Straights ($): <input type="text" data-type="currency" id="inv-costPerFootStraight" value="${formatNumberWithCommas(investmentState.costPerFootStraight)}"></label>
+<label>Cost / Conveyor Bend ($): <input type="text" data-type="currency" id="inv-costPerBend" value="${formatNumberWithCommas(investmentState.costPerBend)}"></label>
+<label>Installation Cost ($): <input type="text" data-type="currency" id="inv-installationCost" value="${formatNumberWithCommas(investmentState.installationCost)}"></label>
+<label>Salvage Value ($): <input type="text" data-type="currency" id="inv-salvageValue" value="${formatNumberWithCommas(investmentState.salvageValue)}"></label>
+<label>MACRS Class:<select id="inv-macrsClass"><option value="5-year" ${investmentState.macrsClass === '5-year' ? 'selected' : ''}>5-Year Property</option><option value="7-year" ${investmentState.macrsClass === '7-year' ? 'selected' : ''}>7-Year Property</option></select></label>
+</div>
+<div class="inv-input-group">
+<div class="inv-group-header">Probabilistic Demand Scenarios (Annual Units)</div>
+<label>P90 (Conservative): <input type="text" data-type="currency" id="inv-p90Demand" value="${formatNumberWithCommas(investmentState.p90Demand)}"></label>
+<label>P50 (Most Likely): <input type="text" data-type="currency" id="inv-p50Demand" value="${formatNumberWithCommas(investmentState.p50Demand)}"></label>
+<label>P10 (Optimistic): <input type="text" data-type="currency" id="inv-p10Demand" value="${formatNumberWithCommas(investmentState.p10Demand)}"></label>
+</div>
+`);
+        const controlsArea = inputColumn.append("div").attr("class", "inv-analysis-controls");
+        controlsArea.html(`
+<div class="inv-scenario-toggle">
+<span>Base Case</span>
+<label class="inv-switch">
+<input type="checkbox" id="inv-runExpansionCase" ${investmentState.runExpansionCase ? 'checked' : ''}>
+<span class="inv-slider inv-round"></span>
+</label>
+<span>Expansion Case</span>
+</div>
+`);
+        const resultsColumn = container.append("div").attr("class", "inv-results-column");
+        resultsColumn.html(`
+<div id="inv-results-placeholder">
+<h3>Economic Analysis Dashboard</h3>
+<p>Configure your parameters on the left. Results will update automatically.</p>
+</div>
+<div id="inv-results-display" style="display: none;">
+<div class="inv-scorecard-container"></div>
+<div class="inv-funnel-container"></div>
+<div class="inv-chart-container"></div>
+</div>
+`);
+        container.selectAll("input, select").on("change", (event) => {
+            const target = event.target;
+            const key = target.id.replace('inv-', '');
+            if (target.type === 'checkbox') {
+                investmentState[key] = target.checked;
+            } else {
+                const value = (target.dataset.type === 'currency') ? parseFormattedNumber(target.value) : (target.type === 'number' ? parseFloat(target.value) : target.value);
+                investmentState[key] = value || 0;
+                if (target.dataset.type === 'currency') {
+                    target.value = formatNumberWithCommas(value);
+                }
+            }
+            updateCalculatedCosts();
+            clearTimeout(analysisDebounceTimer);
+            analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
+        });
+        updateCalculatedCosts();
+        runFullAnalysis();
+    }
+
+    const styleId = 'investment-styles';
+    if (!document.getElementById(styleId)) {
+        const styleSheet = document.createElement("style");
+        styleSheet.id = styleId;
+        styleSheet.innerText = `
+#investment-panel .inv-container { display: flex; height: 100%; font-family: sans-serif; background: #f4f7f6; }
+#investment-panel .inv-input-column { flex: 0 0 320px; padding: 15px; background: #ffffff; border-right: 1px solid #ddd; overflow-y: auto; display: flex; flex-direction: column; }
+#investment-panel .inv-results-column { flex-grow: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; }
+#investment-panel .inv-column-title { text-align: center; font-size: 18px; color: #2c3e50; margin: 0 0 15px 0; padding-bottom: 10px; border-bottom: 2px solid #3498db; }
+#investment-panel .inv-inputs { flex-grow: 1; display: flex; flex-direction: column; gap: 15px; }
+#investment-panel .inv-input-group { border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; background: #fcfcfc; }
+#investment-panel .inv-group-header { font-weight: bold; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 8px; font-size: 14px; color: #333; }
+#investment-panel .inv-input-column label { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 8px; font-size: 13px; color: #555; }
+#investment-panel .inv-input-column input, #investment-panel .inv-input-column select { box-sizing: border-box; padding: 6px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; text-align: right; }
+#investment-panel .inv-input-column input { width: 30%; }
+#investment-panel .inv-input-column select { width: 55%; }
+#investment-panel .inv-analysis-controls { margin-top: auto; padding-top: 15px; border-top: 1px solid #eee; display: flex; justify-content: center; align-items: center; background: #ffffff; }
+#investment-panel .inv-scenario-toggle { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 10px; font-size: 12px; }
+#investment-panel .inv-switch { position: relative; display: inline-block; width: 60px; height: 34px; }
+#investment-panel .inv-switch input { opacity: 0; width: 0; height: 0; }
+#investment-panel .inv-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; }
+#investment-panel .inv-slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; }
+#investment-panel input:checked + .inv-slider { background-color: #2196F3; }
+#investment-panel input:checked + .inv-slider:before { transform: translateX(26px); }
+#investment-panel .inv-slider.inv-round { border-radius: 34px; }
+#investment-panel .inv-slider.inv-round:before { border-radius: 50%; }
+#investment-panel #inv-results-display { display: flex; flex-direction: column; height: 100%; }
+#investment-panel #inv-results-placeholder { text-align: center; padding: 50px 20px; color: #666; }
+#investment-panel .inv-scorecard-container { flex-shrink: 0; display: flex; justify-content: space-around; gap: 5px; margin-bottom: 1px; }
+#investment-panel .inv-scorecard { flex: 1; text-align: center; padding: 15px; background: #ecf0f1; border-radius: 8px; border-bottom: 3px solid #bdc3c7; }
+#investment-panel .inv-scorecard-label { font-size: 13px; color: #34495e; margin-bottom: 5px; }
+#investment-panel .inv-scorecard-value { font-size: 26px; font-weight: bold; color: #2c3e50; }
+#investment-panel .inv-funnel-container { flex-shrink: 0; }
+#investment-panel .inv-funnel-container text { fill: white; font-weight: bold; pointer-events: none; }
+#investment-panel .inv-funnel-container .funnel-label { font-size: 14px; }
+#investment-panel .inv-funnel-container .funnel-value { font-size: 12px; font-weight: normal; }
+#investment-panel .inv-chart-container { flex-grow: 1; position: relative; }
+#investment-panel .inv-axis text, #investment-panel .inv-axis .tick text { font-weight: 700; }
+#investment-panel .inv-axis-label { font-size: 14px; font-weight: 700; fill: #34495e; }
+#investment-panel .inv-area { fill-opacity: 0.2; }
+#investment-panel .inv-break-even { stroke: #e74c3c; stroke-width: 2px; stroke-dasharray: 6, 4; }
+#investment-panel .inv-line { fill: none; }
+#investment-panel .inv-hitbox { stroke-width: 20px; fill: none; stroke: transparent; cursor: pointer; }
+.inv-tooltip { position: absolute; text-align: left; padding: 8px; font: 12px sans-serif; background: rgba(44, 62, 80, 0.9); color: white; border: 0px; border-radius: 8px; pointer-events: none; }
+.inv-tooltip h4 { margin: 0 0 5px 0; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.5); padding-bottom: 4px;}
+.inv-tooltip p { margin: 3px 0; }
+.inv-tooltip hr { border: none; border-top: 1px solid rgba(255,255,255,0.3); margin: 5px 0;}
+`;
+        document.head.appendChild(styleSheet);
+    }
+    return draw;
+})();
 
 // Run the application
 main();
