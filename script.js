@@ -2736,7 +2736,7 @@ function drawEfficiencyPanel() {
     const singleRowUnitHeight = availableHeight / totalRowWeights;
     const summaryRowHeight = singleRowUnitHeight * summaryRowWeight;
     const workstationRowHeight = singleRowUnitHeight;
-    const pieRadius = Math.min(availableWidth / 15, workstationRowHeight / 3);
+    const pieRadius = Math.min(availableWidth / 16, workstationRowHeight / 3);
     const clockRadius = pieRadius * 0.5;
     const positionMap = [];
     let stationIndex = 0;
