@@ -1183,32 +1183,47 @@ function drawPrecedenceChart() {
 
     precedenceChartNodes = mainGroup.append("g").selectAll("g").data(nodes).join("g");
 
-    const margin = 150;
-    const node1 = nodes.find(n => n.id === 1);
-    if (node1) {
-        node1.fx = margin;
-        node1.fy = height - margin;
-    }
-    const node31 = nodes.find(n => n.id === 31);
-    if (node31) {
-        node31.fx = width - margin;
-        node31.fy = margin;
-    }
+    // The previous fx/fy pinning of nodes has been removed to allow the graph to form a natural shape.
 
     const simulation = d3.forceSimulation(nodes)
         .force("link", d3.forceLink(links).id(d => d.id).distance(function (d) {
-            // --- FIX START ---
-            // Check if the link is between nodes 13 and 14
             if ((d.source.id === 13 && d.target.id === 14) || (d.source.id === 14 && d.target.id === 13)) {
-                return 3; // Return half the normal distance
+                return 5;
             }
-            return 40; // Return the normal distance for all other links
-            // --- FIX END ---
+            return 40;
         }))
         .force("charge", d3.forceManyBody().strength(-500))
         .force("center", d3.forceCenter(width / 2, height / 2).strength(0.1))
         .force("collide", d3.forceCollide().radius(d => (d.r || 50) + 8).strength(1))
-        .force("bound", boundingForce(width, height));
+        .force("bound", boundingForce(width, height))
+        .on("end", () => { // --- FIX START ---
+            // When the simulation is done, calculate the bounds and zoom to fit.
+            if (!nodes.length) return;
+
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            nodes.forEach(node => {
+                const r = node.r || 12;
+                if (node.x - r < minX) minX = node.x - r;
+                if (node.x + r > maxX) maxX = node.x + r;
+                if (node.y - r < minY) minY = node.y - r;
+                if (node.y + r > maxY) maxY = node.y + r;
+            });
+
+            const graphWidth = maxX - minX;
+            const graphHeight = maxY - minY;
+
+            if (graphWidth <= 0 || graphHeight <= 0) return;
+
+            const padding = 0.9;
+            const scale = Math.min(width / graphWidth, height / graphHeight) * padding;
+            const translateX = (width / 2) - scale * (minX + graphWidth / 2);
+            const translateY = (height / 2) - scale * (minY + graphHeight / 2);
+
+            const transform = d3.zoomIdentity.translate(translateX, translateY).scale(scale);
+
+            svg.transition().duration(750).call(zoom.transform, transform);
+            // --- FIX END ---
+        });
 
     precedenceChartNodes.append("circle")
         .attr("r", 12).attr("stroke", "#fff").attr("stroke-width", 1.5).attr("fill", "steelblue");
