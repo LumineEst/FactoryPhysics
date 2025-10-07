@@ -1238,7 +1238,7 @@ function drawPrecedenceChart() {
 
             const transform = d3.zoomIdentity.translate(translateX, translateY).scale(scale);
 
-            svg.transition().duration(200).call(zoom.transform, transform);
+            svg.transition().duration(1200).call(zoom.transform, transform);
         });
 
     precedenceChartNodes.append("circle")
@@ -1719,20 +1719,20 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
 .profit-tooltip .h{font-weight:800;font-size:12.5px;margin-bottom:6px;color:#e5e7eb}
 .profit-tooltip .row{display:flex;justify-content:space-between;gap:16px}
 .profit-tooltip .k{opacity:.85}
-.axis text{font-size:11px; fill:#334155}
-.axis path,.axis line{stroke:#94a3b8}
-.grid-major line{stroke:#e2e8f0}
-.grid-minor line{stroke:#eef2f2}
+.axis text{font-size:12px; system-ui, sans-serif; font-weight:500; fill: #2d3748;}
+.axis path,.axis line{stroke: #94a3b8}
+.grid-major line{stroke:#cccccc; stroke-width: 0.75px;}
+.grid-minor line{stroke:#e0e0e0; stroke-dasharray: 2,2;}
 .grid-major path,.grid-minor path{display:none}
-.crosshair{stroke:#64748b;stroke-dasharray:4 4}
-.crosshair-h{stroke:#94a3b8;stroke-dasharray:4 4;opacity:.6}
-.line-profit{stroke:#10b981}
-.line-margin{stroke:#2563eb}
-.lost-profit-area{fill:#ef4444;opacity:.4}
-.point-now{fill:#ef4444;stroke:#fff;stroke-width:1.5}
-.breakdown-border{fill:none;stroke:#64748b;stroke-width:2;stroke-dasharray:6 6;rx:10}
-.pie-title{font-size:13px;font-weight:800;text-anchor:middle;fill:#1f2937}
-.axis-label{font-size:12px;font-weight:600;fill:#334155}
+.crosshair{stroke: #64748b;stroke-dasharray:4 4}
+.crosshair-h{stroke: #94a3b8;stroke-dasharray:4 4;opacity:.6}
+.line-profit{stroke: #10b981}
+.line-margin{stroke: #2563eb}
+.lost-profit-area{fill: #ef4444;opacity:.4}
+.point-now{fill: #ef4444;stroke: #fff;stroke-width:1.5}
+.breakdown-border{fill:none;stroke: #64748b;stroke-width:2;stroke-dasharray:6 6;rx:10}
+.pie-title{font-size:13px;font-weight:800;text-anchor:middle;fill: #1f2937}
+.axis-label{font-size:14px;font-weight:600;fill: #1a202c}
 `;
         document.head.appendChild(style);
     }
@@ -1903,11 +1903,7 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
         const areaData = data.marginData.slice(Math.max(0, i0 - 1), i1 + 1);
         if (areaData.length) {
             const area = d3.area().x(d => x(d.demand)).y0(chartHeight).y1(d => yMargin(d.value));
-            gM.append("path")
-                .datum(areaData)
-                .attr("d", area)
-                .attr("fill", "red")
-                .attr("fill-opacity", 0.7);
+            gM.append("path").datum(areaData).attr("class", "lost-profit-area").attr("d", area);
         }
     }
     gM.append("circle").attr("class", "point-now").attr("cx", actX).attr("cy", yMargin(m.grossProfitMargin)).attr("r", 5);
