@@ -2,6 +2,7 @@
 const MIN_TAKT_TIME = 2.5;
 const BUILD_RATIOS = { super: 0.35, ultra: 0.45, mega: 0.20 };
 const ASSEMBLY_LINE_LENGTH = 486;
+const PROFIT_CALC_VERSION = '1.1';
 let isRecalculating = false;
 
 // Global Constants for Color Generation
@@ -30,6 +31,13 @@ const PERT_LABOR_FALLBACK = {
     13: 2.5, 14: 1.5, 15: 2.2, 16: 1.2, 17: 0.5, 18: 0.8, 19: 1.1, 20: 0.325, 21: 0.325, 22: 1.3, 23: 0.14,
     24: 0.585, 25: 1.3, 26: 1.0, 27: 0.7, 28: 1.0, 29: 0.7, 30: 0.5, 31: 0.4
 };
+
+const WORKSTATION_CAPACITIES = [
+    { ws: 3, maxDemand: 147 }, { ws: 4, maxDemand: 192 }, { ws: 5, maxDemand: 229 },
+    { ws: 6, maxDemand: 284 }, { ws: 7, maxDemand: 312 }, { ws: 8, maxDemand: 350 },
+    { ws: 9, maxDemand: 407 }, { ws: 10, maxDemand: 419 }, { ws: 11, maxDemand: 499 },
+    { ws: 12, maxDemand: 501 }, { ws: 13, maxDemand: 552 }
+];
 
 const PERT_PIE_STROKE = '#ffffff';
 const PERT_PIE_COLORS = {
@@ -194,6 +202,18 @@ function flattenPrecedenceTree() {
     return fullPredecessorMap;
 }
 
+/**
+* Backend - Determines the minimum number of workstations that can possibly meet a given demand.
+*/
+function getMinWorkstationsForDemand(demand) {
+    for (const config of WORKSTATION_CAPACITIES) {
+        if (demand <= config.maxDemand) {
+            return config.ws;
+        }
+    }
+    return 13;
+}
+
 function handleInputChange(driverId) {
     if (isRecalculating) return;
     isRecalculating = true;
@@ -286,7 +306,7 @@ function calculateWorkstationDetails(numEmployees) {
  */
 function calculateMetrics(op, fin) {
     const wsDetails = calculateWorkstationDetails(op.numEmployees);
-    const fullTotalOpMinutes = Math.floor(op.opHours * 4)*15;
+    const fullTotalOpMinutes = Math.floor(op.opHours * 4) * 15;
     const bottleneckCycleTime = wsDetails.bottleneckTime;
     const productSpacing = wsDetails.fastestTime === Infinity ? 0 : wsDetails.fastestTime * 15;
     if (productSpacing <= 0 || bottleneckCycleTime <= 0) {
@@ -1194,7 +1214,7 @@ function drawPrecedenceChart() {
         .force("center", d3.forceCenter(width / 2, height / 2).strength(0.1))
         .force("collide", d3.forceCollide().radius(d => (d.r || 50) + 8).strength(1))
         .force("bound", boundingForce(width, height))
-        .on("end", () => { 
+        .on("end", () => {
             if (!nodes.length) return;
 
             let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -1601,10 +1621,6 @@ function renderPrecedenceLegend() {
         .style('font-size', '12px').style('font-weight', 600).attr('fill', '#333');
 }
 
-/**
- * Profit - Calculates optimal profit/margin by searching through opHours and numEmployees.
- * This runs in the background on load and when financial inputs change.
- */
 async function calculateOptimalProfitData() {
     if (isProfitCalculating) return;
     isProfitCalculating = true;
@@ -1617,11 +1633,8 @@ async function calculateOptimalProfitData() {
         megaSell: parseFloat(megaSellInput.value),
         megaCogs: parseFloat(megaCogsInput.value),
     };
-    const key = JSON.stringify(finInputs);
-    if (profitMaximizationCache.key === key) {
-        isProfitCalculating = false;
-        return;
-    }
+
+    const key = getFinancialInputsKey();
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     if (activeTab === 'profit') {
         drawProfitPanel();
@@ -1634,34 +1647,51 @@ async function calculateOptimalProfitData() {
             try {
                 state.configData = originalConfigData;
                 for (let demand = 1; demand <= 552; demand++) {
-                    let maxProfit = -Infinity;
-                    let maxMargin = -Infinity;
+                    let maxProfit = -Infinity, maxMargin = -Infinity;
+                    let maxProfitConfig = { emp: 0, hrs: 0 }, maxMarginConfig = { emp: 0, hrs: 0 };
+                    // Determine the minimum feasible number of workstations for the current demand
+                    const startWorkstation = getMinWorkstationsForDemand(demand);
                     for (let opHours = 1; opHours <= 24; opHours += 0.25) {
-                        const taktTime = (opHours * 60) / demand;
-                        for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
+                        const totalAvailableMinutes = Math.floor(opHours * 4) * 15;
+                        // Loop starts from the minimum feasible workstation count, saving cycles
+                        for (let numEmployees = startWorkstation; numEmployees <= 13; numEmployees++) {
                             if (!originalConfigData[numEmployees] || Object.keys(originalConfigData[numEmployees]).length === 0) continue;
-                            const bottleneckTime = calculateWorkstationDetails(numEmployees).bottleneckTime;
-                            if (bottleneckTime <= taktTime) {
+                            const { bottleneckTime, fastestTime } = calculateWorkstationDetails(numEmployees);
+                            if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) continue;
+                            const productSpacing = fastestTime * 15;
+                            const throughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckTime;
+                            const totalRequiredTime = (demand > 1 ? (demand - 1) * bottleneckTime : 0) + throughputTime;
+                            if (totalRequiredTime <= totalAvailableMinutes) {
                                 const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
-                                if (metrics) {
+                                // Final safeguard check ensures the configuration is truly valid
+                                if (metrics && metrics.throughputUnitsPerDay >= demand) {
+                                    // Gross Profit and Margin are tracked independently
                                     if (metrics.dailyGrossProfit > maxProfit) {
                                         maxProfit = metrics.dailyGrossProfit;
+                                        maxProfitConfig = { emp: numEmployees, hrs: opHours };
                                     }
                                     if (metrics.grossProfitMargin > maxMargin) {
                                         maxMargin = metrics.grossProfitMargin;
+                                        maxMarginConfig = { emp: numEmployees, hrs: opHours };
                                     }
                                 }
                             }
                         }
                     }
-                    profitData.push({ demand, value: isFinite(maxProfit) ? maxProfit : 0 });
-                    marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0 });
+                    profitData.push({ demand, value: isFinite(maxProfit) ? maxProfit : 0, config: maxProfitConfig });
+                    marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0, config: maxMarginConfig });
                 }
             } finally {
                 state.configData = originalStateConfig;
             }
             const calculatedData = { profitData, marginData };
             profitMaximizationCache = { key, data: calculatedData };
+            try {
+                sessionStorage.setItem(key, JSON.stringify(calculatedData));
+                console.log("Profit data saved to session cache.");
+            } catch (e) {
+                console.error("Could not save profit data to session storage.", e);
+            }
             isProfitCalculating = false;
             if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
                 drawProfitPanel();
@@ -1672,15 +1702,15 @@ async function calculateOptimalProfitData() {
 }
 
 function drawProfitPanel() {
-  const svg = d3.select("#profit-panel");
-  const { clientWidth: width, clientHeight: height } = document.getElementById("svg-container");
-  svg.selectAll("*").remove();
+    const svg = d3.select("#profit-panel");
+    const { clientWidth: width, clientHeight: height } = document.getElementById("svg-container");
+    svg.selectAll("*").remove();
 
-  // ---------- one-time CSS ----------
-  if (!document.getElementById("profit-tooltip-style")) {
-    const style = document.createElement("style");
-    style.id = "profit-tooltip-style";
-    style.innerHTML = `
+    // ---------- one-time CSS ----------
+    if (!document.getElementById("profit-tooltip-style")) {
+        const style = document.createElement("style");
+        style.id = "profit-tooltip-style";
+        style.innerHTML = `
 .profit-tooltip{
   position:fixed; z-index:9999; pointer-events:none;
   padding:10px 12px; border-radius:10px;
@@ -1710,341 +1740,339 @@ function drawProfitPanel() {
 .pie-title{font-size:13px;font-weight:800;text-anchor:middle;fill:#1f2937}
 .axis-label{font-size:12px;font-weight:600;fill:#334155}
 `;
-    document.head.appendChild(style);
-  }
-
-  // ---------- guards ----------
-  if (!profitMaximizationCache.data || isProfitCalculating) {
-    svg.append("text")
-      .attr("x", width/2).attr("y", height/2)
-      .attr("text-anchor", "middle")
-      .style("font-size", 16).attr("fill", "#666")
-      .text("Calculating optimal profit scenarios…");
-    return;
-  }
-
-  // ---------- data & layout ----------
-  const data = profitMaximizationCache.data;
-  const margin = { top: 42, right: 22, bottom: 42, left: 92 };
-
-  const breakdownWidth = Math.max(280, width * 0.32);
-  const chartsWidth = width - breakdownWidth;
-  const chartWidth  = chartsWidth - margin.left - margin.right;
-  const chartHeight = (height/2) - margin.top - margin.bottom;
-
-  const chartsGroup = svg.append("g");
-  const breakdownGroup = svg.append("g").attr("transform", `translate(${chartsWidth},0)`);
-
-  const op = {
-    dailyDemand: +dailyDemandInput.value,
-    opHours:     +opHoursInput.value,
-    numEmployees:+numEmployeesInput.value
-  };
-  const fin = {
-    laborCost:+laborCostInput.value,
-    superSell:+superSellInput.value, superCogs:+superCogsInput.value,
-    ultraSell:+ultraSellInput.value, ultraCogs:+ultraCogsInput.value,
-    megaSell:+megaSellInput.value,   megaCogs:+megaCogsInput.value,
-  };
-  const m = calculateMetrics(op, fin);
-
-  // ---------- scales & helpers ----------
-  const x = d3.scaleLinear().domain([1, 552]).range([0, chartWidth]);
-  const yProfit = d3.scaleLinear()
-    .domain(d3.extent(data.profitData, d => d.value)).nice()
-    .range([chartHeight, 0]);
-  const yMargin = d3.scaleLinear()
-    .domain([
-      Math.min(0, d3.min(data.marginData, d=>d.value)),
-      d3.max(data.marginData, d=>d.value)
-    ]).nice()
-    .range([chartHeight, 0]);
-
-  const bisect = d3.bisector(d => d.demand).left;
-  const fmtMoney = d3.format("$,.0f");
-  const fmtPct   = v => `${d3.format(".1f")(v)}%`;
-  const reqX = x(op.dailyDemand);
-  const actX = x(m.throughputUnitsPerDay);
-
-  // shared tooltip
-  const tooltip = d3.select("body").selectAll(".profit-tooltip")
-    .data([null]).join("div").attr("class","profit-tooltip").style("opacity",0);
-
-  const showTT = (html, ev) =>
-    tooltip.html(html).style("opacity",1)
-      .style("left", (ev.clientX+14)+"px").style("top",(ev.clientY-24)+"px");
-  const hideTT = () => tooltip.style("opacity",0);
-
-  // ---------- reusable axes + grids (major/minor) ----------
-  function drawAxesWithGrid(g, xScale, yScale) {
-    // minor: more ticks; major: fewer, darker
-    const xMinor = d3.axisBottom(xScale).ticks(36).tickSize(-chartHeight).tickFormat("");
-    const xMajor = d3.axisBottom(xScale).ticks(12).tickSize(-chartHeight).tickFormat("");
-    const yMinor = d3.axisLeft(yScale).ticks(8).tickSize(-chartWidth).tickFormat("");
-    const yMajor = d3.axisLeft(yScale).ticks(6).tickSize(-chartWidth).tickFormat("");
-
-    g.append("g").attr("class","grid-minor").attr("transform",`translate(0,${chartHeight})`).call(xMinor);
-    g.append("g").attr("class","grid-major").attr("transform",`translate(0,${chartHeight})`).call(xMajor);
-    g.append("g").attr("class","grid-minor").call(yMinor);
-    g.append("g").attr("class","grid-major").call(yMajor);
-
-    g.append("g").attr("class","axis").attr("transform",`translate(0,${chartHeight})`)
-      .call(d3.axisBottom(xScale).ticks(12).tickFormat(d3.format("d")));
-    g.append("g").attr("class","axis").call(
-      yScale === yProfit
-        ? d3.axisLeft(yScale).ticks(6).tickFormat(fmtMoney)
-        : d3.axisLeft(yScale).ticks(6).tickFormat(d => fmtPct(d))
-    );
-  }
-
-  // ---------- PROFIT CHART ----------
-  const gP = chartsGroup.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
-  drawAxesWithGrid(gP, x, yProfit);
-
-  gP.append("path")
-    .datum(data.profitData)
-    .attr("class","line-profit")
-    .attr("fill","none").attr("stroke-width",2.6)
-    .attr("d", d3.line().x(d=>x(d.demand)).y(d=>yProfit(d.value)));
-
-  gP.append("text")
-    .attr("x", chartWidth/2).attr("y", -14)
-    .attr("text-anchor","middle")
-    .style("font-weight",800).text("Max Gross Profit vs Daily Demand");
-
-  // requested + actual markers
-  gP.append("line").attr("class","crosshair").attr("x1",reqX).attr("x2",reqX).attr("y1",0).attr("y2",chartHeight);
-  gP.append("line").attr("class","crosshair").attr("x1",actX).attr("x2",actX).attr("y1",0).attr("y2",chartHeight);
-  gP.append("circle").attr("class","point-now").attr("cx", actX).attr("cy", yProfit(m.dailyGrossProfit)).attr("r", 5);
-
-  // lost-profit shading if over-asked
-  if (op.dailyDemand > m.throughputUnitsPerDay) {
-    const i0 = bisect(data.profitData, m.throughputUnitsPerDay, 1);
-    const i1 = bisect(data.profitData, op.dailyDemand, 1);
-    const areaData = data.profitData.slice(Math.max(0, i0-1), i1);
-    if (areaData.length) {
-      const area = d3.area().x(d=>x(d.demand)).y0(chartHeight).y1(d=>yProfit(d.value));
-      gP.append("path").datum(areaData).attr("class","lost-profit-area").attr("d", area);
+        document.head.appendChild(style);
     }
-  }
 
-  // ---------- MARGIN CHART ----------
-  const gM = chartsGroup.append("g").attr("transform",
-              `translate(${margin.left},${margin.top + height/2})`);
-  drawAxesWithGrid(gM, x, yMargin);
+    // ---------- guards ----------
+    if (!profitMaximizationCache.data || isProfitCalculating) {
+        svg.append("text")
+            .attr("x", width / 2).attr("y", height / 2)
+            .attr("text-anchor", "middle")
+            .style("font-size", 16).attr("fill", "#666")
+            .text("Calculating optimal profit scenarios…");
+        return;
+    }
 
-  gM.append("path")
-    .datum(data.marginData)
-    .attr("class","line-margin")
-    .attr("fill","none").attr("stroke-width",2.6)
-    .attr("d", d3.line().x(d=>x(d.demand)).y(d=>yMargin(d.value)));
+    // ---------- data & layout ----------
+    const data = profitMaximizationCache.data;
+    const margin = { top: 42, right: 22, bottom: 42, left: 92 };
 
-  gM.append("text")
-    .attr("x", chartWidth/2).attr("y", -14)
-    .attr("text-anchor","middle")
-    .style("font-weight",800).text("Max Gross Profit Margin vs Daily Demand");
+    const breakdownWidth = Math.max(280, width * 0.32);
+    const chartsWidth = width - breakdownWidth;
+    const chartWidth = chartsWidth - margin.left - margin.right;
+    const chartHeight = (height / 2) - margin.top - margin.bottom;
 
-  gM.append("text").attr("class","axis-label")
-    .attr("x", chartWidth/2).attr("y", chartHeight + 30)
-    .attr("text-anchor","middle").text("Daily Demand (units)");
+    const chartsGroup = svg.append("g");
+    const breakdownGroup = svg.append("g").attr("transform", `translate(${chartsWidth},0)`);
 
-  gM.append("line").attr("class","crosshair").attr("x1",reqX).attr("x2",reqX).attr("y1",0).attr("y2",chartHeight);
-  gM.append("line").attr("class","crosshair").attr("x1",actX).attr("x2",actX).attr("y1",0).attr("y2",chartHeight);
-  gM.append("circle").attr("class","point-now").attr("cx", actX).attr("cy", yMargin(m.grossProfitMargin)).attr("r", 5);
+    const op = {
+        dailyDemand: +dailyDemandInput.value,
+        opHours: +opHoursInput.value,
+        numEmployees: +numEmployeesInput.value
+    };
+    const fin = {
+        laborCost: +laborCostInput.value,
+        superSell: +superSellInput.value, superCogs: +superCogsInput.value,
+        ultraSell: +ultraSellInput.value, ultraCogs: +ultraCogsInput.value,
+        megaSell: +megaSellInput.value, megaCogs: +megaCogsInput.value,
+    };
+    const m = calculateMetrics(op, fin);
 
-  // ---------- synchronized crosshair + badges ----------
-  const vGuideP = gP.append("line").attr("class","crosshair").style("display","none");
-  const hGuideP = gP.append("line").attr("class","crosshair-h").style("display","none");
-  const vGuideM = gM.append("line").attr("class","crosshair").style("display","none");
-  const hGuideM = gM.append("line").attr("class","crosshair-h").style("display","none");
-  const badgePX = gP.append("text")
-  .attr("class","badge")
-  .attr("y", chartHeight + 16)      // sit on x-axis
-  .style("display","none");
-  const badgePY = gP.append("text").attr("class","badge").style("display","none");
-  const badgeMX = gM.append("text")
-  .attr("class","badge")
-  .attr("y", chartHeight + 16)      // sit on x-axis
-  .style("display","none");
-  const badgeMY = gM.append("text").attr("class","badge").style("display","none");
+    // ---------- scales & helpers ----------
+    const x = d3.scaleLinear().domain([1, 552]).range([0, chartWidth]);
+    const yProfit = d3.scaleLinear()
+        .domain(d3.extent(data.profitData, d => d.value)).nice()
+        .range([chartHeight, 0]);
+    const yMargin = d3.scaleLinear()
+        .domain([
+            Math.min(0, d3.min(data.marginData, d => d.value)),
+            d3.max(data.marginData, d => d.value)
+        ]).nice()
+        .range([chartHeight, 0]);
 
-  const overlay = chartsGroup.append("rect")
-    .attr("transform", `translate(${margin.left},${margin.top})`)
-    .attr("width", chartWidth)
-    .attr("height", chartHeight*2 + (height/2 - chartHeight))
-    .attr("fill","transparent")
-    .style("pointer-events","all");
+    const bisect = d3.bisector(d => d.demand).left;
+    const fmtMoney = d3.format("$,.0f");
+    const fmtPct = v => `${d3.format(".1f")(v)}%`;
+    const reqX = x(op.dailyDemand);
+    const actX = x(m.throughputUnitsPerDay);
 
-  overlay
-    .on("mousemove", (ev) => {
-      const [mx] = d3.pointer(ev, overlay.node());
-      const clampedX = Math.max(0, Math.min(chartWidth, mx));
-      const demand = Math.round(x.invert(clampedX));
+    // shared tooltip
+    const tooltip = d3.select("body").selectAll(".profit-tooltip")
+        .data([null]).join("div").attr("class", "profit-tooltip").style("opacity", 0);
 
-      const ip = bisect(data.profitData, demand, 1);
-      const im = bisect(data.marginData, demand, 1);
-      const P = data.profitData[Math.max(0, ip-1)];
-      const Mr = data.marginData[Math.max(0, im-1)];
-      if (!P || !Mr) return;
+    const showTT = (html, ev) =>
+        tooltip.html(html).style("opacity", 1)
+            .style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
+    const hideTT = () => tooltip.style("opacity", 0);
 
-      const px = x(P.demand), py = yProfit(P.value);
-      const mx2 = x(Mr.demand), my2 = yMargin(Mr.value);
+    // ---------- reusable axes + grids (major/minor) ----------
+    function drawAxesWithGrid(g, xScale, yScale) {
+        // minor: more ticks; major: fewer, darker
+        const xMinor = d3.axisBottom(xScale).ticks(36).tickSize(-chartHeight).tickFormat("");
+        const xMajor = d3.axisBottom(xScale).ticks(12).tickSize(-chartHeight).tickFormat("");
+        const yMinor = d3.axisLeft(yScale).ticks(8).tickSize(-chartWidth).tickFormat("");
+        const yMajor = d3.axisLeft(yScale).ticks(6).tickSize(-chartWidth).tickFormat("");
 
-      // vertical guides
-      vGuideP.style("display",null).attr("x1", px).attr("x2", px).attr("y1", 0).attr("y2", chartHeight);
-      vGuideM.style("display",null).attr("x1", mx2).attr("x2", mx2).attr("y1", 0).attr("y2", chartHeight);
+        g.append("g").attr("class", "grid-minor").attr("transform", `translate(0,${chartHeight})`).call(xMinor);
+        g.append("g").attr("class", "grid-major").attr("transform", `translate(0,${chartHeight})`).call(xMajor);
+        g.append("g").attr("class", "grid-minor").call(yMinor);
+        g.append("g").attr("class", "grid-major").call(yMajor);
 
-      // horizontal guides
-      hGuideP.style("display",null).attr("x1", 0).attr("x2", chartWidth).attr("y1", py).attr("y2", py);
-      hGuideM.style("display",null).attr("x1", 0).attr("x2", chartWidth).attr("y1", my2).attr("y2", my2);
+        g.append("g").attr("class", "axis").attr("transform", `translate(0,${chartHeight})`)
+            .call(d3.axisBottom(xScale).ticks(12).tickFormat(d3.format("d")));
+        g.append("g").attr("class", "axis").call(
+            yScale === yProfit
+                ? d3.axisLeft(yScale).ticks(6).tickFormat(fmtMoney)
+                : d3.axisLeft(yScale).ticks(6).tickFormat(d => fmtPct(d))
+        );
+    }
 
-      // badges
-      badgePX.style("display",null).attr("x", px).attr("text-anchor","middle").text(P.demand);
-      badgePY.style("display",null).attr("x", -8).attr("y", py+4).attr("text-anchor","end").text(fmtMoney(P.value));
-      badgeMX.style("display",null).attr("x", mx2).attr("text-anchor","middle").text(Mr.demand);
-      badgeMY.style("display",null).attr("x", -8).attr("y", my2+4).attr("text-anchor","end").text(fmtPct(Mr.value));
+    // ---------- PROFIT CHART ----------
+    const gP = chartsGroup.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+    drawAxesWithGrid(gP, x, yProfit);
 
-      // tooltip (unified)
-      const cfg = P.config || { emp:"—", hrs:"—" };
-      showTT(
-        `<div class="h">Demand: ${P.demand} units</div>
+    gP.append("path")
+        .datum(data.profitData)
+        .attr("class", "line-profit")
+        .attr("fill", "none").attr("stroke-width", 2.6)
+        .attr("d", d3.line().x(d => x(d.demand)).y(d => yProfit(d.value)));
+
+    gP.append("text")
+        .attr("x", chartWidth / 2).attr("y", -14)
+        .attr("text-anchor", "middle")
+        .style("font-weight", 800).text("Max Gross Profit vs Daily Demand");
+
+    // requested + actual markers
+    gP.append("line").attr("class", "crosshair").attr("x1", reqX).attr("x2", reqX).attr("y1", 0).attr("y2", chartHeight);
+    gP.append("line").attr("class", "crosshair").attr("x1", actX).attr("x2", actX).attr("y1", 0).attr("y2", chartHeight);
+    gP.append("circle").attr("class", "point-now").attr("cx", actX).attr("cy", yProfit(m.dailyGrossProfit)).attr("r", 5);
+
+    // lost-profit shading if over-asked
+    if (op.dailyDemand > m.throughputUnitsPerDay) {
+        const i0 = bisect(data.profitData, m.throughputUnitsPerDay, 1);
+        const i1 = bisect(data.profitData, op.dailyDemand, 1);
+        const areaData = data.profitData.slice(Math.max(0, i0 - 1), i1);
+        if (areaData.length) {
+            const area = d3.area().x(d => x(d.demand)).y0(chartHeight).y1(d => yProfit(d.value));
+            gP.append("path").datum(areaData).attr("class", "lost-profit-area").attr("d", area);
+        }
+    }
+
+    // ---------- MARGIN CHART ----------
+    const gM = chartsGroup.append("g").attr("transform",
+        `translate(${margin.left},${margin.top + height / 2})`);
+    drawAxesWithGrid(gM, x, yMargin);
+
+    gM.append("path")
+        .datum(data.marginData)
+        .attr("class", "line-margin")
+        .attr("fill", "none").attr("stroke-width", 2.6)
+        .attr("d", d3.line().x(d => x(d.demand)).y(d => yMargin(d.value)));
+
+    gM.append("text")
+        .attr("x", chartWidth / 2).attr("y", -14)
+        .attr("text-anchor", "middle")
+        .style("font-weight", 800).text("Max Gross Profit Margin vs Daily Demand");
+
+    gM.append("text").attr("class", "axis-label")
+        .attr("x", chartWidth / 2).attr("y", chartHeight + 30)
+        .attr("text-anchor", "middle").text("Daily Demand (units)");
+
+    gM.append("line").attr("class", "crosshair").attr("x1", reqX).attr("x2", reqX).attr("y1", 0).attr("y2", chartHeight);
+    gM.append("line").attr("class", "crosshair").attr("x1", actX).attr("x2", actX).attr("y1", 0).attr("y2", chartHeight);
+    gM.append("circle").attr("class", "point-now").attr("cx", actX).attr("cy", yMargin(m.grossProfitMargin)).attr("r", 5);
+
+    // ---------- synchronized crosshair + badges ----------
+    const vGuideP = gP.append("line").attr("class", "crosshair").style("display", "none");
+    const hGuideP = gP.append("line").attr("class", "crosshair-h").style("display", "none");
+    const vGuideM = gM.append("line").attr("class", "crosshair").style("display", "none");
+    const hGuideM = gM.append("line").attr("class", "crosshair-h").style("display", "none");
+    const badgePX = gP.append("text")
+        .attr("class", "badge")
+        .attr("y", chartHeight + 16)      // sit on x-axis
+        .style("display", "none");
+    const badgePY = gP.append("text").attr("class", "badge").style("display", "none");
+    const badgeMX = gM.append("text")
+        .attr("class", "badge")
+        .attr("y", chartHeight + 16)      // sit on x-axis
+        .style("display", "none");
+    const badgeMY = gM.append("text").attr("class", "badge").style("display", "none");
+
+    const overlay = chartsGroup.append("rect")
+        .attr("transform", `translate(${margin.left},${margin.top})`)
+        .attr("width", chartWidth)
+        .attr("height", chartHeight * 2 + (height / 2 - chartHeight))
+        .attr("fill", "transparent")
+        .style("pointer-events", "all");
+
+    overlay
+        .on("mousemove", (ev) => {
+            const [mx] = d3.pointer(ev, overlay.node());
+            const clampedX = Math.max(0, Math.min(chartWidth, mx));
+            const demand = Math.round(x.invert(clampedX));
+
+            const ip = bisect(data.profitData, demand, 1);
+            const im = bisect(data.marginData, demand, 1);
+            const P = data.profitData[Math.max(0, ip - 1)];
+            const Mr = data.marginData[Math.max(0, im - 1)];
+            if (!P || !Mr) return;
+
+            const px = x(P.demand), py = yProfit(P.value);
+            const mx2 = x(Mr.demand), my2 = yMargin(Mr.value);
+
+            // vertical guides
+            vGuideP.style("display", null).attr("x1", px).attr("x2", px).attr("y1", 0).attr("y2", chartHeight);
+            vGuideM.style("display", null).attr("x1", mx2).attr("x2", mx2).attr("y1", 0).attr("y2", chartHeight);
+
+            // horizontal guides
+            hGuideP.style("display", null).attr("x1", 0).attr("x2", chartWidth).attr("y1", py).attr("y2", py);
+            hGuideM.style("display", null).attr("x1", 0).attr("x2", chartWidth).attr("y1", my2).attr("y2", my2);
+
+            // badges
+            badgePX.style("display", null).attr("x", px).attr("text-anchor", "middle").text(P.demand);
+            badgePY.style("display", null).attr("x", -8).attr("y", py + 4).attr("text-anchor", "end").text(fmtMoney(P.value));
+            badgeMX.style("display", null).attr("x", mx2).attr("text-anchor", "middle").text(Mr.demand);
+            badgeMY.style("display", null).attr("x", -8).attr("y", my2 + 4).attr("text-anchor", "end").text(fmtPct(Mr.value));
+
+            // tooltip (unified)
+            const cfg = P.config || { emp: "—", hrs: "—" };
+            showTT(
+                `<div class="h">Demand: ${P.demand} units</div>
          <div class="row"><span class="k">Optimal Profit</span><span>${fmtMoney(P.value)}</span></div>
          <div class="row"><span class="k">Optimal Margin</span><span>${fmtPct(Mr.value)}</span></div>
          <div class="row"><span class="k">Best Config</span><span>${cfg.emp} W • ${cfg.hrs} hrs</span></div>`,
-        ev
-      );
-    })
-    .on("mouseleave", () => {
-      [vGuideP,hGuideP,vGuideM,hGuideM,badgePX,badgePY,badgeMX,badgeMY].forEach(el => el.style("display","none"));
-      hideTT();
+                ev
+            );
+        })
+        .on("mouseleave", () => {
+            [vGuideP, hGuideP, vGuideM, hGuideM, badgePX, badgePY, badgeMX, badgeMY].forEach(el => el.style("display", "none"));
+            hideTT();
+        });
+
+    // ---------- RIGHT: breakdown ----------
+    const totalUnits = m.throughputUnitsPerDay;
+    const totalLabor = op.numEmployees * op.opHours * fin.laborCost;
+
+    const models = [
+        { key: "super", sell: "superSell", cogs: "superCogs" },
+        { key: "ultra", sell: "ultraSell", cogs: "ultraCogs" },
+        { key: "mega", sell: "megaSell", cogs: "megaCogs" }
+    ];
+    const perModel = models.map(md => {
+        const units = totalUnits * BUILD_RATIOS[md.key];
+        const sales = units * fin[md.sell];
+        const cogs = units * fin[md.cogs];
+        const labor = totalLabor * BUILD_RATIOS[md.key];
+        const profit = sales - cogs - labor;
+        const margin = sales > 0 ? (profit / sales) * 100 : 0;
+        return { label: md.key[0].toUpperCase() + md.key.slice(1), sales, cogs, labor, profit, margin };
     });
 
-  // ---------- RIGHT: breakdown ----------
-  const totalUnits = m.throughputUnitsPerDay;
-  const totalLabor = op.numEmployees * op.opHours * fin.laborCost;
+    const totalProfit = d3.sum(perModel, d => d.profit);
+    const totalCogs = d3.sum(perModel, d => d.cogs);
 
-  const models = [
-    { key:"super", sell:"superSell", cogs:"superCogs" },
-    { key:"ultra", sell:"ultraSell", cogs:"ultraCogs" },
-    { key:"mega",  sell:"megaSell",  cogs:"megaCogs" }
-  ];
-  const perModel = models.map(md => {
-    const units = totalUnits * BUILD_RATIOS[md.key];
-    const sales = units * fin[md.sell];
-    const cogs  = units * fin[md.cogs];
-    const labor = totalLabor * BUILD_RATIOS[md.key];
-    const profit = sales - cogs - labor;
-    const margin = sales > 0 ? (profit / sales) * 100 : 0;
-    return { label: md.key[0].toUpperCase()+md.key.slice(1), sales, cogs, labor, profit, margin };
-  });
+    const pad = Math.max(16, breakdownWidth * 0.10);
 
-  const totalProfit = d3.sum(perModel, d=>d.profit);
-  const totalCogs   = d3.sum(perModel, d=>d.cogs);
+    // top pies
+    const topHalf = breakdownGroup.append("g");
+    const topH = height / 2, pieW = breakdownWidth - 2 * pad, pieH = topH - 2 * pad;
+    topHalf.append("rect").attr("class", "breakdown-border")
+        .attr("x", pad / 2).attr("y", pad / 2)
+        .attr("width", breakdownWidth - pad).attr("height", height / 2 - pad);
 
-  const pad = Math.max(16, breakdownWidth * 0.10);
+    const pies = [
+        { title: "Overall", data: { Profit: totalProfit, Labor: totalLabor, COGS: totalCogs } },
+        { title: "Super", data: { Profit: perModel[0].profit, Labor: perModel[0].labor, COGS: perModel[0].cogs } },
+        { title: "Ultra", data: { Profit: perModel[1].profit, Labor: perModel[1].labor, COGS: perModel[1].cogs } },
+        { title: "Mega", data: { Profit: perModel[2].profit, Labor: perModel[2].labor, COGS: perModel[2].cogs } }
+    ];
+    const pieColors = { Profit: "#10b981", Labor: "#f59e0b", COGS: "#ef4444" };
+    const positions = [
+        { x: pad + pieW * 0.25, y: pad + pieH * 0.30 },
+        { x: pad + pieW * 0.75, y: pad + pieH * 0.30 },
+        { x: pad + pieW * 0.25, y: pad + pieH * 0.78 },
+        { x: pad + pieW * 0.75, y: pad + pieH * 0.78 },
+    ];
+    const R = Math.min(pieW / 4, pieH / 4) * 0.78;
+    const pie = d3.pie().value(d => d.value).sort(null);
+    const arc = d3.arc().innerRadius(0).outerRadius(R);
 
-  // top pies
-  const topHalf = breakdownGroup.append("g");
-  const topH = height/2, pieW = breakdownWidth - 2*pad, pieH = topH - 2*pad;
-  topHalf.append("rect").attr("class","breakdown-border")
-    .attr("x", pad/2).attr("y", pad/2)
-    .attr("width", breakdownWidth - pad).attr("height", height/2 - pad);
+    const pieGrid = topHalf.append("g");
+    const ttPie = d3.select("body").selectAll(".profit-tooltip.pie").data([null]).join("div")
+        .attr("class", "profit-tooltip pie").style("opacity", 0);
 
-  const pies = [
-    { title:"Overall", data:{ Profit: totalProfit, Labor: totalLabor, COGS: totalCogs } },
-    { title:"Super",   data:{ Profit: perModel[0].profit, Labor: perModel[0].labor, COGS: perModel[0].cogs } },
-    { title:"Ultra",   data:{ Profit: perModel[1].profit, Labor: perModel[1].labor, COGS: perModel[1].cogs } },
-    { title:"Mega",    data:{ Profit: perModel[2].profit, Labor: perModel[2].labor, COGS: perModel[2].cogs } }
-  ];
-  const pieColors = { Profit:"#10b981", Labor:"#f59e0b", COGS:"#ef4444" };
-  const positions = [
-    { x: pad + pieW*0.25, y: pad + pieH*0.30 },
-    { x: pad + pieW*0.75, y: pad + pieH*0.30 },
-    { x: pad + pieW*0.25, y: pad + pieH*0.78 },
-    { x: pad + pieW*0.75, y: pad + pieH*0.78 },
-  ];
-  const R = Math.min(pieW/4, pieH/4) * 0.78;
-  const pie = d3.pie().value(d=>d.value).sort(null);
-  const arc = d3.arc().innerRadius(0).outerRadius(R);
-
-  const pieGrid = topHalf.append("g");
-  const ttPie = d3.select("body").selectAll(".profit-tooltip.pie").data([null]).join("div")
-    .attr("class","profit-tooltip pie").style("opacity",0);
-
-  pies.forEach((pd, i) => {
-    const g = pieGrid.append("g").attr("transform", `translate(${positions[i].x},${positions[i].y-10})`);
-    const rows = Object.entries(pd.data).map(([k,v]) => ({ label:k, value:Math.max(0,v) }));
-    const total = d3.sum(rows, r=>r.value);
-    g.selectAll("path").data(pie(rows)).join("path")
-      .attr("d", arc).attr("fill", d=>pieColors[d.data.label])
-      .on("mouseenter", () => ttPie.style("opacity",1))
-      .on("mouseleave", () => ttPie.style("opacity",0))
-      .on("mousemove", (ev,d) => {
-        const pct = total>0 ? (d.data.value/total*100).toFixed(1) : 0;
-        ttPie.html(
-          `<div class="h">${pd.title}: ${d.data.label}</div>
+    pies.forEach((pd, i) => {
+        const g = pieGrid.append("g").attr("transform", `translate(${positions[i].x},${positions[i].y - 10})`);
+        const rows = Object.entries(pd.data).map(([k, v]) => ({ label: k, value: Math.max(0, v) }));
+        const total = d3.sum(rows, r => r.value);
+        g.selectAll("path").data(pie(rows)).join("path")
+            .attr("d", arc).attr("fill", d => pieColors[d.data.label])
+            .on("mouseenter", () => ttPie.style("opacity", 1))
+            .on("mouseleave", () => ttPie.style("opacity", 0))
+            .on("mousemove", (ev, d) => {
+                const pct = total > 0 ? (d.data.value / total * 100).toFixed(1) : 0;
+                ttPie.html(
+                    `<div class="h">${pd.title}: ${d.data.label}</div>
            <div class="row"><span class="k">Amount</span><span>${fmtMoney(d.data.value)}</span></div>
            <div class="row"><span class="k">Share</span><span>${pct}%</span></div>`
-        ).style("left",(ev.clientX+14)+"px").style("top",(ev.clientY-24)+"px");
-      });
-    g.append("text").attr("class","pie-title").attr("y", -R - 10).text(pd.title);
-  });
+                ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
+            });
+        g.append("text").attr("class", "pie-title").attr("y", -R - 10).text(pd.title);
+    });
 
-  const legend = topHalf.append("g").attr("transform", `translate(${pad},${topH - pad - 14})`);
-  const legData = Object.entries(pieColors).map(([label,color])=>({label,color}));
-  const liW = (breakdownWidth - 2*pad)/legData.length;
-  const li = legend.selectAll(".li").data(legData).join("g")
-    .attr("class","li").attr("transform",(d,i)=>`translate(${i*liW},0)`);
-  li.append("rect").attr("width",12).attr("height",12).attr("fill",d=>d.color).attr("rx",2);
-  li.append("text").attr("x",16).attr("y",10.5).style("font-size","12px").style("font-weight",700).text(d=>d.label);
+    const legend = topHalf.append("g").attr("transform", `translate(${pad},${topH - pad - 14})`);
+    const legData = Object.entries(pieColors).map(([label, color]) => ({ label, color }));
+    const liW = (breakdownWidth - 2 * pad) / legData.length;
+    const li = legend.selectAll(".li").data(legData).join("g")
+        .attr("class", "li").attr("transform", (d, i) => `translate(${i * liW},0)`);
+    li.append("rect").attr("width", 12).attr("height", 12).attr("fill", d => d.color).attr("rx", 2);
+    li.append("text").attr("x", 16).attr("y", 10.5).style("font-size", "12px").style("font-weight", 700).text(d => d.label);
 
-  // bottom bars
-  const bottomHalf = breakdownGroup.append("g").attr("transform", `translate(0,${height/2})`);
-  bottomHalf.append("rect").attr("class","breakdown-border")
-    .attr("x", pad/2).attr("y", pad/2)
-    .attr("width", breakdownWidth - pad).attr("height", height/2 - pad);
+    // bottom bars
+    const bottomHalf = breakdownGroup.append("g").attr("transform", `translate(0,${height / 2})`);
+    bottomHalf.append("rect").attr("class", "breakdown-border")
+        .attr("x", pad / 2).attr("y", pad / 2)
+        .attr("width", breakdownWidth - pad).attr("height", height / 2 - pad);
 
-  const barM = { top: 30, right: 22, bottom: 40, left: 64 };
-  const barH = height/2 - 2*pad - barM.top - barM.bottom;
-  const barW = breakdownWidth - 2*pad - barM.left - barM.right;
+    const barM = { top: 30, right: 22, bottom: 40, left: 64 };
+    const barH = height / 2 - 2 * pad - barM.top - barM.bottom;
+    const barW = breakdownWidth - 2 * pad - barM.left - barM.right;
 
-  const gB = bottomHalf.append("g").attr("transform",
-              `translate(${pad + barM.left},${pad + barM.top})`);
+    const gB = bottomHalf.append("g").attr("transform",
+        `translate(${pad + barM.left},${pad + barM.top})`);
 
-  const xBand = d3.scaleBand().domain(perModel.map(d=>d.label)).range([0,barW]).padding(0.25);
-  const yBar  = d3.scaleLinear().domain([0, d3.max(perModel, d=>d.profit)]).nice().range([barH, 0]);
+    const xBand = d3.scaleBand().domain(perModel.map(d => d.label)).range([0, barW]).padding(0.25);
+    const yBar = d3.scaleLinear().domain([0, d3.max(perModel, d => d.profit)]).nice().range([barH, 0]);
 
-  gB.append("g").attr("class","axis").call(d3.axisLeft(yBar).ticks(5).tickFormat(fmtMoney));
-  gB.append("g").attr("class","axis").attr("transform",`translate(0,${barH})`)
-    .call(d3.axisBottom(xBand));
+    gB.append("g").attr("class", "axis").call(d3.axisLeft(yBar).ticks(5).tickFormat(fmtMoney));
+    gB.append("g").attr("class", "axis").attr("transform", `translate(0,${barH})`)
+        .call(d3.axisBottom(xBand));
 
-  gB.append("text").attr("class","axis-label").attr("transform","rotate(-90)")
-    .attr("x",-barH/2).attr("y",-barM.left+16).attr("text-anchor","middle").text("Gross Profit ($)");
-  gB.append("text").attr("class","axis-label")
-    .attr("x", barW/2).attr("y", barH + barM.bottom - 6).attr("text-anchor","middle").text("Model");
+    gB.append("text").attr("class", "axis-label").attr("transform", "rotate(-90)")
+        .attr("x", -barH / 2).attr("y", -barM.left + 16).attr("text-anchor", "middle").text("Gross Profit ($)");
+    gB.append("text").attr("class", "axis-label")
+        .attr("x", barW / 2).attr("y", barH + barM.bottom - 6).attr("text-anchor", "middle").text("Model");
 
-  const modelColor = { Super:"#4E79A7", Ultra:"#F2D12B", Mega:"#E15759" };
+    const modelColor = { Super: "#4E79A7", Ultra: "#F2D12B", Mega: "#E15759" };
 
-  const ttBar = d3.select("body").selectAll(".profit-tooltip.bar").data([null]).join("div")
-    .attr("class","profit-tooltip bar").style("opacity",0);
+    const ttBar = d3.select("body").selectAll(".profit-tooltip.bar").data([null]).join("div")
+        .attr("class", "profit-tooltip bar").style("opacity", 0);
 
-  gB.selectAll("rect").data(perModel).join("rect")
-    .attr("x", d=>xBand(d.label)).attr("width", xBand.bandwidth())
-    .attr("y", d=>yBar(Math.max(0,d.profit)))
-    .attr("height", d=>barH - yBar(Math.max(0,d.profit)))
-    .attr("rx", 4).attr("fill", d=>modelColor[d.label] || "#64748b")
-    .on("mouseenter", () => ttBar.style("opacity",1))
-    .on("mouseleave", () => ttBar.style("opacity",0))
-    .on("mousemove", (ev,d) => {
-      ttBar.html(
-       `<div class="h">${d.label}</div>
+    gB.selectAll("rect").data(perModel).join("rect")
+        .attr("x", d => xBand(d.label)).attr("width", xBand.bandwidth())
+        .attr("y", d => yBar(Math.max(0, d.profit)))
+        .attr("height", d => barH - yBar(Math.max(0, d.profit)))
+        .attr("rx", 4).attr("fill", d => modelColor[d.label] || "#64748b")
+        .on("mouseenter", () => ttBar.style("opacity", 1))
+        .on("mouseleave", () => ttBar.style("opacity", 0))
+        .on("mousemove", (ev, d) => {
+            ttBar.html(
+                `<div class="h">${d.label}</div>
         <div class="row"><span class="k">Profit</span><span>${fmtMoney(d.profit)}</span></div>
         <div class="row"><span class="k">Margin</span><span>${fmtPct(d.margin)}</span></div>`
-      ).style("left",(ev.clientX+14)+"px").style("top",(ev.clientY-24)+"px");
-    });
+            ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
+        });
 }
-
-
 
 function getFinancialInputsKey() {
     const finInputs = {
@@ -2056,7 +2084,7 @@ function getFinancialInputsKey() {
         megaSell: parseFloat(megaSellInput.value),
         megaCogs: parseFloat(megaCogsInput.value),
     };
-    return 'profitDataCache-' + JSON.stringify(finInputs);
+    return 'profitDataCache-v${PROFIT_CALC_VERSION-' + JSON.stringify(finInputs);
 }
 
 function initializeAndRunProfitCalculation() {
@@ -2079,10 +2107,10 @@ function initializeAndRunProfitCalculation() {
     }
 }
 
+
 async function calculateOptimalProfitData() {
     if (isProfitCalculating) return;
     isProfitCalculating = true;
-
     const finInputs = {
         laborCost: parseFloat(laborCostInput.value),
         superSell: parseFloat(superSellInput.value),
@@ -2093,12 +2121,10 @@ async function calculateOptimalProfitData() {
         megaCogs: parseFloat(megaCogsInput.value),
     };
     const key = getFinancialInputsKey();
-
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     if (activeTab === 'profit') {
         drawProfitPanel();
     }
-
     return new Promise(resolve => {
         setTimeout(() => {
             const profitData = [];
@@ -2107,26 +2133,22 @@ async function calculateOptimalProfitData() {
             try {
                 state.configData = originalConfigData;
                 for (let demand = 1; demand <= 552; demand++) {
-                    let maxProfit = -Infinity, maxMargin = -Infinity;
-                    let maxProfitConfig = { emp: 0, hrs: 0 }, maxMarginConfig = { emp: 0, hrs: 0 };
-
-                    for (let opHours = 1; opHours <= 24; opHours += 0.25) {
-                        const taktTime = (opHours * 60) / demand;
-                        for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
-                            if (!originalConfigData[numEmployees] || Object.keys(originalConfigData[numEmployees]).length === 0) continue;
-
-                            const bottleneckTime = calculateWorkstationDetails(numEmployees).bottleneckTime;
-                            if (bottleneckTime > 0 && bottleneckTime <= taktTime) {
-                                const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
-                                if (metrics) {
-                                    if (metrics.dailyGrossProfit > maxProfit) {
-                                        maxProfit = metrics.dailyGrossProfit;
-                                        maxProfitConfig = { emp: numEmployees, hrs: opHours };
-                                    }
-                                    if (metrics.grossProfitMargin > maxMargin) {
-                                        maxMargin = metrics.grossProfitMargin;
-                                        maxMarginConfig = { emp: numEmployees, hrs: opHours };
-                                    }
+                    let maxProfit = -Infinity;
+                    let maxProfitConfig = { emp: 0, hrs: 0 };
+                    let maxMargin = -Infinity;
+                    let maxMarginConfig = { emp: 0, hrs: 0 };
+                    const startWorkstation = getMinWorkstationsForDemand(demand);
+                    for (let numEmployees = startWorkstation; numEmployees <= 13; numEmployees++) {
+                        for (let opHours = 1; opHours <= 24; opHours += 0.25) {
+                            const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
+                            if (metrics && metrics.throughputUnitsPerDay >= demand) {
+                                if (metrics.dailyGrossProfit > maxProfit) {
+                                    maxProfit = metrics.dailyGrossProfit;
+                                    maxProfitConfig = { emp: numEmployees, hrs: opHours };
+                                }
+                                if (metrics.grossProfitMargin > maxMargin) {
+                                    maxMargin = metrics.grossProfitMargin;
+                                    maxMarginConfig = { emp: numEmployees, hrs: opHours };
                                 }
                             }
                         }
@@ -2134,25 +2156,22 @@ async function calculateOptimalProfitData() {
                     profitData.push({ demand, value: isFinite(maxProfit) ? maxProfit : 0, config: maxProfitConfig });
                     marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0, config: maxMarginConfig });
                 }
+                const calculatedData = { profitData, marginData };
+                profitMaximizationCache = { key, data: calculatedData };
+                try {
+                    sessionStorage.setItem(key, JSON.stringify(calculatedData));
+                    console.log("Profit data saved to session cache and is now correct.");
+                } catch (e) {
+                    console.error("Could not save profit data to session storage.", e);
+                }
             } finally {
                 state.configData = originalStateConfig;
+                isProfitCalculating = false;
+                if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
+                    drawProfitPanel();
+                }
+                resolve();
             }
-
-            const calculatedData = { profitData, marginData };
-            profitMaximizationCache = { key, data: calculatedData };
-
-            try {
-                sessionStorage.setItem(key, JSON.stringify(calculatedData));
-                console.log("Profit data saved to session cache.");
-            } catch (e) {
-                console.error("Could not save profit data to session storage.", e);
-            }
-
-            isProfitCalculating = false;
-            if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
-                drawProfitPanel();
-            }
-            resolve();
         }, 50);
     });
 }
@@ -3287,8 +3306,6 @@ function drawEfficiencyPanel() {
         .html(d => `Workstation Balance Loss: <tspan fill="#e74c3c">${d.balanceDelay.toFixed(1)}%</tspan>`);
 }
 
-// Self-contained module for the Investment Analysis Tab.
-// Encapsulated in an IIFE to prevent global scope pollution.
 const drawInvestmentPanel = (function () {
     // State management for investment inputs
     const investmentState = {
@@ -3308,7 +3325,6 @@ const drawInvestmentPanel = (function () {
         macrsClass: '5-year',
         runExpansionCase: false
     };
-
     // --- MODULE-LEVEL VARIABLES ---
     const MACRS_RATES = {
         '5-year': [0.2000, 0.3200, 0.1920, 0.1152, 0.1152, 0.0576],
@@ -3316,19 +3332,15 @@ const drawInvestmentPanel = (function () {
     };
     let isListenerAttached = false;
     let analysisDebounceTimer;
-
     // --- UTILITY & CALCULATION FUNCTIONS ---
-
     function formatNumberWithCommas(num) {
         if (num === null || num === undefined) return '';
         return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
     }
-
     function parseFormattedNumber(str) {
         if (typeof str !== 'string') return str;
         return parseFloat(str.replace(/,/g, '')) || 0;
     }
-
     function updateDemandScenariosFromDemand() {
         const targetDailyDemand = parseFloat(dailyDemandInput.value) || 180;
         const p50 = Math.round(targetDailyDemand * investmentState.workingDays);
@@ -3345,7 +3357,6 @@ const drawInvestmentPanel = (function () {
         if (p50Input) p50Input.value = formatNumberWithCommas(p50);
         if (p10Input) p10Input.value = formatNumberWithCommas(p10);
     }
-
     function formatMetric(value, format) {
         if (isNaN(value) || !isFinite(value)) return 'N/A';
         switch (format) {
@@ -3361,7 +3372,6 @@ const drawInvestmentPanel = (function () {
                 return value;
         }
     }
-
     function calculateConveyorCost(numWorkstations) {
         const isEven = numWorkstations % 2 === 0;
         const numBends = (4 * numWorkstations) - (isEven ? 2 : 0);
@@ -3369,12 +3379,10 @@ const drawInvestmentPanel = (function () {
         const costBends = investmentState.costPerBend * numBends;
         return costStraights + costBends; // Note: Installation cost is separate now
     }
-
     function updateCalculatedCosts() {
         const totalFixed = investmentState.mfgOverhead + investmentState.sgaExpenses;
         d3.select("#inv-totalFixedCost").text(formatMetric(totalFixed, 'currency') + " / year");
     }
-
     function calculateNPV(cashFlows, rate) {
         let npv = cashFlows[0] || 0;
         for (let t = 1; t < cashFlows.length; t++) {
@@ -3382,7 +3390,6 @@ const drawInvestmentPanel = (function () {
         }
         return npv;
     }
-
     function calculateIRR(cashFlows, maxIter = 100, tolerance = 1e-7) {
         if (!cashFlows || cashFlows.length === 0 || cashFlows[0] >= 0) {
             return NaN;
@@ -3422,7 +3429,6 @@ const drawInvestmentPanel = (function () {
         }
         return (lowRate + highRate) / 2;
     }
-
     function calculatePaybackPeriod(cashFlows) {
         if (!cashFlows || cashFlows.length < 2) return Infinity;
         const initialInvestment = Math.abs(cashFlows[0]);
@@ -3443,7 +3449,6 @@ const drawInvestmentPanel = (function () {
         }
         return Infinity;
     }
-
     // --- CORE LOGIC FUNCTIONS ---
     function calculateFinancialScenario(annualUnitDemand) {
         const { analysisPeriod, marr, taxRate, workingDays, macrsClass, runExpansionCase, salvageValue, installationCost } = investmentState;
@@ -3452,7 +3457,6 @@ const drawInvestmentPanel = (function () {
         let unitsToProduce = 0, configForReport = {}, initialInvestment = 0, equipmentCostForDepreciation = 0;
         const currentEmployees = parseInt(numEmployeesInput.value);
         const baseOpHours = parseFloat(opHoursInput.value);
-
         if (!runExpansionCase) {
             const metrics = calculateMetrics({ dailyDemand: 9999, opHours: baseOpHours, numEmployees: currentEmployees }, {});
             const maxAnnualCapacity = metrics.throughputUnitsPerDay * workingDays;
@@ -3464,7 +3468,10 @@ const drawInvestmentPanel = (function () {
         } else {
             let optimalConfig = { meetsDemand: false, empCount: 0, opHours: 0 };
             let minCompositeCost = Infinity;
-            for (let emp = 3; emp <= 13; emp++) {
+            // Optimization: Determine the minimum feasible workstation count for the target daily demand
+            const startWorkstation = getMinWorkstationsForDemand(dailyUnitDemand);
+            // Optimization: The 'emp' loop now starts from the calculated minimum feasible value
+            for (let emp = startWorkstation; emp <= 13; emp++) {
                 for (let hrs = 1; hrs <= 24; hrs += 0.25) {
                     const metrics = calculateMetrics({ dailyDemand: dailyUnitDemand, opHours: hrs, numEmployees: emp }, {});
                     if (metrics.meetsDemand) {
@@ -3531,7 +3538,6 @@ const drawInvestmentPanel = (function () {
         const payback = calculatePaybackPeriod(cashFlows);
         return { dailyUnitDemand, annualUnitDemand, requiredConfig: configForReport, metrics: { npv, irr, payback, initialInvestment }, cashFlows };
     }
-
     function runFullAnalysis() {
         const resultsDisplay = d3.select("#inv-results-display");
         const resultsPlaceholder = d3.select("#inv-results-placeholder");
@@ -3557,7 +3563,6 @@ const drawInvestmentPanel = (function () {
             }
         }, 50);
     }
-
     // --- D3 RENDERING FUNCTIONS ---
     function renderFunnel(results, containerSelector) {
         const container = d3.select(containerSelector);
@@ -3592,22 +3597,18 @@ const drawInvestmentPanel = (function () {
             textBlock.append("tspan").attr("class", "funnel-value").attr("x", width / 2).attr("dy", "1.2em").text(formatNumberWithCommas(d.value) + " u/yr");
         });
     }
-
     function renderInvestmentResults(results) {
         const resultsNode = d3.select('.inv-results-column').node();
         if (!resultsNode) return;
         const totalHeight = resultsNode.clientHeight * 0.95;
         const topThirdHeight = Math.floor(totalHeight / 3);
         const bottomTwoThirdsHeight = totalHeight - topThirdHeight;
-
         const scorecardHeight = 95;
         const funnelHeight = topThirdHeight - scorecardHeight;
-
         d3.select(".inv-scorecard-container").style('height', `${scorecardHeight > 0 ? scorecardHeight : 0}px`);
         d3.select(".inv-funnel-container").style('height', `${funnelHeight > 0 ? funnelHeight : 0}px`);
         d3.select(".inv-chart-container").style('height', `${bottomTwoThirdsHeight > 0 ? bottomTwoThirdsHeight : 0}px`);
         // --- FIX END ---
-
         const p50Result = results['P50 (Most Likely)'];
         const scorecardContainer = d3.select(".inv-scorecard-container");
         scorecardContainer.html("");
@@ -3617,9 +3618,7 @@ const drawInvestmentPanel = (function () {
         scorecardContainer.selectAll(".inv-scorecard")
             .data([{ label: 'Net Present Value (NPV)', value: formatMetric(p50Result.metrics.npv, 'currency') }, { label: 'Internal Rate of Return (IRR)', value: displayIRR }, { label: 'Payback Period (Years)', value: displayPayback }])
             .join("div").attr("class", "inv-scorecard").html(d => `<div class="inv-scorecard-label">${d.label}</div><div class="inv-scorecard-value">${d.value}</div>`);
-
         renderFunnel(results, ".inv-funnel-container");
-
         const chartContainer = d3.select(".inv-chart-container");
         chartContainer.html("");
         d3.select(".inv-tooltip").remove();
@@ -3672,7 +3671,6 @@ const drawInvestmentPanel = (function () {
             .on("mousemove", (event) => tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px"))
             .on("mouseout", () => tooltip.transition().duration(500).style("opacity", 0));
     }
-
     function draw() {
         if (!isListenerAttached) {
             const relevantInputs = [dailyDemandInput, opHoursInput, laborCostInput, superSellInput, superCogsInput, ultraSellInput, ultraCogsInput, megaSellInput, megaCogsInput];
@@ -3765,7 +3763,6 @@ const drawInvestmentPanel = (function () {
         updateCalculatedCosts();
         runFullAnalysis();
     }
-
     const styleId = 'investment-styles';
     if (!document.getElementById(styleId)) {
         const styleSheet = document.createElement("style");
