@@ -1633,72 +1633,65 @@ async function calculateOptimalProfitData() {
         megaSell: parseFloat(megaSellInput.value),
         megaCogs: parseFloat(megaCogsInput.value),
     };
-
-    const key = getFinancialInputsKey();
-    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-    if (activeTab === 'profit') {
+    const key = getFinancialInputsKey() + '-demand50plus'; // Add suffix for new range
+    if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
         drawProfitPanel();
     }
-    return new Promise(resolve => {
-        setTimeout(() => {
-            const profitData = [];
-            const marginData = [];
-            const originalStateConfig = state.configData;
-            try {
-                state.configData = originalConfigData;
-                for (let demand = 10; demand <= 552; demand++) {
-                    let maxProfit = -Infinity, maxMargin = -Infinity;
-                    let maxProfitConfig = { emp: 0, hrs: 0 }, maxMarginConfig = { emp: 0, hrs: 0 };
-                    // Determine the minimum feasible number of workstations for the current demand
-                    const startWorkstation = getMinWorkstationsForDemand(demand);
-                    for (let opHours = 1; opHours <= 24; opHours += 0.25) {
-                        const totalAvailableMinutes = Math.floor(opHours * 4) * 15;
-                        // Loop starts from the minimum feasible workstation count, saving cycles
-                        for (let numEmployees = startWorkstation; numEmployees <= 13; numEmployees++) {
-                            if (!originalConfigData[numEmployees] || Object.keys(originalConfigData[numEmployees]).length === 0) continue;
-                            const { bottleneckTime, fastestTime } = calculateWorkstationDetails(numEmployees);
-                            if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) continue;
-                            const productSpacing = fastestTime * 15;
-                            const throughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckTime;
-                            const totalRequiredTime = (demand > 1 ? (demand - 1) * bottleneckTime : 0) + throughputTime;
-                            if (totalRequiredTime <= totalAvailableMinutes) {
-                                const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
-                                // Final safeguard check ensures the configuration is truly valid
-                                if (metrics && metrics.throughputUnitsPerDay >= demand) {
-                                    // Gross Profit and Margin are tracked independently
-                                    if (metrics.dailyGrossProfit > maxProfit) {
-                                        maxProfit = metrics.dailyGrossProfit;
-                                        maxProfitConfig = { emp: numEmployees, hrs: opHours };
-                                    }
-                                    if (metrics.grossProfitMargin > maxMargin) {
-                                        maxMargin = metrics.grossProfitMargin;
-                                        maxMarginConfig = { emp: numEmployees, hrs: opHours };
-                                    }
-                                }
+    setTimeout(() => {
+        const profitData = [];
+        const marginData = [];
+        const originalStateConfig = JSON.parse(JSON.stringify(state.configData));
+        try {
+            state.configData = originalConfigData;
+            for (let demand = 50; demand <= 552; demand++) {
+                let maxProfit = -Infinity;
+                let maxProfitConfig = { emp: 0, hrs: 0 };
+                let maxMargin = -Infinity;
+                let maxMarginConfig = { emp: 0, hrs: 0 };
+                for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
+                    if (!originalConfigData[numEmployees] || Object.keys(originalConfigData[numEmployees]).length === 0) continue;
+                    const { bottleneckTime, fastestTime } = calculateWorkstationDetails(numEmployees);
+                    if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) continue;
+                    const productSpacing = fastestTime * 15;
+                    const throughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckTime;
+                    const totalRequiredMinutes = (demand > 1 ? (demand - 1) * bottleneckTime : 0) + throughputTime;
+                    const minRequiredHours = totalRequiredMinutes / 60;
+                    if (minRequiredHours > 24) continue;
+                    const startHours = roundUpToQuarter(minRequiredHours);
+                    for (let opHours = startHours; opHours <= 24; opHours += 0.25) {
+                        const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
+                        if (metrics && metrics.throughputUnitsPerDay >= demand) {
+                            if (metrics.dailyGrossProfit > maxProfit) {
+                                maxProfit = metrics.dailyGrossProfit;
+                                maxProfitConfig = { emp: numEmployees, hrs: opHours };
                             }
+                            if (metrics.grossProfitMargin > maxMargin) {
+                                maxMargin = metrics.grossProfitMargin;
+                                maxMarginConfig = { emp: numEmployees, hrs: opHours };
+                            }
+                            break;
                         }
                     }
-                    profitData.push({ demand, value: isFinite(maxProfit) ? maxProfit : 0, config: maxProfitConfig });
-                    marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0, config: maxMarginConfig });
                 }
-            } finally {
-                state.configData = originalStateConfig;
+                profitData.push({ demand, value: isFinite(maxProfit) ? maxProfit : 0, config: maxProfitConfig });
+                marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0, config: maxMarginConfig });
             }
             const calculatedData = { profitData, marginData };
             profitMaximizationCache = { key, data: calculatedData };
             try {
                 sessionStorage.setItem(key, JSON.stringify(calculatedData));
-                console.log("Profit data saved to session cache.");
+                console.log("Optimized profit data calculated and saved to session cache.");
             } catch (e) {
                 console.error("Could not save profit data to session storage.", e);
             }
+        } finally {
+            state.configData = originalStateConfig;
             isProfitCalculating = false;
             if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
                 drawProfitPanel();
             }
-            resolve();
-        }, 50);
-    });
+        }
+    }, 50);
 }
 
 function drawProfitPanel() {
@@ -1745,8 +1738,6 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
         return;
     }
     const data = profitMaximizationCache.data;
-    const filteredProfitData = data.profitData.filter(d => d.demand >= 10);
-    const filteredMarginData = data.marginData.filter(d => d.demand >= 10);
     const margin = { top: 42, right: 22, bottom: 42, left: 92 };
     const breakdownWidth = Math.max(280, width * 0.32);
     const chartsWidth = width - breakdownWidth;
@@ -1766,15 +1757,18 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
         megaSell: +megaSellInput.value, megaCogs: +megaCogsInput.value,
     };
     const m = calculateMetrics(op, fin);
-    const x = d3.scaleLinear().domain([10, 552]).range([0, chartWidth]);
-    const yProfit = d3.scaleLinear()
-        .domain(d3.extent(data.profitData, d => d.value)).nice()
-        .range([chartHeight, 0]);
-    const minMargin = d3.min(filteredMarginData, d => d.value);
-    const maxMargin = d3.max(filteredMarginData, d => d.value);
-    const yMargin = d3.scaleLinear()
-        .domain([minMargin, maxMargin * 1.01])
-        .range([chartHeight, 0]);
+    const x = d3.scaleLinear().domain([50, 552]).range([0, chartWidth]);
+    const currentProfit = m.dailyGrossProfit;
+    const optimalMinProfit = d3.min(data.profitData, d => d.value);
+    const optimalMaxProfit = d3.max(data.profitData, d => d.value);
+    const yProfitDomain = [Math.min(currentProfit, optimalMinProfit), Math.max(currentProfit, optimalMaxProfit)];
+    const yProfit = d3.scaleLinear().domain(yProfitDomain).nice().range([chartHeight, 0]);
+    const filteredMarginData = data.marginData.filter(d => d.demand > 50);
+    const currentMargin = m.grossProfitMargin;
+    const optimalMinMargin = d3.min(filteredMarginData, d => d.value);
+    const optimalMaxMargin = d3.max(filteredMarginData, d => d.value);
+    const yMarginDomain = [Math.min(currentMargin, optimalMinMargin), Math.max(currentMargin, optimalMaxMargin)];
+    const yMargin = d3.scaleLinear().domain(yMarginDomain).nice().range([chartHeight, 0]);
     const bisect = d3.bisector(d => d.demand).left;
     const fmtMoney = d3.format("$,.0f");
     const fmtPct = v => `${d3.format(".1f")(v)}%`;
@@ -1808,36 +1802,33 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
     const vGuideP = gP.append("line").attr("class", "crosshair").style("display", "none");
     const hGuideP = gP.append("line").attr("class", "crosshair-h").style("display", "none");
     gP.append("path")
-        .datum(filteredProfitData)
+        .datum(data.profitData.filter(d => d.demand > 50))
         .attr("class", "line-profit")
         .attr("fill", "none").attr("stroke-width", 2.6)
         .attr("d", d3.line().x(d => x(d.demand)).y(d => yProfit(d.value)));
     const i_act_profit = bisect(data.profitData, m.throughputUnitsPerDay, 1);
     const profit_at_act = data.profitData[Math.max(0, i_act_profit - 1)].value;
     const y_at_act_profit = yProfit(profit_at_act);
+    const y_current_profit = yProfit(m.dailyGrossProfit);
     gP.append("line")
         .attr("stroke", "black")
         .attr("stroke-width", 1.5)
         .attr("x1", actX).attr("x2", actX)
-        .attr("y1", chartHeight).attr("y2", y_at_act_profit);
+        .attr("y1", y_at_act_profit).attr("y2", y_current_profit);
     if (op.dailyDemand > m.throughputUnitsPerDay) {
         const i_req = bisect(data.profitData, op.dailyDemand, 1);
         const profit_at_req = data.profitData[Math.max(0, i_req - 1)].value;
         const y_at_req = yProfit(profit_at_req);
+        gP.append("path")
+            .attr("d", `M ${actX},${y_at_act_profit} L ${reqX},${y_at_req} L ${reqX},${y_current_profit} L ${actX},${y_current_profit} Z`)
+            .attr("class", "lost-profit-area");
         gP.append("line")
             .attr("stroke", "red")
             .attr("stroke-width", 1.5)
             .attr("x1", reqX).attr("x2", reqX)
-            .attr("y1", chartHeight).attr("y2", y_at_req);
-        const i0 = bisect(data.profitData, m.throughputUnitsPerDay, 1);
-        const i1 = bisect(data.profitData, op.dailyDemand, 1);
-        const areaData = data.profitData.slice(Math.max(0, i0 - 1), i1 + 1);
-        if (areaData.length) {
-            const area = d3.area().x(d => x(d.demand)).y0(chartHeight).y1(d => yProfit(d.value));
-            gP.append("path").datum(areaData).attr("class", "lost-profit-area").attr("d", area);
-        }
+            .attr("y1", y_at_req).attr("y2", y_current_profit);
     }
-    gP.append("circle").attr("class", "point-now").attr("cx", actX).attr("cy", yProfit(m.dailyGrossProfit)).attr("r", 5);
+    gP.append("circle").attr("class", "point-now").attr("cx", actX).attr("cy", y_current_profit).attr("r", 5);
     gP.append("text")
         .attr("x", chartWidth / 2).attr("y", -14)
         .attr("text-anchor", "middle")
@@ -1884,29 +1875,26 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
     const i_act_margin = bisect(data.marginData, m.throughputUnitsPerDay, 1);
     const margin_at_act = data.marginData[Math.max(0, i_act_margin - 1)].value;
     const y_at_act_margin = yMargin(margin_at_act);
+    const y_current_margin = yMargin(m.grossProfitMargin);
     gM.append("line")
         .attr("stroke", "black")
         .attr("stroke-width", 1.5)
         .attr("x1", actX).attr("x2", actX)
-        .attr("y1", chartHeight).attr("y2", y_at_act_margin);
+        .attr("y1", y_at_act_margin).attr("y2", y_current_margin);
     if (op.dailyDemand > m.throughputUnitsPerDay) {
         const i_req_margin = bisect(data.marginData, op.dailyDemand, 1);
         const margin_at_req = data.marginData[Math.max(0, i_req_margin - 1)].value;
         const y_at_req_margin = yMargin(margin_at_req);
+        gM.append("path")
+            .attr("d", `M ${actX},${y_at_act_margin} L ${reqX},${y_at_req_margin} L ${reqX},${y_current_margin} L ${actX},${y_current_margin} Z`)
+            .attr("class", "lost-profit-area");
         gM.append("line")
             .attr("stroke", "red")
             .attr("stroke-width", 1.5)
             .attr("x1", reqX).attr("x2", reqX)
-            .attr("y1", chartHeight).attr("y2", y_at_req_margin);
-        const i0 = bisect(data.marginData, m.throughputUnitsPerDay, 1);
-        const i1 = bisect(data.marginData, op.dailyDemand, 1);
-        const areaData = data.marginData.slice(Math.max(0, i0 - 1), i1 + 1);
-        if (areaData.length) {
-            const area = d3.area().x(d => x(d.demand)).y0(chartHeight).y1(d => yMargin(d.value));
-            gM.append("path").datum(areaData).attr("class", "lost-profit-area").attr("d", area);
-        }
+            .attr("y1", y_at_req_margin).attr("y2", y_current_margin);
     }
-    gM.append("circle").attr("class", "point-now").attr("cx", actX).attr("cy", yMargin(m.grossProfitMargin)).attr("r", 5);
+    gM.append("circle").attr("class", "point-now").attr("cx", actX).attr("cy", y_current_margin).attr("r", 5);
     gM.append("text")
         .attr("x", chartWidth / 2).attr("y", -14)
         .attr("text-anchor", "middle")
@@ -1973,7 +1961,7 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
         { title: "Ultra", data: { Profit: perModel[1].profit, Labor: perModel[1].labor, COGS: perModel[1].cogs } },
         { title: "Mega", data: { Profit: perModel[2].profit, Labor: perModel[2].labor, COGS: perModel[2].cogs } }
     ];
-    const pieColors = { Profit: "#10b981", Labor: "#f59e0b", COGS: "#ef4444" };
+    const pieColors = { Profit: "#10b981", Labor: "#f59e0b", COGS: "#ef4444", Loss: "#d63031" };
     const positions = [
         { x: pad + pieW * 0.25, y: pad + pieH * 0.30 },
         { x: pad + pieW * 0.75, y: pad + pieH * 0.30 },
@@ -1988,7 +1976,13 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
         .attr("class", "profit-tooltip pie").style("opacity", 0);
     pies.forEach((pd, i) => {
         const g = pieGrid.append("g").attr("transform", `translate(${positions[i].x},${positions[i].y - 10})`);
-        const rows = Object.entries(pd.data).map(([k, v]) => ({ label: k, value: Math.max(0, v) }));
+        const isLoss = pd.data.Profit < 0;
+        const chartData = isLoss
+            ? { Loss: -pd.data.Profit, Labor: pd.data.Labor, COGS: pd.data.COGS }
+            : { Profit: pd.data.Profit, Labor: pd.data.Labor, COGS: pd.data.COGS };
+        const rows = Object.entries(chartData)
+            .map(([k, v]) => ({ label: k, value: v }))
+            .filter(d => d.value > 1e-6);
         const total = d3.sum(rows, r => r.value);
         g.selectAll("path").data(pie(rows)).join("path")
             .attr("d", arc).attr("fill", d => pieColors[d.data.label])
@@ -1996,16 +1990,18 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
             .on("mouseleave", () => ttPie.style("opacity", 0))
             .on("mousemove", (ev, d) => {
                 const pct = total > 0 ? (d.data.value / total * 100).toFixed(1) : 0;
+                const amountValue = d.data.label === 'Loss' ? `-${fmtMoney(d.data.value)}` : fmtMoney(d.data.value);
+                const shareLabel = isLoss ? 'Share of Costs & Loss' : 'Share';
                 ttPie.html(
                     `<div class="h">${pd.title}: ${d.data.label}</div>
-<div class="row"><span class="k">Amount</span><span>${fmtMoney(d.data.value)}</span></div>
-<div class="row"><span class="k">Share</span><span>${pct}%</span></div>`
+<div class="row"><span class="k">Amount</span><span>${amountValue}</span></div>
+<div class="row"><span class="k">${shareLabel}</span><span>${pct}%</span></div>`
                 ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
             });
         g.append("text").attr("class", "pie-title").attr("y", -R - 10).text(pd.title);
     });
     const legend = topHalf.append("g").attr("transform", `translate(${pad},${topH - pad - 14})`);
-    const legData = Object.entries(pieColors).map(([label, color]) => ({ label, color }));
+    const legData = Object.entries({ Profit: "#10b981", Loss: "#d63031", Labor: "#f59e0b", COGS: "#ef4444" }).map(([label, color]) => ({ label, color }));
     const liW = (breakdownWidth - 2 * pad) / legData.length;
     const li = legend.selectAll(".li").data(legData).join("g")
         .attr("class", "li").attr("transform", (d, i) => `translate(${i * liW},0)`);
@@ -2015,27 +2011,46 @@ box-shadow:0 8px 24px rgba(0,0,0,.25)
     bottomHalf.append("rect").attr("class", "breakdown-border")
         .attr("x", pad / 2).attr("y", pad / 2)
         .attr("width", breakdownWidth - pad).attr("height", height / 2 - pad);
-    const barM = { top: 30, right: 22, bottom: 40, left: 64 };
+    const barM = { top: 30, right: 22, bottom: 40, left: 20 };
     const barH = height / 2 - 2 * pad - barM.top - barM.bottom;
-    const barW = breakdownWidth - 2 * pad - barM.left - barM.right;
-    const gB = bottomHalf.append("g").attr("transform",
-        `translate(${pad + barM.left},${pad + barM.top})`);
-    const xBand = d3.scaleBand().domain(perModel.map(d => d.label)).range([0, barW]).padding(0.25);
-    const yBar = d3.scaleLinear().domain([0, d3.max(perModel, d => d.profit)]).nice().range([barH, 0]);
-    gB.append("g").attr("class", "axis").call(d3.axisLeft(yBar).ticks(5).tickFormat(fmtMoney));
-    gB.append("g").attr("class", "axis").attr("transform", `translate(0,${barH})`)
-        .call(d3.axisBottom(xBand));
+    const profitValues = perModel.map(d => d.profit);
+    const yBarMin = Math.min(0, d3.min(profitValues));
+    const yBarMax = d3.max(profitValues);
+    const yBar = d3.scaleLinear().domain([yBarMin, yBarMax]).nice().range([barH, 0]);
+    let maxLabelWidth = 0;
+    const tempText = svg.append("text").attr("class", "axis").style("opacity", 0);
+    yBar.ticks(5).forEach(tick => {
+        const tickWidth = tempText.text(fmtMoney(tick)).node().getBBox().width;
+        if (tickWidth > maxLabelWidth) maxLabelWidth = tickWidth;
+    });
+    tempText.remove();
+    const yAxisSpace = maxLabelWidth + 10;
+    const barW = breakdownWidth - 2 * pad - barM.right - yAxisSpace;
+    const gB = bottomHalf.append("g").attr("transform", `translate(${pad},${pad + barM.top})`);
+    const xBand = d3.scaleBand().domain(perModel.map(d => d.label)).range([yAxisSpace, yAxisSpace + barW]).padding(0.25);
+    gB.append("g").attr("class", "axis").attr("transform", `translate(${yAxisSpace},0)`).call(d3.axisLeft(yBar).ticks(5).tickFormat(fmtMoney));
+    gB.append("g").attr("class", "axis").attr("transform", `translate(0,${barH})`).call(d3.axisBottom(xBand));
+    if (yBarMin < 0) {
+        gB.append("line")
+            .attr("x1", yAxisSpace)
+            .attr("x2", yAxisSpace + barW)
+            .attr("y1", yBar(0))
+            .attr("y2", yBar(0))
+            .attr("stroke", "#34495e")
+            .attr("stroke-width", 1.5)
+            .attr("stroke-dasharray", "3,3");
+    }
     gB.append("text").attr("class", "axis-label").attr("transform", "rotate(-90)")
-        .attr("x", -barH / 2).attr("y", -barM.left + 16).attr("text-anchor", "middle").text("Gross Profit ($)");
+        .attr("x", -barH / 2).attr("y", 0).attr("text-anchor", "middle").text("Gross Profit ($)");
     gB.append("text").attr("class", "axis-label")
-        .attr("x", barW / 2).attr("y", barH + barM.bottom - 6).attr("text-anchor", "middle").text("Model");
+        .attr("x", yAxisSpace + barW / 2).attr("y", barH + barM.bottom - 6).attr("text-anchor", "middle").text("Model");
     const modelColor = { Super: "#4E79A7", Ultra: "#F2D12B", Mega: "#E15759" };
     const ttBar = d3.select("body").selectAll(".profit-tooltip.bar").data([null]).join("div")
         .attr("class", "profit-tooltip bar").style("opacity", 0);
     gB.selectAll("rect").data(perModel).join("rect")
         .attr("x", d => xBand(d.label)).attr("width", xBand.bandwidth())
-        .attr("y", d => yBar(Math.max(0, d.profit)))
-        .attr("height", d => barH - yBar(Math.max(0, d.profit)))
+        .attr("y", d => d.profit < 0 ? yBar(0) : yBar(d.profit))
+        .attr("height", d => Math.abs(yBar(d.profit) - yBar(0)))
         .attr("rx", 4).attr("fill", d => modelColor[d.label] || "#64748b")
         .on("mouseenter", () => ttBar.style("opacity", 1))
         .on("mouseleave", () => ttBar.style("opacity", 0))
@@ -2079,75 +2094,6 @@ function initializeAndRunProfitCalculation() {
         console.error("Could not access session storage. Recalculating profit data.", e);
         calculateOptimalProfitData();
     }
-}
-
-
-async function calculateOptimalProfitData() {
-    if (isProfitCalculating) return;
-    isProfitCalculating = true;
-    const finInputs = {
-        laborCost: parseFloat(laborCostInput.value),
-        superSell: parseFloat(superSellInput.value),
-        superCogs: parseFloat(superCogsInput.value),
-        ultraSell: parseFloat(ultraSellInput.value),
-        ultraCogs: parseFloat(ultraCogsInput.value),
-        megaSell: parseFloat(megaSellInput.value),
-        megaCogs: parseFloat(megaCogsInput.value),
-    };
-    const key = getFinancialInputsKey();
-    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-    if (activeTab === 'profit') {
-        drawProfitPanel();
-    }
-    return new Promise(resolve => {
-        setTimeout(() => {
-            const profitData = [];
-            const marginData = [];
-            const originalStateConfig = state.configData;
-            try {
-                state.configData = originalConfigData;
-                for (let demand = 1; demand <= 552; demand++) {
-                    let maxProfit = -Infinity;
-                    let maxProfitConfig = { emp: 0, hrs: 0 };
-                    let maxMargin = -Infinity;
-                    let maxMarginConfig = { emp: 0, hrs: 0 };
-                    const startWorkstation = getMinWorkstationsForDemand(demand);
-                    for (let numEmployees = startWorkstation; numEmployees <= 13; numEmployees++) {
-                        for (let opHours = 1; opHours <= 24; opHours += 0.25) {
-                            const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
-                            if (metrics && metrics.throughputUnitsPerDay >= demand) {
-                                if (metrics.dailyGrossProfit > maxProfit) {
-                                    maxProfit = metrics.dailyGrossProfit;
-                                    maxProfitConfig = { emp: numEmployees, hrs: opHours };
-                                }
-                                if (metrics.grossProfitMargin > maxMargin) {
-                                    maxMargin = metrics.grossProfitMargin;
-                                    maxMarginConfig = { emp: numEmployees, hrs: opHours };
-                                }
-                            }
-                        }
-                    }
-                    profitData.push({ demand, value: isFinite(maxProfit) ? maxProfit : 0, config: maxProfitConfig });
-                    marginData.push({ demand, value: isFinite(maxMargin) ? maxMargin : 0, config: maxMarginConfig });
-                }
-                const calculatedData = { profitData, marginData };
-                profitMaximizationCache = { key, data: calculatedData };
-                try {
-                    sessionStorage.setItem(key, JSON.stringify(calculatedData));
-                    console.log("Profit data saved to session cache and is now correct.");
-                } catch (e) {
-                    console.error("Could not save profit data to session storage.", e);
-                }
-            } finally {
-                state.configData = originalStateConfig;
-                isProfitCalculating = false;
-                if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
-                    drawProfitPanel();
-                }
-                resolve();
-            }
-        }, 50);
-    });
 }
 
 /**
@@ -3281,15 +3227,11 @@ function drawEfficiencyPanel() {
 }
 
 const drawInvestmentPanel = (function () {
-    // State management for investment inputs
     const investmentState = {
         analysisPeriod: 5,
         marr: 12.0,
         taxRate: 25.0,
         workingDays: 250,
-        p90Demand: 38250,
-        p50Demand: 45000,
-        p10Demand: 51750,
         mfgOverhead: 550000,
         sgaExpenses: 350000,
         costPerFootStraight: 225,
@@ -3297,16 +3239,22 @@ const drawInvestmentPanel = (function () {
         installationCost: 10000,
         salvageValue: 10000,
         macrsClass: '5-year',
-        runExpansionCase: false
+        runExpansionCase: false,
+        std: 6750,
+        cv: 15.0,
+        ciLevel: 95,
+        p90Demand: 0,
+        p50Demand: 0,
+        p10Demand: 0
     };
-    // --- MODULE-LEVEL VARIABLES ---
     const MACRS_RATES = {
         '5-year': [0.2000, 0.3200, 0.1920, 0.1152, 0.1152, 0.0576],
         '7-year': [0.1429, 0.2449, 0.1749, 0.1249, 0.0893, 0.0892, 0.0893, 0.0446]
     };
+    const Z_SCORE_P90 = 1.28155;
+    const CI_Z_SCORES = { 90: 1.645, 95: 1.960, 99: 2.576 };
     let isListenerAttached = false;
     let analysisDebounceTimer;
-    // --- UTILITY & CALCULATION FUNCTIONS ---
     function formatNumberWithCommas(num) {
         if (num === null || num === undefined) return '';
         return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -3315,21 +3263,53 @@ const drawInvestmentPanel = (function () {
         if (typeof str !== 'string') return str;
         return parseFloat(str.replace(/,/g, '')) || 0;
     }
-    function updateDemandScenariosFromDemand() {
-        const targetDailyDemand = parseFloat(dailyDemandInput.value) || 180;
-        const p50 = Math.round(targetDailyDemand * investmentState.workingDays);
-        const stdDevPercent = 0.15;
-        const p90 = Math.round(p50 * (1 - stdDevPercent));
-        const p10 = Math.round(p50 * (1 + stdDevPercent));
-        investmentState.p90Demand = p90;
-        investmentState.p50Demand = p50;
-        investmentState.p10Demand = p10;
-        const p90Input = document.getElementById('inv-p90Demand');
-        const p50Input = document.getElementById('inv-p50Demand');
-        const p10Input = document.getElementById('inv-p10Demand');
-        if (p90Input) p90Input.value = formatNumberWithCommas(p90);
-        if (p50Input) p50Input.value = formatNumberWithCommas(p50);
-        if (p10Input) p10Input.value = formatNumberWithCommas(p10);
+    function updateDemandUI() {
+        document.getElementById('inv-std').value = formatNumberWithCommas(Math.round(investmentState.std));
+        document.getElementById('inv-cv').value = investmentState.cv.toFixed(1);
+        document.getElementById('inv-p90Demand').value = formatNumberWithCommas(Math.round(investmentState.p90Demand));
+        document.getElementById('inv-p50Demand').textContent = formatNumberWithCommas(Math.round(investmentState.p50Demand));
+        document.getElementById('inv-p10Demand').value = formatNumberWithCommas(Math.round(investmentState.p10Demand));
+        const z = CI_Z_SCORES[investmentState.ciLevel] || 1.960;
+        const halfWidth = z * investmentState.std;
+        const lowerBound = formatNumberWithCommas(Math.round(investmentState.p50Demand - halfWidth));
+        const upperBound = formatNumberWithCommas(Math.round(investmentState.p50Demand + halfWidth));
+        const ciRangeEl = document.getElementById('inv-ci-range');
+        if (ciRangeEl) {
+            ciRangeEl.textContent = `[${lowerBound} , ${upperBound}]`;
+        }
+    }
+    function updateProbabilisticValues(driver) {
+        const meanDemand = (parseFloat(dailyDemandInput.value) || 180) * investmentState.workingDays;
+        investmentState.p50Demand = meanDemand;
+        let std = investmentState.std;
+        switch (driver) {
+            case 'std':
+                std = investmentState.std;
+                investmentState.p90Demand = meanDemand + Z_SCORE_P90 * std;
+                investmentState.p10Demand = meanDemand - Z_SCORE_P90 * std;
+                break;
+            case 'cv':
+                std = (investmentState.cv / 100) * meanDemand;
+                investmentState.p90Demand = meanDemand + Z_SCORE_P90 * std;
+                investmentState.p10Demand = meanDemand - Z_SCORE_P90 * std;
+                break;
+            case 'p90':
+                std = (investmentState.p90Demand - meanDemand) / Z_SCORE_P90;
+                break;
+            case 'p10':
+                std = (meanDemand - investmentState.p10Demand) / Z_SCORE_P90;
+                break;
+            default:
+                std = (investmentState.cv / 100) * meanDemand;
+                investmentState.p90Demand = meanDemand + Z_SCORE_P90 * std;
+                investmentState.p10Demand = meanDemand - Z_SCORE_P90 * std;
+                break;
+        }
+        investmentState.std = std > 0 ? std : 0;
+        investmentState.cv = meanDemand > 0 ? (investmentState.std / meanDemand) * 100 : 0;
+        updateDemandUI();
+        clearTimeout(analysisDebounceTimer);
+        analysisDebounceTimer = setTimeout(runFullAnalysis, 250);
     }
     function formatMetric(value, format) {
         if (isNaN(value) || !isFinite(value)) return 'N/A';
@@ -3351,11 +3331,7 @@ const drawInvestmentPanel = (function () {
         const numBends = (4 * numWorkstations) - (isEven ? 2 : 0);
         const costStraights = investmentState.costPerFootStraight * ASSEMBLY_LINE_LENGTH;
         const costBends = investmentState.costPerBend * numBends;
-        return costStraights + costBends; // Note: Installation cost is separate now
-    }
-    function updateCalculatedCosts() {
-        const totalFixed = investmentState.mfgOverhead + investmentState.sgaExpenses;
-        d3.select("#inv-totalFixedCost").text(formatMetric(totalFixed, 'currency') + " / year");
+        return costStraights + costBends;
     }
     function calculateNPV(cashFlows, rate) {
         let npv = cashFlows[0] || 0;
@@ -3423,7 +3399,6 @@ const drawInvestmentPanel = (function () {
         }
         return Infinity;
     }
-    // --- CORE LOGIC FUNCTIONS ---
     function calculateFinancialScenario(annualUnitDemand) {
         const { analysisPeriod, marr, taxRate, workingDays, macrsClass, runExpansionCase, salvageValue, installationCost } = investmentState;
         const avgPrice = (superSellInput.value * BUILD_RATIOS.super) + (ultraSellInput.value * BUILD_RATIOS.ultra) + (megaSellInput.value * BUILD_RATIOS.mega);
@@ -3440,42 +3415,30 @@ const drawInvestmentPanel = (function () {
             equipmentCostForDepreciation = calculateConveyorCost(currentEmployees) + installationCost;
             initialInvestment = -equipmentCostForDepreciation;
         } else {
-            let optimalConfig = { meetsDemand: false, empCount: 0, opHours: 0 };
-            let minCompositeCost = Infinity;
-            // Optimization: Determine the minimum feasible workstation count for the target daily demand
-            const startWorkstation = getMinWorkstationsForDemand(dailyUnitDemand);
-            // Optimization: The 'emp' loop now starts from the calculated minimum feasible value
-            for (let emp = startWorkstation; emp <= 13; emp++) {
-                for (let hrs = 1; hrs <= 24; hrs += 0.25) {
-                    const metrics = calculateMetrics({ dailyDemand: dailyUnitDemand, opHours: hrs, numEmployees: emp }, {});
-                    if (metrics.meetsDemand) {
-                        const compositeCost = (hrs * 1000) + emp;
-                        if (compositeCost < minCompositeCost) {
-                            minCompositeCost = compositeCost;
-                            optimalConfig = { name: `${emp} Workers, ${hrs.toFixed(2)} hrs/day`, meetsDemand: true, empCount: emp, opHours: hrs };
-                        }
-                    }
-                }
+            if (!profitMaximizationCache.data) {
+                console.error("Profit maximization data is not available for investment analysis.");
+                return { dailyUnitDemand, annualUnitDemand, requiredConfig: { name: "Error: Run Profit Calc First" }, metrics: { npv: 0, irr: 0, payback: 0, initialInvestment: 0 }, cashFlows: [] };
+            }
+            const bisector = d3.bisector(d => d.demand).left;
+            const demandIndex = bisector(profitMaximizationCache.data.profitData, dailyUnitDemand);
+            const optimalScenario = profitMaximizationCache.data.profitData[demandIndex];
+            let optimalConfig = { name: `>13 Workers Required`, meetsDemand: false, empCount: 13, opHours: 24 };
+            if (optimalScenario && optimalScenario.config.emp > 0) {
+                optimalConfig = { name: `${optimalScenario.config.emp} Workers, ${optimalScenario.config.hrs.toFixed(2)} hrs/day`, meetsDemand: true, empCount: optimalScenario.config.emp, opHours: optimalScenario.config.hrs };
             }
             unitsToProduce = annualUnitDemand;
-            let finalEmpCount = currentEmployees;
-            if (optimalConfig.meetsDemand) {
-                configForReport = { ...optimalConfig, lostSales: '' };
-                finalEmpCount = optimalConfig.empCount;
-            } else {
-                configForReport = { name: `>13 Workers Required`, lostSales: '', empCount: 13, opHours: 24 };
-                finalEmpCount = 13;
-            }
+            configForReport = { ...optimalConfig, lostSales: '' };
+            const finalEmpCount = optimalConfig.empCount;
             const oldLineCost = calculateConveyorCost(currentEmployees);
             const newLineCost = calculateConveyorCost(finalEmpCount);
             let adjustment = 0;
             if (newLineCost < oldLineCost) {
                 const ratio = (oldLineCost - newLineCost) / oldLineCost;
-                adjustment = -(salvageValue * ratio); // Credit based on salvage value ratio
-                equipmentCostForDepreciation = 0; // No new asset to depreciate
+                adjustment = -(salvageValue * ratio);
+                equipmentCostForDepreciation = 0;
             } else {
                 adjustment = newLineCost - oldLineCost;
-                equipmentCostForDepreciation = adjustment + installationCost; // Depreciate new cost + installation
+                equipmentCostForDepreciation = adjustment + installationCost;
             }
             initialInvestment = -(installationCost + adjustment);
         }
@@ -3520,9 +3483,9 @@ const drawInvestmentPanel = (function () {
         setTimeout(() => {
             try {
                 const scenarios = {
-                    'P90 (Conservative)': investmentState.p90Demand,
+                    'P90 (Optimistic)': investmentState.p90Demand,
                     'P50 (Most Likely)': investmentState.p50Demand,
-                    'P10 (Optimistic)': investmentState.p10Demand
+                    'P10 (Conservative)': investmentState.p10Demand
                 };
                 const results = {};
                 for (const [name, demandUnits] of Object.entries(scenarios)) {
@@ -3537,16 +3500,15 @@ const drawInvestmentPanel = (function () {
             }
         }, 50);
     }
-    // --- D3 RENDERING FUNCTIONS ---
     function renderFunnel(results, containerSelector) {
         const container = d3.select(containerSelector);
         container.html("");
         const chartNode = container.node();
         if (!chartNode) return;
         const scenarios = [
-            { label: "Optimistic (P10)", value: results['P10 (Optimistic)'].annualUnitDemand, color: '#c0392b' },
+            { label: "Optimistic (P90)", value: results['P90 (Optimistic)'].annualUnitDemand, color: '#27ae60' },
             { label: "Most Likely (P50)", value: results['P50 (Most Likely)'].annualUnitDemand, color: '#2980b9' },
-            { label: "Conservative (P90)", value: results['P90 (Conservative)'].annualUnitDemand, color: '#27ae60' }
+            { label: "Conservative (P10)", value: results['P10 (Conservative)'].annualUnitDemand, color: '#c0392b' }
         ];
         const margin = { top: 10, right: 20, bottom: 10, left: 20 };
         const width = chartNode.getBoundingClientRect().width - margin.left - margin.right;
@@ -3582,7 +3544,6 @@ const drawInvestmentPanel = (function () {
         d3.select(".inv-scorecard-container").style('height', `${scorecardHeight > 0 ? scorecardHeight : 0}px`);
         d3.select(".inv-funnel-container").style('height', `${funnelHeight > 0 ? funnelHeight : 0}px`);
         d3.select(".inv-chart-container").style('height', `${bottomTwoThirdsHeight > 0 ? bottomTwoThirdsHeight : 0}px`);
-        // --- FIX END ---
         const p50Result = results['P50 (Most Likely)'];
         const scorecardContainer = d3.select(".inv-scorecard-container");
         scorecardContainer.html("");
@@ -3613,16 +3574,16 @@ const drawInvestmentPanel = (function () {
         const y = d3.scaleLinear().domain([d3.min(cumulativeData, d => d3.min(d.values, v => v.value)), d3.max(cumulativeData, d => d3.max(d.values, v => v.value))]).nice().range([height, 0]);
         chartG.append("g").attr("class", "inv-axis").attr("transform", `translate(0,${height})`).call(d3.axisBottom(x).ticks(investmentState.analysisPeriod).tickFormat(d3.format("d")));
         chartG.append("g").attr("class", "inv-axis").call(d3.axisLeft(y).tickFormat(d3.format("$,.2s")));
-        const p10Data = cumulativeData.find(d => d.name.includes('P10')).values;
-        const p50Data = cumulativeData.find(d => d.name.includes('P50')).values;
         const p90Data = cumulativeData.find(d => d.name.includes('P90')).values;
-        const areaP10_P50 = d3.area().x(d => x(d.year)).y0(d => y(p50Data[d.year].value)).y1(d => y(p10Data[d.year].value));
-        const areaP50_P90 = d3.area().x(d => x(d.year)).y0(d => y(p90Data[d.year].value)).y1(d => y(p50Data[d.year].value));
-        chartG.append("path").datum(p10Data).attr("fill", "#c0392b").attr("class", "inv-area").attr("d", areaP10_P50);
-        chartG.append("path").datum(p50Data).attr("fill", "#27ae60").attr("class", "inv-area").attr("d", areaP50_P90);
+        const p50Data = cumulativeData.find(d => d.name.includes('P50')).values;
+        const p10Data = cumulativeData.find(d => d.name.includes('P10')).values;
+        const areaP90_P50 = d3.area().x(d => x(d.year)).y0(d => y(p50Data[d.year].value)).y1(d => y(p90Data[d.year].value));
+        const areaP50_P10 = d3.area().x(d => x(d.year)).y0(d => y(p10Data[d.year].value)).y1(d => y(p50Data[d.year].value));
+        chartG.append("path").datum(p90Data).attr("fill", "#27ae60").attr("class", "inv-area").attr("d", areaP90_P50);
+        chartG.append("path").datum(p50Data).attr("fill", "#c0392b").attr("class", "inv-area").attr("d", areaP50_P10);
         chartG.append("line").attr("class", "inv-break-even").attr("x1", 0).attr("x2", width).attr("y1", y(0)).attr("y2", y(0));
         const line = d3.line().x(d => x(d.year)).y(d => y(d.value));
-        const color = d3.scaleOrdinal().domain(['P10 (Optimistic)', 'P50 (Most Likely)', 'P90 (Conservative)']).range(['#c0392b', '#2980b9', '#27ae60']);
+        const color = d3.scaleOrdinal().domain(['P90 (Optimistic)', 'P50 (Most Likely)', 'P10 (Conservative)']).range(['#27ae60', '#2980b9', '#c0392b']);
         chartG.selectAll(".inv-line").data(cumulativeData).join("path")
             .attr("class", "inv-line").attr("d", d => line(d.values))
             .style("stroke", d => color(d.name))
@@ -3646,24 +3607,20 @@ const drawInvestmentPanel = (function () {
             .on("mouseout", () => tooltip.transition().duration(500).style("opacity", 0));
     }
     function draw() {
+        const svg = d3.select("#investment-panel");
+        svg.node().draw = draw;
         if (!isListenerAttached) {
-            const relevantInputs = [dailyDemandInput, opHoursInput, laborCostInput, superSellInput, superCogsInput, ultraSellInput, ultraCogsInput, megaSellInput, megaCogsInput];
+            const relevantInputs = [dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput, superSellInput, superCogsInput, ultraSellInput, ultraCogsInput, megaSellInput, megaCogsInput];
             relevantInputs.forEach(input => {
                 input.addEventListener('input', () => {
-                    if (input.id === 'dailyDemand') {
-                        updateDemandScenariosFromDemand();
-                    }
                     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
                     if (activeTab === 'investment') {
-                        clearTimeout(analysisDebounceTimer);
-                        analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
+                        updateProbabilisticValues('mean');
                     }
                 });
             });
             isListenerAttached = true;
         }
-        updateDemandScenariosFromDemand();
-        const svg = d3.select("#investment-panel");
         svg.selectAll("*").remove();
         const fo = svg.append("foreignObject").attr("x", 0).attr("y", 0).attr("width", "100%").attr("height", "100%");
         const container = fo.append("xhtml:div").attr("class", "inv-container");
@@ -3689,21 +3646,22 @@ const drawInvestmentPanel = (function () {
 <label>MACRS Class:<select id="inv-macrsClass"><option value="5-year" ${investmentState.macrsClass === '5-year' ? 'selected' : ''}>5-Year Property</option><option value="7-year" ${investmentState.macrsClass === '7-year' ? 'selected' : ''}>7-Year Property</option></select></label>
 </div>
 <div class="inv-input-group">
-<div class="inv-group-header">Probabilistic Demand Scenarios (Annual Units)</div>
-<label>P90 (Conservative): <input type="text" data-type="currency" id="inv-p90Demand" value="${formatNumberWithCommas(investmentState.p90Demand)}"></label>
-<label>P50 (Most Likely): <input type="text" data-type="currency" id="inv-p50Demand" value="${formatNumberWithCommas(investmentState.p50Demand)}"></label>
-<label>P10 (Optimistic): <input type="text" data-type="currency" id="inv-p10Demand" value="${formatNumberWithCommas(investmentState.p10Demand)}"></label>
+<div class="inv-group-header">Probabilistic Demand Scenarios<div class="inv-group-subheader">(Annual Units)</div></div>
+<label>Std. Deviation (STD): <input type="text" data-type="currency" id="inv-std"></label>
+<label>Coeff. of Variation (CV %): <input type="number" id="inv-cv" step="0.1" min="0"></label>
+<label>Confidence Interval:<select id="inv-ciLevel"><option value="90" ${investmentState.ciLevel === 90 ? 'selected' : ''}>90%</option><option value="95" ${investmentState.ciLevel === 95 ? 'selected' : ''}>95%</option><option value="99" ${investmentState.ciLevel === 99 ? 'selected' : ''}>99%</option></select></label>
+<div class="inv-ci-display">Range: <span id="inv-ci-range"></span></div>
+<hr class="inv-divider">
+<label>P10 (Conservative): <input type="text" data-type="currency" id="inv-p10Demand"></label>
+<div class="inv-p50-display"><span>P50 (Expected Value):</span><span id="inv-p50Demand"></span></div>
+<label>P90 (Optimistic): <input type="text" data-type="currency" id="inv-p90Demand"></label>
 </div>
 `);
         const controlsArea = inputColumn.append("div").attr("class", "inv-analysis-controls");
         controlsArea.html(`
-<div class="inv-scenario-toggle">
-<span>Base Case</span>
-<label class="inv-switch">
-<input type="checkbox" id="inv-runExpansionCase" ${investmentState.runExpansionCase ? 'checked' : ''}>
-<span class="inv-slider inv-round"></span>
-</label>
-<span>Expansion Case</span>
+<div class="inv-button-group">
+<button id="inv-baseCaseBtn">Base Case</button>
+<button id="inv-expansionCaseBtn">Expansion Case</button>
 </div>
 `);
         const resultsColumn = container.append("div").attr("class", "inv-results-column");
@@ -3718,24 +3676,40 @@ const drawInvestmentPanel = (function () {
 <div class="inv-chart-container"></div>
 </div>
 `);
-        container.selectAll("input, select").on("change", (event) => {
+        container.selectAll("input[data-type='currency'], input[type='number'], select").on("change", (event) => {
             const target = event.target;
             const key = target.id.replace('inv-', '');
-            if (target.type === 'checkbox') {
-                investmentState[key] = target.checked;
-            } else {
-                const value = (target.dataset.type === 'currency') ? parseFormattedNumber(target.value) : (target.type === 'number' ? parseFloat(target.value) : target.value);
+            if (key in investmentState) {
+                const value = target.dataset.type === 'currency' ? parseFormattedNumber(target.value) : parseFloat(target.value);
                 investmentState[key] = value || 0;
-                if (target.dataset.type === 'currency') {
-                    target.value = formatNumberWithCommas(value);
+                if (['std', 'cv', 'p90Demand', 'p10Demand'].includes(key)) {
+                    updateProbabilisticValues(key.replace('Demand', ''));
+                } else if (key === 'ciLevel') {
+                    updateDemandUI();
+                } else {
+                    clearTimeout(analysisDebounceTimer);
+                    analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
                 }
             }
-            updateCalculatedCosts();
-            clearTimeout(analysisDebounceTimer);
-            analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
         });
-        updateCalculatedCosts();
-        runFullAnalysis();
+        container.select('#inv-baseCaseBtn').on('click', () => {
+            if (investmentState.runExpansionCase) {
+                investmentState.runExpansionCase = false;
+                draw();
+            }
+        });
+        container.select('#inv-expansionCaseBtn').on('click', () => {
+            if (!investmentState.runExpansionCase) {
+                investmentState.runExpansionCase = true;
+                draw();
+            }
+        });
+        if (investmentState.runExpansionCase) {
+            container.select('#inv-expansionCaseBtn').classed('active', true);
+        } else {
+            container.select('#inv-baseCaseBtn').classed('active', true);
+        }
+        updateProbabilisticValues('mean');
     }
     const styleId = 'investment-styles';
     if (!document.getElementById(styleId)) {
@@ -3748,21 +3722,21 @@ const drawInvestmentPanel = (function () {
 #investment-panel .inv-column-title { text-align: center; font-size: 18px; color: #2c3e50; margin: 0 0 15px 0; padding-bottom: 10px; border-bottom: 2px solid #3498db; }
 #investment-panel .inv-inputs { flex-grow: 1; display: flex; flex-direction: column; gap: 15px; }
 #investment-panel .inv-input-group { border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; background: #fcfcfc; }
-#investment-panel .inv-group-header { font-weight: bold; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 8px; font-size: 14px; color: #333; }
-#investment-panel .inv-input-column label { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 8px; font-size: 13px; color: #555; }
+#investment-panel .inv-group-header { font-weight: bold; margin-bottom: 12px; border-bottom: 1px solid #eee; padding-bottom: 4px; font-size: 14px; color: #333; }
+#investment-panel .inv-group-subheader { font-size: 11px; font-weight: normal; color: #777; margin-top: 2px; }
+#investment-panel .inv-input-column label, .inv-p50-display { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 8px; font-size: 13px; color: #555; }
 #investment-panel .inv-input-column input, #investment-panel .inv-input-column select { box-sizing: border-box; padding: 6px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; text-align: right; }
-#investment-panel .inv-input-column input { width: 30%; }
-#investment-panel .inv-input-column select { width: 55%; }
-#investment-panel .inv-analysis-controls { margin-top: auto; padding-top: 15px; border-top: 1px solid #eee; display: flex; justify-content: center; align-items: center; background: #ffffff; }
-#investment-panel .inv-scenario-toggle { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 10px; font-size: 12px; }
-#investment-panel .inv-switch { position: relative; display: inline-block; width: 60px; height: 34px; }
-#investment-panel .inv-switch input { opacity: 0; width: 0; height: 0; }
-#investment-panel .inv-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; }
-#investment-panel .inv-slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; }
-#investment-panel input:checked + .inv-slider { background-color: #2196F3; }
-#investment-panel input:checked + .inv-slider:before { transform: translateX(26px); }
-#investment-panel .inv-slider.inv-round { border-radius: 34px; }
-#investment-panel .inv-slider.inv-round:before { border-radius: 50%; }
+#investment-panel .inv-p50-display span:last-child { font-weight: bold; color: #34495e; padding: 6px; }
+#investment-panel .inv-input-column input[type=number] { width: 30%; }
+#investment-panel .inv-input-column input[data-type=currency] { width: 45%; }
+#investment-panel .inv-input-column select { width: 45%; }
+#investment-panel .inv-ci-display { font-size: 12px; text-align: right; color: #34495e; font-weight: bold; padding: 4px 0; }
+#investment-panel .inv-divider { border: none; border-top: 1px dashed #ccc; margin: 8px 0; }
+#investment-panel .inv-analysis-controls { margin-top: auto; padding-top: 15px; border-top: 1px solid #eee; background: #ffffff; }
+#investment-panel .inv-button-group { display: flex; width: 100%; border-radius: 6px; overflow: hidden; }
+#investment-panel .inv-button-group button { flex-grow: 1; padding: 10px; font-size: 13px; font-weight: bold; border: 1px solid #ccc; background-color: #f0f0f0; color: #555; cursor: pointer; transition: background-color 0.2s; }
+#investment-panel .inv-button-group button.active { background-color: #3498db; color: white; border-color: #3498db; }
+#investment-panel .inv-button-group button:not(.active):hover { background-color: #e0e0e0; }
 #investment-panel #inv-results-display { display: flex; flex-direction: column; height: 100%; }
 #investment-panel #inv-results-placeholder { text-align: center; padding: 50px 20px; color: #666; }
 #investment-panel .inv-scorecard-container { flex-shrink: 0; display: flex; justify-content: space-around; gap: 5px; margin-bottom: 1px; }
