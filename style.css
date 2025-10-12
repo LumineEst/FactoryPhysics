@@ -1,21 +1,21 @@
 :root {
-    --primary: #009688;
-    --secondary1: #FAB73B;
-    --secondary2: #7E57C2;
-    --accent: #37474F;
-    --super-color: #3498db;
-    --ultra-color: #f1c40f;
-    --mega-color: #e74c3c;
-    --idle-color: #e5e7e9;
-    --white: #ffffff;
-    --header-bg: var(--accent);
-    --text-color: var(--accent);
-    --accent-color: var(--secondary1);
-    --success-color: var(--primary);
-    --failure-color: #f3230b;
-    --shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-    --element-time-bg: var(--secondary2);
-    --tooltip-bg: var(--accent);
+  --primary: #009688;
+  --secondary1: #FAB73B;
+  --secondary2: #7E57C2;
+  --accent: #37474F;
+  --super-color: #3498db;
+  --ultra-color: #f1c40f;
+  --mega-color: #e74c3c;
+  --idle-color: #e5e7e9;
+  --white: #ffffff;
+  --header-bg: var(--accent);
+  --text-color: var(--accent);
+  --accent-color: var(--secondary1);
+  --success-color: var(--primary);
+  --failure-color: #f3230b;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  --element-time-bg: var(--secondary2);
+  --tooltip-bg: var(--accent);
 }
 
 @keyframes blink-red-border {
@@ -664,6 +664,52 @@ input[type="range"] {
   fill: var(--accent);
 }
 
+/* --- Modern Toggle Switch Styles --- */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--secondary2);
+  transition: .4s;
+  border-radius: 24px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+}
+
+input:checked+.slider {
+  background-color: var(--success-color);
+}
+
+input:checked+.slider:before {
+  transform: translateX(20px);
+}
+
 /* Investment Panel Styles */
 #investment-panel .inv-container {
   display: flex;
@@ -692,11 +738,12 @@ input[type="range"] {
 
 #investment-panel .inv-column-title {
   text-align: center;
-  font-size: 18px;
-  color: var(--accent);
   margin: 0 0 15px 0;
   padding-bottom: 10px;
   border-bottom: 2px solid var(--secondary2);
+  color: var(--accent);
+  font-size: clamp(16px, 1.2vw, 18px);
+  /* Dynamic Font */
 }
 
 #investment-panel .inv-inputs {
@@ -716,56 +763,81 @@ input[type="range"] {
 #investment-panel .inv-group-header {
   font-weight: bold;
   margin-bottom: 12px;
-  border-bottom: 1px solid var(--white);
+  border-bottom: 1px solid var(--idle-color);
   padding-bottom: 4px;
-  font-size: 14px;
   color: var(--accent);
+  font-size: clamp(13px, 1vw, 15px);
+  /* Dynamic Font */
 }
 
 #investment-panel .inv-group-subheader {
-  font-size: 11px;
   font-weight: normal;
   color: var(--idle-color);
   margin-top: 2px;
+  font-size: clamp(10px, 0.7vw, 11px);
+  /* Dynamic Font */
 }
 
-#investment-panel .inv-input-column label,
-.inv-p50-display {
+/* --- Correct Investment Panel Row Layout --- */
+
+/* This targets the <div> that wraps EACH label/input pair. */
+#investment-panel .inv-input-group>div {
   display: flex;
   justify-content: space-between;
   align-items: center;
   width: 100%;
   margin-bottom: 8px;
-  font-size: 13px;
-  color: #555;
+  /* Restores the space between rows */
 }
 
+/* Styles the text label. */
+#investment-panel .inv-input-group label {
+  width: 66.66%;
+  /* Default 2/3 width */
+  padding-right: 1rem;
+  /* Consistent spacing */
+  white-space: nowrap;
+  color: #555;
+  font-size: clamp(12px, 0.9vw, 14px);
+  /* Dynamic Font */
+}
+
+/* Styles ALL inputs and selects. */
 #investment-panel .inv-input-column input,
 #investment-panel .inv-input-column select {
+  width: 33.33%;
+  /* Default 1/3 width */
   box-sizing: border-box;
   padding: 6px;
-  font-size: 13px;
   border: 1px solid #ccc;
   border-radius: 4px;
   text-align: right;
+  font-size: clamp(12px, 0.9vw, 14px);
+  /* Dynamic Font */
+}
+
+/* Exception for the MACRS row for a 50/50 split. */
+#investment-panel .inv-input-group div:has(#inv-macrsClass)>label {
+  width: 40%;
+}
+
+#investment-panel .inv-input-group div:has(#inv-macrsClass)>select {
+  width: 60%;
+}
+
+/* End of Fix */
+
+
+#investment-panel .inv-p50-display,
+#investment-panel .inv-ci-display {
+  font-size: clamp(11px, 0.8vw, 13px);
+  /* Dynamic Font */
 }
 
 #investment-panel .inv-p50-display span:last-child {
   font-weight: bold;
   color: #34495e;
   padding: 6px;
-}
-
-#investment-panel .inv-input-column input[type=number] {
-  width: 30%;
-}
-
-#investment-panel .inv-input-column input[data-type=currency] {
-  width: 45%;
-}
-
-#investment-panel .inv-input-column select {
-  width: 45%;
 }
 
 #investment-panel .inv-ci-display {
@@ -799,13 +871,14 @@ input[type="range"] {
 #investment-panel .inv-button-group button {
   flex-grow: 1;
   padding: 10px;
-  font-size: 13px;
   font-weight: bold;
   border: 1px solid #ccc;
   background-color: #f0f0f0;
   color: #555;
   cursor: pointer;
   transition: background-color 0.2s;
+  font-size: clamp(12px, 0.9vw, 14px);
+  /* Dynamic Font */
 }
 
 #investment-panel .inv-button-group button.active {
@@ -848,15 +921,17 @@ input[type="range"] {
 }
 
 #investment-panel .inv-scorecard-label {
-  font-size: 13px;
   color: var(--accent);
   margin-bottom: 5px;
+  font-size: clamp(12px, 1vw, 14px);
+  /* Dynamic Font */
 }
 
 #investment-panel .inv-scorecard-value {
-  font-size: 26px;
   font-weight: bold;
   color: var(--accent);
+  font-size: clamp(20px, 1.8vw, 26px);
+  /* Dynamic Font */
 }
 
 #investment-panel .inv-funnel-container {
@@ -900,7 +975,7 @@ input[type="range"] {
 
 #investment-panel .inv-break-even {
   stroke: var(--failure-color);
-  stroke-width: 2px;
+  stroke-width: 6px;
   stroke-dasharray: 6, 4;
 }
 
