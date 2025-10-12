@@ -108,9 +108,44 @@ const precedenceMap = flattenPrecedenceTree();
 */
 
 /**
+* Injects custom CSS styles for the sidebars' and main panel's scrollbars.
+*/
+function injectCustomStyles() {
+    const accentColor = getComputedStyle(root).getPropertyValue('--accent').trim();
+    const primaryColor = getComputedStyle(root).getPropertyValue('--primary').trim();
+    const style = document.createElement('style');
+    style.textContent = `
+/* Target sidebars and SVG area for Firefox */
+#left-sidebar, #right-sidebar, #svg-container {
+scrollbar-width: thin;
+scrollbar-color: ${accentColor} transparent;
+}
+/* Target sidebars and SVG area for Webkit browsers (Chrome, Safari, etc.) */
+#left-sidebar::-webkit-scrollbar, #right-sidebar::-webkit-scrollbar, #svg-container::-webkit-scrollbar {
+width: 10px;
+height: 10px;
+}
+#left-sidebar::-webkit-scrollbar-track, #right-sidebar::-webkit-scrollbar-track, #svg-container::-webkit-scrollbar-track {
+background: transparent;
+}
+#left-sidebar::-webkit-scrollbar-thumb, #right-sidebar::-webkit-scrollbar-thumb, #svg-container::-webkit-scrollbar-thumb {
+background-color: ${accentColor};
+border-radius: 10px;
+border: 2px solid transparent;
+background-clip: content-box;
+}
+#left-sidebar::-webkit-scrollbar-thumb:hover, #right-sidebar::-webkit-scrollbar-thumb:hover, #svg-container::-webkit-scrollbar-thumb:hover {
+background-color: ${primaryColor};
+}
+`;
+    document.head.appendChild(style);
+}
+
+/**
 * The main function to initialize the application.
 */
 async function main() {
+    injectCustomStyles();
     await loadData();
     setupEventListeners();
     setupUIEventListeners();
@@ -434,6 +469,8 @@ function renderWorkstationSidebar(numEmployees) {
     });
     if (maxElementTime === 0) return;
 
+    const accentColor = getComputedStyle(root).getPropertyValue('--accent').trim();
+
     sortedStationIds.forEach((stationId, stationIndex) => {
         const elementsInStation = config[stationId];
         const elementColorScale = generateElementColorScale(stationIndex, numWorkstations, elementsInStation.length);
@@ -463,8 +500,9 @@ function renderWorkstationSidebar(numEmployees) {
                 elementTimeBar.className = 'element-time-bar';
                 const elementBarWidth = (task.elementTime / maxElementTime) * 80;
                 elementTimeBar.style.width = `${elementBarWidth}%`;
-                elementTimeBar.style.backgroundColor = getComputedStyle(root).getPropertyValue('--accent').trim();
-                elementTimeBar.style.border = `3px solid ${elementColor}`;
+                elementTimeBar.style.backgroundColor = accentColor;
+                elementTimeBar.style.border = `2px solid ${accentColor}`;
+                elementTimeBar.style.borderRadius = '4px';
 
                 const laborTimeBar = document.createElement('div');
                 laborTimeBar.className = 'labor-time-bar';
@@ -506,12 +544,13 @@ function renderWorkstationSidebar(numEmployees) {
     }
 }
 
+
 /**
 * Sets up event listeners for the main financial and operational input controls.
 */
 /**
- * UI - Set listeners for the variable inputs.
- */
+* UI - Set listeners for the variable inputs.
+*/
 function setupEventListeners() {
     const inputs = [
         dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput,
@@ -834,8 +873,8 @@ function setupUIEventListeners() {
 }
 
 /**
- * UI - Controls tab shift visibility
- */
+* UI - Controls tab shift visibility
+*/
 function handleVisibilityChange() {
     if (document.hidden) {
         // Pause animations without resetting state
@@ -1377,8 +1416,8 @@ function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
 }
 
 /**
- * Calculates the optimal profit for every demand level from 50 to 552 for the Profit Tab.
- */
+* Calculates the optimal profit for every demand level from 50 to 552 for the Profit Tab.
+*/
 async function calculateOptimalProfitData() {
     if (isProfitCalculating) return;
     isProfitCalculating = true;
