@@ -7,6 +7,7 @@ const MIN_TAKT_TIME = 2.5;
 const BUILD_RATIOS = { super: 0.35, ultra: 0.45, mega: 0.20 };
 const ASSEMBLY_LINE_LENGTH = 486;
 let isRecalculating = false;
+let autoAdjustEnabled = true;
 
 const PRECEDENCE_DATA = [
     { id: 1, predecessors: [] }, { id: 2, predecessors: [1] }, { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] },
@@ -61,10 +62,6 @@ let animationState = {
     speedo: { currentAngle: 0 }
 };
 
-// --- NEW --- State variables for the comparison feature
-let savedStateCache = null;
-let isCompareMode = false;
-
 /**
 * --------------------------------------------------------------------
 * DOM ELEMENTS
@@ -116,7 +113,7 @@ const precedenceMap = flattenPrecedenceTree();
 async function main() {
     await loadData();
     setupEventListeners();
-    setupUIEventListeners(); // MODIFIED: This will now add the new controls
+    setupUIEventListeners();
     setupVisibilityListener();
     runProfitCalculation();
     state.invalidPrecedenceMap = validatePrecedence();
@@ -182,144 +179,1434 @@ async function loadData() {
 * interface, render components, and set up event listeners.
 * --------------------------------------------------------------------
 */
-function stopAllSimulations() { if (animationState.layout.frameId) { cancelAnimationFrame(animationState.layout.frameId); animationState.layout.frameId = null; animationState.layout.isRunning = !1 } if (animationState.schedule.frameId) { cancelAnimationFrame(animationState.schedule.frameId); animationState.schedule.frameId = null; animationState.schedule.isRunning = !1 } }
-function animateValue(e, t, a, i = 1e3, n = o => o.toFixed(1)) { if (!e) return; if (e._animationId) { cancelAnimationFrame(e._animationId) } const o = Date.now(), s = a - t; function l() { const r = Date.now(), d = r - o, c = Math.min(d / i, 1), p = 1 - Math.pow(1 - c, 4), u = t + s * p; e.textContent = n(u); if (c < 1) { e._animationId = requestAnimationFrame(l) } else { e._animationId = null } } l() }
-function parseElementValue(e) { if (!e || !e.textContent) return 0; const t = e.textContent; if (t.includes("$")) { const a = t.replace(/[$,]/g, ""), i = a.match(/-?\d+\.?\d*/); return i ? parseFloat(i[0]) : 0 } const n = t.match(/-?\d+\.?\d*/); return n ? parseFloat(n[0]) : 0 }
-function enableMiddleDragNumberInput(e, t = 1, a = .1) { let i = !1, n, o; const s = () => { const r = e.hasAttribute("min") ? parseFloat(e.min) : -1 / 0, d = e.hasAttribute("max") ? parseFloat(e.max) : 1 / 0, c = parseFloat(e.step) || 1; return { min: r, max: d, step: c } }; e.addEventListener("mousedown", r => { if (r.button === 1) { r.preventDefault(); r.stopPropagation(); i = !0; n = r.clientY; o = parseFloat(e.value) || 0; const d = c => { if (!i) return; const p = n - c.clientY, u = s(); let m = o + p * a * t; m = Math.max(u.min, Math.min(u.max, m)); if (e.type === "range" || u.step === 1) { e.value = Math.round(m).toString() } else if (u.step < 1) { const g = Math.max(0, -Math.floor(Math.log10(u.step))); e.value = m.toFixed(g) } else { e.value = m.toFixed(2) } e.dispatchEvent(new Event("input", { bubbles: !0 })) }, p = () => { i = !1; document.removeEventListener("mousemove", d); document.removeEventListener("mouseup", p) }; document.addEventListener("mousemove", d); document.addEventListener("mouseup", p) } }); e.addEventListener("wheel", r => { if (document.activeElement === e) { r.preventDefault(); const d = s(), c = r.deltaY > 0 ? -1 : 1; let p = parseFloat(e.value) || 0, u = p + c * d.step; u = Math.max(d.min, Math.min(d.max, u)); if (e.type === "range" || d.step === 1) { e.value = Math.round(u).toString() } else if (d.step < 1) { const m = Math.max(0, -Math.floor(Math.log10(d.step))); e.value = u.toFixed(m) } else { e.value = u.toFixed(2) } e.dispatchEvent(new Event("input", { bubbles: !0 })) } }) }
-function restoreActiveTab() { let e = sessionStorage.getItem("activeTab"); if (!e) { e = "overview"; sessionStorage.setItem("activeTab", e) } document.querySelectorAll(".tab-btn").forEach(t => t.classList.remove("active")); const t = document.querySelector(`.tab-btn[data-tab="${e}"]`); if (t) t.classList.add("active"); visPanels.forEach(a => { a.style.display = a.id === `${e}-panel` ? "block" : "none" }) }
-function updateUI() { employeeCountDisplay.textContent = numEmployeesInput.value; renderWorkstationSidebar(parseInt(numEmployeesInput.value)); setupDragAndDrop(); invalidPrecedenceNodes = validatePrecedence(); if (invalidPrecedenceNodes.size > 0) { demandStatusEl.textContent = "Fails to Meet Precedence"; demandStatusEl.className = "status failure"; wipEl.textContent = "---"; throughputEl.textContent = "---"; conveyorSpeedEl.textContent = "---"; productSpacingEl.textContent = "---"; grossProfitEl.textContent = "---"; profitMarginEl.textContent = "---"; avgEfficiencyEl.textContent = "---"; totalIdleTimeEl.textContent = "---"; balanceDelayEl.textContent = "---"; idleTimeCvEl.textContent = "---" } else { const e = { dailyDemand: parseInt(dailyDemandInput.value), opHours: parseFloat(opHoursInput.value), numEmployees: parseInt(numEmployeesInput.value) }, t = { laborCost: parseFloat(laborCostInput.value), superSell: parseFloat(superSellInput.value), superCogs: parseFloat(superCogsInput.value), ultraSell: parseFloat(ultraSellInput.value), ultraCogs: parseFloat(ultraCogsInput.value), megaSell: parseFloat(megaSellInput.value), megaCogs: parseFloat(megaCogsInput.value) }, a = calculateMetrics(e, t); if (a) { animateValue(wipEl, parseElementValue(wipEl), a.wip, 800, i => i.toFixed(1)); animateValue(throughputEl, parseElementValue(throughputEl), a.throughputUnitsPerHour, 800, i => `${i.toFixed(1)}/hr`); animateValue(conveyorSpeedEl, parseElementValue(conveyorSpeedEl), a.conveyorSpeed, 800, i => `${i.toFixed(2)} ft/min`); animateValue(productSpacingEl, parseElementValue(productSpacingEl), a.productSpacing, 800, i => `${i.toFixed(2)} ft`); animateValue(grossProfitEl, parseElementValue(grossProfitEl), a.dailyGrossProfit, 800, i => i.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 })); animateValue(profitMarginEl, parseElementValue(profitMarginEl), a.grossProfitMargin, 800, i => `${i.toFixed(1)}%`); animateValue(avgEfficiencyEl, parseElementValue(avgEfficiencyEl), a.averageEfficiency, 800, i => `${i.toFixed(1)}%`); animateValue(totalIdleTimeEl, parseElementValue(totalIdleTimeEl), a.totalIdleTime / 60, 800, i => `${i.toFixed(2)} hrs`); animateValue(balanceDelayEl, parseElementValue(balanceDelayEl), a.balanceDelay, 800, i => `${i.toFixed(1)}%`); animateValue(idleTimeCvEl, parseElementValue(idleTimeCvEl), a.idleTimeCv, 800, i => `${i.toFixed(1)}%`); demandStatusEl.textContent = a.meetsDemand ? "Meets Demand" : "Fails to Meet Demand"; demandStatusEl.className = a.meetsDemand ? "status success" : "status failure" } } stopAllSimulations(); renderActiveTab() }
-function renderWorkstationSidebar(e) { workstationList.innerHTML = ""; const t = state.configData[e]; if (!t || Object.keys(t).length === 0) return; const a = Object.keys(t).sort((l, r) => parseInt(l) - parseInt(r)), i = a.length; let n = 0; a.forEach(l => { t[l].forEach(r => { const d = state.taskData.get(r); if (d && d.elementTime > n) { n = d.elementTime } }) }); if (n === 0) return; a.forEach((l, r) => { const d = t[l], c = generateElementColorScale(r, i, d.length), p = document.createElement("div"); p.className = "workstation"; const u = document.createElement("div"); u.className = "workstation-title"; u.textContent = `Workstation ${l}`; p.appendChild(u); const m = document.createElement("div"); m.className = "workstation-elements"; d.forEach((g, h) => { const f = state.taskData.get(g); if (f) { const v = c(h), b = document.createElement("div"); b.className = "element-row"; b.title = `Element ${g}: ${f.description}`; b.dataset.taskId = g; const S = document.createElement("div"); S.className = "element-bar-wrapper"; const w = document.createElement("div"); w.className = "element-time-bar"; const T = (f.elementTime / n) * 80; w.style.width = `${T}%`; w.style.backgroundColor = getComputedStyle(root).getPropertyValue("--accent").trim(); w.style.border = `3px solid ${v}`; const C = document.createElement("div"); C.className = "labor-time-bar"; C.style.backgroundColor = v; const A = f.elementTime > 0 ? f.laborTime / f.elementTime : 0; C.style.transform = `scaleX(${A})`; if (f.elementTime > 2 * f.laborTime) { const k = document.createElement("span"); k.className = "element-time-text"; k.textContent = g; w.appendChild(k) } else { const E = document.createElement("span"); E.className = "labor-bar-text"; E.textContent = g; w.appendChild(E) } w.appendChild(C); S.appendChild(w); b.appendChild(S); m.appendChild(b) } }); p.appendChild(m); workstationList.appendChild(p) }); const o = workstationList.querySelector(".workstation-title"), s = document.getElementById("svg-container"); if (o && s) { const l = s.getBoundingClientRect().top, r = o.getBoundingClientRect().top, d = parseFloat(getComputedStyle(workstationList).paddingTop) || 0, c = l - r, p = Math.max(0, d + c); workstationList.style.paddingTop = `${p}px` } }
-function setupEventListeners() { const e = [dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput, superSellInput, superCogsInput, ultraSellInput, ultraCogsInput, megaSellInput, megaCogsInput]; attachCommitBehavior(e, (t, a) => { handleInputChange(t) }) }
-function attachCommitBehavior(e, t) { const a = new WeakMap, i = new WeakMap; const n = () => e.forEach(l => i.set(l, !1)); document.addEventListener("mouseup", n); e.forEach(o => { if (!o) return; if (!o.dataset.committedValue) o.dataset.committedValue = o.value ?? ""; i.set(o, !1); o.dataset.awaitingInput = "false"; o.addEventListener("focus", s => { o.dataset.preFocusValue = o.dataset.committedValue ?? ""; if (o.type !== "range") { if (o.dataset.awaitingInput !== "true") { o.dataset.awaitingInput = "true"; o.value = ""; try { o.setSelectionRange(0, 0) } catch (l) { } } } }); o.addEventListener("mousedown", s => { if (s.button === 1) { i.set(o, !0) } }); o.addEventListener("input", () => { const s = a.get(o); if (s) clearTimeout(s); if (o.type === "range") { commitInput(o, t); o.dataset.awaitingInput = "false"; return } if (!i.get(o)) { o.dataset.awaitingInput = "true"; return } const l = setTimeout(() => { const r = (o.value || "").trim(), d = (o.dataset.committedValue || "").trim(); if (r !== d) { commitInput(o, t) } }, 200); a.set(o, l) }); o.addEventListener("change", () => { const s = a.get(o); if (s) clearTimeout(s); commitInput(o, t); o.dataset.awaitingInput = "false" }); o.addEventListener("keydown", s => { if (s.key === "Enter") { const l = a.get(o); if (l) clearTimeout(l); commitInput(o, t); o.dataset.awaitingInput = "false"; o.blur() } else if (s.key === "Escape") { const r = a.get(o); if (r) clearTimeout(r); o.value = o.dataset.committedValue ?? ""; o.dataset.awaitingInput = "false"; o.blur() } }); o.addEventListener("blur", () => { const s = a.get(o); if (s) clearTimeout(s); const l = o.dataset.awaitingInput === "true", r = (o.value || "").trim(); if (l && r === "") { o.value = o.dataset.committedValue ?? ""; o.dataset.awaitingInput = "false" } else { commitInput(o, t); o.dataset.awaitingInput = "false" } }) }); const c = { dailyDemand: 180, opHours: 15, numEmployees: 8, laborCost: 25, superSell: 1250, superCogs: 450, ultraSell: 1500, ultraCogs: 550, megaSell: 1800, megaCogs: 650 }; e.forEach(p => { if (!p) return; p.addEventListener("click", u => { if (u.ctrlKey) { u.preventDefault(); const m = c[p.id]; if (m !== void 0) { const g = p.hasAttribute("min") ? parseFloat(p.min) : -1 / 0, h = p.hasAttribute("max") ? parseFloat(p.max) : 1 / 0, f = parseFloat(p.step) || 1; p.value = Math.max(g, Math.min(h, m)); commitInput(p, t); p.style.backgroundColor = getComputedStyle(root).getPropertyValue("--primary").trim(); setTimeout(() => { p.style.backgroundColor = "" }, 200) } } }) }) }
-function commitInput(e, t) { const a = (e.value || "").trim(); if (a === "") { e.value = e.dataset.committedValue ?? ""; return } const i = Number(a); if (!Number.isFinite(i)) { e.value = e.dataset.committedValue ?? ""; return } const n = clampByField(e.id, i); e.value = String(n); e.dataset.committedValue = e.value; if (typeof t === "function") t(e.id, n) }
-function clampByField(e, t) { switch (e) { case "opHours": return Math.min(Math.max(t, 0), 24); case "dailyDemand": return Math.max(0, Math.floor(t)); case "numEmployees": return Math.max(1, Math.floor(t)); case "laborCost": case "superSell": case "superCogs": case "ultraSell": case "ultraCogs": case "megaSell": case "megaCogs": return Math.max(0, t); default: return t } }
-function setupUIEventListeners() { leftToggle.addEventListener("click", () => { const e = () => { updateUI(); document.getElementById("left-sidebar").removeEventListener("transitionend", e) }; document.getElementById("left-sidebar").addEventListener("transitionend", e); document.getElementById("left-sidebar").classList.toggle("collapsed"); const t = document.getElementById("left-sidebar").classList.contains("collapsed"); leftToggle.innerHTML = t ? "&raquo;" : "&laquo;" }); rightToggle.addEventListener("click", () => { const e = () => { updateUI(); document.getElementById("right-sidebar").removeEventListener("transitionend", e) }; document.getElementById("right-sidebar").addEventListener("transitionend", e); document.getElementById("right-sidebar").classList.toggle("collapsed"); const t = document.getElementById("right-sidebar").classList.contains("collapsed"); rightToggle.innerHTML = t ? "&laquo;" : "&raquo;" }); tabs.addEventListener("click", e => { if (e.target.classList.contains("tab-btn")) { const t = e.target.dataset.tab, a = tabs.querySelector(".active"); if (a && a.dataset.tab === t) { return } sessionStorage.setItem("activeTab", t); if (a) a.classList.remove("active"); e.target.classList.add("active"); visPanels.forEach(i => { i.style.display = i.id === `${t}-panel` ? "block" : "none" }); workstationList.scrollTop = 0; stopAllSimulations(); if (isCompareMode) { const n = document.getElementById("compareSwitch"); if (n) { n.checked = !1; handleCompareToggle({ target: n }) } } else { renderActiveTab() } } }); workstationList.addEventListener("scroll", () => { const e = workstationList.scrollTop, t = document.getElementById("schedule-panel"), a = t.querySelector(".schedule-content-group"); if (a) { a.setAttribute("transform", `translate(0, ${-e})`) } }); const controlsContainer = document.createElement("div"); controlsContainer.className = "right-toolbar-controls"; controlsContainer.innerHTML = `<button id="saveStateBtn" class="button">Save State</button><label class="switch" title="Compare current state with saved state"><input type="checkbox" id="compareSwitch"><span class="slider" data-on="Compare" data-off="Compare"></span></label>`; rightSidebar.appendChild(controlsContainer); document.getElementById("saveStateBtn").addEventListener("click", saveCurrentState); document.getElementById("compareSwitch").addEventListener("change", handleCompareToggle); const style = document.createElement("style"); style.textContent = `.right-toolbar-controls{display:flex;justify-content:space-around;align-items:center;padding:10px;border-top:1px solid var(--border-color);margin-top:auto;gap:10px;}.right-toolbar-controls .button{flex-grow:1;}.comparison-wrapper{display:flex;width:100%;height:100%;}.comparison-container{flex:1;position:relative;overflow:hidden;border:1px solid var(--border-color);}.comparison-container > svg{width:100%;height:100%;}`; document.head.appendChild(style) }
-function handleVisibilityChange() { if (document.hidden) { if (animationState && animationState.schedule && animationState.schedule.isRunning) { animationState.schedule.isPaused = !0 } if (animationState && animationState.layout && animationState.layout.isRunning) { animationState.layout.isPaused = !0 } } else { if (animationState && animationState.schedule && animationState.schedule.isPaused) { animationState.schedule.isPaused = !1; animationState.schedule.lastFrameTime = performance.now() } if (animationState && animationState.layout && animationState.layout.isPaused) { animationState.layout.isPaused = !1; animationState.layout.lastFrameTime = performance.now() } } }
-function setupVisibilityListener() { document.addEventListener("visibilitychange", handleVisibilityChange, !1) }
-function setupDragAndDrop() { sortableInstances.forEach(e => e.destroy()); sortableInstances = []; const e = document.querySelectorAll(".workstation-elements"); e.forEach(t => { const a = new Sortable(t, { group: "shared", animation: 150, onEnd: function (i) { updateWorkstationOrder() } }); sortableInstances.push(a) }) }
-function createTooltip(e) { let t = d3.select("body > .d3-tooltip"); if (t.empty()) { t = d3.select("body").append("div").attr("class", `d3-tooltip ${e || ""}`).style("opacity", 0).style("position", "absolute") } return t }
-function createControlButton(e, t) { const { className: a, text: i, transform: n = [0, 0] } = t, o = e.append("g").attr("class", a).attr("transform", `translate(${n[0]}, ${n[1]})`).style("cursor", "pointer"); o.append("rect").attr("width", 28).attr("height", 18).attr("fill", getComputedStyle(root).getPropertyValue("--accent").trim()).attr("rx", 3); o.append("text").attr("x", 14).attr("y", 13.5).attr("text-anchor", "middle").attr("fill", getComputedStyle(root).getPropertyValue("--secondary1").trim()).style("font-size", "14px").text(i); return o }
-function generateElementColorScale(e, t, a) { const i = [getComputedStyle(root).getPropertyValue("--primary").trim(), getComputedStyle(root).getPropertyValue("--secondary1").trim(), getComputedStyle(root).getPropertyValue("--secondary2").trim()], n = d3.hcl(i[e % i.length]), o = n.copy(); o.l += 15; const s = n.copy(); s.l -= 15; return d3.scaleLinear().domain([0, a > 1 ? a - 1 : 1]).range([o.toString(), s.toString()]).interpolate(d3.interpolateHcl) }
-function handleInputChange(driverId) { if (isRecalculating) return; isRecalculating = !0; const isFinancialDriver = ['laborCost', 'superSell', 'superCogs', 'ultraSell', 'ultraCogs', 'megaSell', 'megaCogs'].includes(driverId); if (isFinancialDriver) { calculateOptimalProfitData() } try { let e = parseInt(dailyDemandInput.value) || 1, t = parseFloat(opHoursInput.value) || 1, a = parseInt(numEmployeesInput.value); const i = ['dailyDemand', 'opHours', 'numEmployees'].includes(driverId); if (i) { workstationList.scrollTop = 0 } if (driverId === 'numEmployees') { state.configData[a] = JSON.parse(JSON.stringify(originalConfigData[a])) } if (i) { let n = calculateWorkstationDetails(a).bottleneckTime; if (n === 0) { console.error(`No valid workstation data for ${a} employees. Aborting.`); isRecalculating = !1; return } let o = (t * 60) / e; if (o < n) { if (driverId === 'numEmployees') { let s = (n * e) / 60; t = s <= 24 ? roundUpToQuarter(s) : 24; if (s > 24) { e = Math.floor(24 * 60 / n) } } else { a = findBestEmployeeFit(o, a) } } o = t * 60 / e; if (o < MIN_TAKT_TIME) { if (driverId === 'dailyDemand') { t = roundUpToQuarter(MIN_TAKT_TIME * e / 60); if (t > 24) t = 24 } else { e = Math.floor(t * 60 / MIN_TAKT_TIME) } } } dailyDemandInput.value = Math.round(e); opHoursInput.value = t.toFixed(2); numEmployeesInput.value = a; updateUI() } catch (l) { console.error("Error during input handling:", l) } finally { isRecalculating = !1 } }
-function calculateWorkstationDetails(e) { const t = state.configData[e]; if (!t || Object.keys(t).length === 0) return { workstations: [], bottleneckTime: 0, fastestTime: 1 / 0 }; let a = [], i = 0, n = 1 / 0; for (const o in t) { let s = 0, l = 0; t[o].forEach(r => { const d = state.taskData.get(r); if (d) { s += d.laborTime; l += d.elementTime } }); const c = l * 15; a.push({ id: o, cycleTime: s, stationLength: c }); if (s > i) i = s; if (s < n && s > 0) n = s } return { workstations: a, bottleneckTime: i, fastestTime: n } }
-function calculateMetrics(e, t) { const a = calculateWorkstationDetails(e.numEmployees), i = Math.floor(e.opHours * 4) * 15, n = a.bottleneckTime, o = a.fastestTime === 1 / 0 ? 0 : a.fastestTime * 15; if (o <= 0 || n <= 0) { return { wip: 0, throughputUnitsPerHour: 0, conveyorSpeed: 0, productSpacing: 0, dailyGrossProfit: -(e.numEmployees * e.opHours * (t.laborCost || 0)), grossProfitMargin: 0, meetsDemand: !1, effectiveCycleTime: 1 / 0, workstations: a.workstations, averageEfficiency: 0, totalIdleTime: i * e.numEmployees, balanceDelay: 100, idleTimeCv: 0, throughputUnitsPerDay: 0 } } let s; const l = e.dailyDemand > 1 ? e.dailyDemand - 1 : 0, r = ASSEMBLY_LINE_LENGTH / o; if (e.dailyDemand <= 1) { s = 1 / 0 } else { const u = l + r; s = i / u } const d = n <= s, c = d ? s : n, p = o / (isFinite(c) ? c : n), m = ASSEMBLY_LINE_LENGTH / o * c; let g; if (i < m) { g = 0 } else if (e.dailyDemand <= 1) { g = 1 } else { const h = i - m; g = Math.floor(h / c) + 1 } const f = ASSEMBLY_LINE_LENGTH / o; let v; if (e.dailyDemand <= 0) { v = 0 } else if (e.dailyDemand === 1) { v = m } else { v = c * l + m } const b = (v > 0 ? e.dailyDemand / v : 0) * 60; let S = 0; a.workstations.forEach(y => { S += y.cycleTime; y.efficiency = n > 0 ? y.cycleTime / n * 100 : 0; const D = n - y.cycleTime; y.dailyIdleTime = D * g }); const w = e.numEmployees * i, T = e.numEmployees * e.opHours * (t.laborCost || 0), C = g * S, A = Math.max(0, w - C), k = w > 0 ? C / w * 100 : 0; const E = a.workstations.map(y => y.efficiency), P = E.length > 0 ? E.reduce((y, D) => y + D, 0) / E.length : 0, L = 100 - P; const V = a.workstations.map(y => n - y.cycleTime), I = V.length > 0 ? V.reduce((y, D) => y + D, 0) / V.length : 0, x = Math.sqrt(V.map(y => Math.pow(y - I, 2)).reduce((y, D) => y + D, 0) / (V.length || 1)), N = I > 0 ? x / I * 100 : 0; const _ = g * (BUILD_RATIOS.super * (t.superSell || 0) + BUILD_RATIOS.ultra * (t.ultraSell || 0) + BUILD_RATIOS.mega * (t.megaSell || 0)), R = g * (BUILD_RATIOS.super * (t.superCogs || 0) + BUILD_RATIOS.ultra * (t.ultraCogs || 0) + BUILD_RATIOS.mega * (t.megaCogs || 0)), M = _ - R - T, O = M > 0 ? M / _ * 100 : 0; return { wip: f, throughputUnitsPerHour: b, conveyorSpeed: p, productSpacing: o, dailyGrossProfit: M, grossProfitMargin: O, meetsDemand: d, effectiveCycleTime: c, workstations: a.workstations, averageEfficiency: k, totalIdleTime: A, balanceDelay: L, idleTimeCv: N, throughputUnitsPerDay: g } }
-function findBestEmployeeFit(e, t) { for (let a = t; a <= 13; a++) { if (calculateWorkstationDetails(a).bottleneckTime <= e) return a } return 13 }
-function updateWorkstationOrder() { const e = parseInt(numEmployeesInput.value), t = {}; document.querySelectorAll(".workstation").forEach(a => { const i = a.querySelector(".workstation-title").textContent, n = i.match(/\d+/); if (n) { const o = n[0], s = []; a.querySelectorAll(".element-row").forEach(l => { s.push(parseInt(l.dataset.taskId)) }); t[o] = s } }); state.configData[e] = t; const a = validatePrecedence(); invalidPrecedenceNodes = new Set(Array.from(a.keys())); if (document.querySelector('.tab-btn[data-tab="precedence"].active')) { updatePrecedenceChart() } setTimeout(updateUI, 0) }
-function validatePrecedence() { const e = new Set, t = document.querySelectorAll(".element-row"), a = new Set; t.forEach(i => { const n = parseInt(i.dataset.taskId), o = precedenceMap.get(n) || new Set; let s = !0; for (const l of o) { if (!e.has(l)) { s = !1; break } } if (!s) { i.classList.add("precedence-error"); a.add(n) } else { i.classList.remove("precedence-error") } e.add(n) }); return a }
-function generateProductionQueue(e) { const t = [], a = Object.values(BUILD_RATIOS); let i = []; let n = 0; for (let l = 0; l < a.length - 1; l++) { const r = Math.round(a[l] * e); i.push(r); n += r } i.push(e - n); let o = e; const s = i.map(l => l > 0 ? o / l : 1 / 0); let l = s.map(r => r / 2); for (let r = 0; r < e; r++) { let d = -1, c = 1 / 0; for (let p = 0; p < l.length; p++) { if (i[p] > 0 && l[p] < c) { c = l[p]; d = p } } if (d === -1) { break } t.push(d + 1); l[d] += s[d]; i[d]-- } return t }
-function getFinancialInputsKey() { const e = { laborCost: parseFloat(laborCostInput.value), superSell: parseFloat(superSellInput.value), superCogs: parseFloat(superCogsInput.value), ultraSell: parseFloat(ultraSellInput.value), ultraCogs: parseFloat(ultraCogsInput.value), megaSell: parseFloat(megaSellInput.value), megaCogs: parseFloat(megaCogsInput.value) }; return 'profitDataCache-v1-' + JSON.stringify(e) }
-function runProfitCalculation() { const e = getFinancialInputsKey(); try { const t = sessionStorage.getItem(e); if (t) { console.log("Loading profit data from session cache."); profitMaximizationCache = { key: e, data: JSON.parse(t) }; if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') { ProfitTab.draw() } } else { console.log("No valid cache found. Calculating optimal profit data for the first time."); calculateOptimalProfitData() } } catch (a) { console.error("Could not access session storage. Recalculating profit data.", a); calculateOptimalProfitData() } }
-function findOptimalConfigForDemand(e, t, a) { let i = -1 / 0, n = { emp: 0, hrs: 0 }, o = -1 / 0, s = { emp: 0, hrs: 0 }; for (let l = 3; l <= 13; l++) { if (e > (a.get(l) || 0)) { continue } if (!originalConfigData[l] || Object.keys(originalConfigData[l]).length === 0) continue; const { bottleneckTime: r, fastestTime: d } = calculateWorkstationDetails(l); if (r <= 0 || !isFinite(d) || d <= 0) continue; const c = (e > 1 ? (e - 1) * r : 0) + ASSEMBLY_LINE_LENGTH / (d * 15) * r, p = c / 60; if (p > 24) continue; const u = roundUpToQuarter(p); for (let m = u; m <= 24; m += .25) { const g = calculateMetrics({ dailyDemand: e, opHours: m, numEmployees: l }, t); if (g && g.throughputUnitsPerDay >= e) { if (g.dailyGrossProfit > i) { i = g.dailyGrossProfit; n = { emp: l, hrs: m } } if (g.grossProfitMargin > o) { o = g.grossProfitMargin; s = { emp: l, hrs: m } } break } } } const h = { demand: e, value: isFinite(i) ? i : 0, config: n }, f = { demand: e, value: isFinite(o) ? o : 0, config: s }; return { profitResult: h, marginResult: f } }
-async function calculateOptimalProfitData() { if (isProfitCalculating) return; isProfitCalculating = !0; const e = { laborCost: parseFloat(laborCostInput.value), superSell: parseFloat(superSellInput.value), superCogs: parseFloat(superCogsInput.value), ultraSell: parseFloat(ultraSellInput.value), ultraCogs: parseFloat(ultraCogsInput.value), megaSell: parseFloat(megaSellInput.value), megaCogs: parseFloat(megaCogsInput.value) }; const t = getFinancialInputsKey() + "-demand50plus"; if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') { ProfitTab.draw() } setTimeout(() => { const a = [], i = []; const n = JSON.parse(JSON.stringify(state.configData)); try { state.configData = originalConfigData; const o = new Map(WORKSTATION_CAPACITIES.map(s => [s.ws, s.maxDemand])); for (let s = 50; s <= 552; s++) { const { profitResult: l, marginResult: r } = findOptimalConfigForDemand(s, e, o); a.push(l); i.push(r) } const c = { profitData: a, marginData: i }; profitMaximizationCache = { key: t, data: c }; try { sessionStorage.setItem(t, JSON.stringify(c)) } catch (p) { console.error("Could not save profit data to session storage.", p) } } finally { state.configData = n; isProfitCalculating = !1; if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') { ProfitTab.draw() } } }, 200) }
-function doesElementBuildModel(e, t) { const a = state.taskData.get(e); if (!a) return !1; const i = { 1: 'Super', 2: 'Ultra', 3: 'Mega' }, n = i[t]; return a[n] > 0 }
-function runGanttSimulation() { const e = parseInt(numEmployeesInput.value), t = parseInt(dailyDemandInput.value), a = parseFloat(opHoursInput.value), i = state.configData[e]; if (!i || Object.keys(i).length === 0 || invalidPrecedenceNodes.size > 0) { return { tasks: [] } } const n = generateProductionQueue(t), o = calculateMetrics({ dailyDemand: t, opHours: a, numEmployees: e }, {}), s = o.effectiveCycleTime, l = o.conveyorSpeed; if (l <= 0 || !isFinite(l)) { return { tasks: [] } } let r = []; let d = n.map((p, u) => { let m = u * s; if (u === 0 && isNaN(m)) { m = 0 } return { modelId: p, arrivalTime: m, uniqueId: `${p}-${u}` } }); const c = Object.keys(i).sort((p, u) => parseInt(p) - parseInt(u)), h = c.reduce((p, u) => { const m = i[u] || []; const g = m.reduce((f, v) => f + (state.taskData.get(v)?.elementTime || 0), 0); return p + g }, 0), f = ASSEMBLY_LINE_LENGTH / l; for (const v of c) { const b = i[v] || []; if (b.length === 0) continue; let S = 0; let w = []; const T = b.reduce((I, x) => I + (state.taskData.get(x)?.elementTime || 0), 0); let C = 0; if (h > 0) { C = T / h * f } d.sort((I, x) => I.arrivalTime - x.arrivalTime); for (const A of d) { if (!isFinite(A.arrivalTime)) continue; const k = Math.max(A.arrivalTime, S); let E = k; for (const P of b) { if (doesElementBuildModel(P, A.modelId)) { const L = state.taskData.get(P); if (L) { const V = E, I = V + L.elementTime; r.push({ workstationId: `WS ${v}`, modelId: A.modelId, taskId: P, startTime: V, endTime: I, uniqueId: A.uniqueId }); E = I } } } const x = E; S = x; const N = A.arrivalTime + C, _ = Math.max(x, N); w.push({ ...A, arrivalTime: _ }) } d = w } return { tasks: r } }
-function roundUpToQuarter(e) { return Math.ceil(e / .25) * .25 }
 
 /**
-* --------------------------------------------------------------------
-* State Comparison Functionality (NEW)
-* --------------------------------------------------------------------
+* Halts all running `requestAnimationFrame` loops for the layout and
+* schedule simulations.
 */
-function saveCurrentState() {
-    savedStateCache = {
-        inputs: { dailyDemand: dailyDemandInput.value, opHours: opHoursInput.value, numEmployees: numEmployeesInput.value, laborCost: laborCostInput.value, superSell: superSellInput.value, superCogs: superCogsInput.value, ultraSell: ultraSellInput.value, ultraCogs: ultraCogsInput.value, megaSell: megaSellInput.value, megaCogs: megaCogsInput.value },
-        configData: JSON.parse(JSON.stringify(state.configData)),
-    };
-    const saveBtn = document.getElementById('saveStateBtn');
-    if (saveBtn) { saveBtn.textContent = 'State Saved!'; saveBtn.style.backgroundColor = 'var(--accent)'; setTimeout(() => { saveBtn.textContent = 'Save State'; saveBtn.style.backgroundColor = ''; }, 1500); }
+function stopAllSimulations() {
+    if (animationState.layout.frameId) {
+        cancelAnimationFrame(animationState.layout.frameId);
+        animationState.layout.frameId = null;
+        animationState.layout.isRunning = false;
+    }
+    if (animationState.schedule.frameId) {
+        cancelAnimationFrame(animationState.schedule.frameId);
+        animationState.schedule.frameId = null;
+        animationState.schedule.isRunning = false;
+    }
 }
 
-function handleCompareToggle(event) {
-    isCompareMode = event.target.checked;
-    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-    if ((activeTab === 'overview' || activeTab === 'precedence') && isCompareMode) {
-        event.target.checked = false;
-        isCompareMode = false;
-        return;
+/**
+* Animates a numeric value in a DOM element from a start to an end value.
+* @param {HTMLElement} element - The DOM element to update.
+* @param {number} start - The starting number.
+* @param {number} end - The ending number.
+* @param {number} [duration=1000] - The animation duration in milliseconds.
+* @param {Function} [formatter] - A function to format the number for display.
+*/
+function animateValue(element, start, end, duration = 1000, formatter = (val) => val.toFixed(1)) {
+    if (!element) return;
+    if (element._animationId) {
+        cancelAnimationFrame(element._animationId);
     }
-    if (isCompareMode && !savedStateCache) {
-        saveCurrentState();
+    const startTime = Date.now();
+    const range = end - start;
+
+    function updateValue() {
+        const now = Date.now();
+        const elapsed = now - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const easeProgress = 1 - Math.pow(1 - progress, 4);
+        const current = start + (range * easeProgress);
+        element.textContent = formatter(current);
+        if (progress < 1) {
+            element._animationId = requestAnimationFrame(updateValue);
+        } else {
+            element._animationId = null;
+        }
     }
+    updateValue();
+}
+
+/**
+* Parses a numeric value from an element's text content, ignoring
+* currency symbols and other non-numeric characters.
+* @param {HTMLElement} element - The DOM element to parse.
+* @returns {number} The parsed numeric value.
+*/
+function parseElementValue(element) {
+    if (!element || !element.textContent) return 0;
+    const text = element.textContent;
+    if (text.includes('$')) {
+        const cleanedText = text.replace(/[$,]/g, '');
+        const match = cleanedText.match(/-?\d+\.?\d*/);
+        return match ? parseFloat(match[0]) : 0;
+    }
+    const match = text.match(/-?\d+\.?\d*/);
+    return match ? parseFloat(match[0]) : 0;
+}
+
+/**
+* Enhances a number or range input to allow value changes via
+* middle-mouse-button drag, mouse wheel scroll, and Ctrl+Click to reset.
+* @param {HTMLInputElement} input - The input element to enhance.
+* @param {number} [step=1] - The step value for dragging.
+* @param {number} [sensitivity=0.1] - The drag sensitivity.
+*/
+function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
+    let isDragging = false;
+    let startY, startValue;
+    const defaultValues = {
+        'dailyDemand': 180,
+        'opHours': 15.0,
+        'numEmployees': 8,
+        'laborCost': 25.0,
+        'superSell': 1250,
+        'superCogs': 450,
+        'ultraSell': 1500,
+        'ultraCogs': 550,
+        'megaSell': 1800,
+        'megaCogs': 650
+    };
+    const getConstraints = () => {
+        const min = input.hasAttribute('min') ? parseFloat(input.min) : -Infinity;
+        const max = input.hasAttribute('max') ? parseFloat(input.max) : Infinity;
+        const stepValue = parseFloat(input.step) || 1;
+        return { min, max, step: stepValue };
+    };
+    input.addEventListener("mousedown", (e) => {
+        if (e.button === 1) {
+            e.preventDefault();
+            e.stopPropagation();
+            isDragging = true;
+            startY = e.clientY;
+            startValue = parseFloat(input.value) || 0;
+            const onMouseMove = (ev) => {
+                if (!isDragging) return;
+                const deltaY = startY - ev.clientY;
+                const constraints = getConstraints();
+                let newVal = startValue + deltaY * sensitivity * step;
+                newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
+                if (input.type === 'range' || constraints.step === 1) {
+                    input.value = Math.round(newVal).toString();
+                } else if (constraints.step < 1) {
+                    const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
+                    input.value = newVal.toFixed(decimals);
+                } else {
+                    input.value = newVal.toFixed(2);
+                }
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+            };
+            const onMouseUp = () => {
+                isDragging = false;
+                document.removeEventListener("mousemove", onMouseMove);
+                document.removeEventListener("mouseup", onMouseUp);
+            };
+            document.addEventListener("mousemove", onMouseMove);
+            document.addEventListener("mouseup", onMouseUp);
+        }
+    });
+    input.addEventListener("wheel", (e) => {
+        if (document.activeElement === input) {
+            e.preventDefault();
+            const constraints = getConstraints();
+            const direction = e.deltaY > 0 ? -1 : 1;
+            let currentValue = parseFloat(input.value) || 0;
+            let newVal = currentValue + (direction * constraints.step);
+            newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
+            if (input.type === 'range' || constraints.step === 1) {
+                input.value = Math.round(newVal).toString();
+            } else if (constraints.step < 1) {
+                const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
+                input.value = newVal.toFixed(decimals);
+            } else {
+                input.value = newVal.toFixed(2);
+            }
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+    });
+}
+
+/**
+* Restores the active tab from session storage on page load.
+*/
+function restoreActiveTab() {
+    let targetTab = sessionStorage.getItem("activeTab");
+    if (!targetTab) {
+        targetTab = "overview";
+        sessionStorage.setItem("activeTab", targetTab);
+    }
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    const btn = document.querySelector(`.tab-btn[data-tab="${targetTab}"]`);
+    if (btn) btn.classList.add("active");
+    visPanels.forEach(panel => {
+        panel.style.display = panel.id === `${targetTab}-panel` ? "block" : "none";
+    });
     renderActiveTab();
 }
 
 /**
-* --------------------------------------------------------------------
-* Visualization Panels (Tabs) - MODIFIED FOR COMPARISON
-* --------------------------------------------------------------------
+* Main UI update function. It recalculates metrics and updates all
+* output displays and visualizations.
 */
-function renderActiveTab() {
-    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-    if (!activeTab) return;
+function updateUI() {
+    employeeCountDisplay.textContent = numEmployeesInput.value;
+    renderWorkstationSidebar(parseInt(numEmployeesInput.value));
+    setupDragAndDrop();
 
-    const panel = document.getElementById(`${activeTab}-panel`);
-    const panelParent = panel.parentElement;
-
-    const drawFunctionMap = {
-        'overview': drawOverviewPanel, 'precedence': drawPrecedenceChart,
-        'schedule': ScheduleTab.draw, 'efficiency': EfficiencyTab.draw,
-        'layout': LayoutTab.draw, 'profit': ProfitTab.draw,
-        'investment': drawInvestmentPanel
-    };
-    const drawFunction = drawFunctionMap[activeTab];
-    if (!drawFunction) return;
-
-    // Always clean up a previous comparison view to ensure a fresh start
-    const existingWrapper = panelParent.querySelector('.comparison-wrapper');
-    if (existingWrapper) {
-        const liveContainer = existingWrapper.querySelector('.live-view');
-        if (liveContainer?.firstChild) {
-            panelParent.appendChild(liveContainer.firstChild); // Restore original panel
+    if (invalidPrecedenceNodes.size > 0) {
+        demandStatusEl.textContent = "Fails to Meet Precedence";
+        demandStatusEl.className = "status failure";
+        wipEl.textContent = '---';
+        throughputEl.textContent = '---';
+        conveyorSpeedEl.textContent = '---';
+        productSpacingEl.textContent = '---';
+        grossProfitEl.textContent = '---';
+        profitMarginEl.textContent = '---';
+        avgEfficiencyEl.textContent = '---';
+        totalIdleTimeEl.textContent = '---';
+        balanceDelayEl.textContent = '---';
+        idleTimeCvEl.textContent = '---';
+    } else {
+        const opInputs = {
+            dailyDemand: parseInt(dailyDemandInput.value),
+            opHours: parseFloat(opHoursInput.value),
+            numEmployees: parseInt(numEmployeesInput.value)
+        };
+        const finInputs = {
+            laborCost: parseFloat(laborCostInput.value),
+            superSell: parseFloat(superSellInput.value),
+            superCogs: parseFloat(superCogsInput.value),
+            ultraSell: parseFloat(ultraSellInput.value),
+            ultraCogs: parseFloat(ultraCogsInput.value),
+            megaSell: parseFloat(megaSellInput.value),
+            megaCogs: parseFloat(megaCogsInput.value),
+        };
+        const results = calculateMetrics(opInputs, finInputs);
+        if (results) {
+            animateValue(wipEl, parseElementValue(wipEl), results.wip, 800, val => val.toFixed(1));
+            animateValue(throughputEl, parseElementValue(throughputEl), results.throughputUnitsPerHour, 800, val => `${val.toFixed(1)}/hr`);
+            animateValue(conveyorSpeedEl, parseElementValue(conveyorSpeedEl), results.conveyorSpeed, 800, val => `${val.toFixed(2)} ft/min`);
+            animateValue(productSpacingEl, parseElementValue(productSpacingEl), results.productSpacing, 800, val => `${val.toFixed(2)} ft`);
+            animateValue(grossProfitEl, parseElementValue(grossProfitEl), results.dailyGrossProfit, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }));
+            animateValue(profitMarginEl, parseElementValue(profitMarginEl), results.grossProfitMargin, 800, val => `${val.toFixed(1)}%`);
+            animateValue(avgEfficiencyEl, parseElementValue(avgEfficiencyEl), results.averageEfficiency, 800, val => `${val.toFixed(1)}%`);
+            animateValue(totalIdleTimeEl, parseElementValue(totalIdleTimeEl), results.totalIdleTime / 60, 800, val => `${val.toFixed(2)} hrs`);
+            animateValue(balanceDelayEl, parseElementValue(balanceDelayEl), results.balanceDelay, 800, val => `${val.toFixed(1)}%`);
+            animateValue(idleTimeCvEl, parseElementValue(idleTimeCvEl), results.idleTimeCv, 800, val => `${val.toFixed(1)}%`);
+            demandStatusEl.textContent = results.meetsDemand ? "Meets Demand" : "Fails to Meet Demand";
+            demandStatusEl.className = results.meetsDemand ? "status success" : "status failure";
         }
-        existingWrapper.remove();
     }
 
-    const isCompareDisabled = activeTab === 'overview' || activeTab === 'precedence';
-
-    if (isCompareMode && !isCompareDisabled) {
-        // Store the live state before changing anything
-        const liveStateCache = {
-            inputs: { dailyDemand: dailyDemandInput.value, opHours: opHoursInput.value, numEmployees: numEmployeesInput.value, laborCost: laborCostInput.value, superSell: superSellInput.value, superCogs: superCogsInput.value, ultraSell: ultraSellInput.value, ultraCogs: ultraCogsInput.value, megaSell: megaSellInput.value, megaCogs: megaCogsInput.value },
-            configData: JSON.parse(JSON.stringify(state.configData))
-        };
-
-        // Temporarily apply the saved state and draw
-        state.configData = savedStateCache.configData;
-        for (const key in savedStateCache.inputs) { document.getElementById(key).value = savedStateCache.inputs[key]; }
-        drawFunction();
-        const savedSvgClone = panel.cloneNode(true);
-        savedSvgClone.id = '';
-
-        // Restore the live state and draw
-        state.configData = liveStateCache.configData;
-        for (const key in liveStateCache.inputs) { document.getElementById(key).value = liveStateCache.inputs[key]; }
-        drawFunction();
-
-        // Build the side-by-side container and place the SVGs
-        const wrapper = document.createElement('div');
-        wrapper.className = 'comparison-wrapper';
-        wrapper.innerHTML = `<div class="comparison-container saved-view"></div><div class="comparison-container live-view"></div>`;
-        wrapper.querySelector('.saved-view').appendChild(savedSvgClone);
-        wrapper.querySelector('.live-view').appendChild(panel);
-        panelParent.appendChild(wrapper);
-        wrapper.style.flexDirection = (panelParent.offsetWidth > panelParent.offsetHeight) ? 'row' : 'column';
-    } else {
-        // Normal render
-        drawFunction();
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+    if (activeTab === 'layout' || activeTab === 'schedule' || activeTab === 'efficiency' || activeTab === 'profit') {
+        stopAllSimulations();
+        if (activeTab === 'layout') LayoutTab.draw();
+        if (activeTab === 'schedule') ScheduleTab.draw();
+        if (activeTab === 'efficiency') EfficiencyTab.draw();
+        if (activeTab === 'profit') ProfitTab.draw();
     }
 }
 
+/**
+* Renders the left sidebar, displaying workstations and their assigned
+* elements for a given employee configuration.
+* @param {number} numEmployees - The number of employees/workstations.
+*/
+function renderWorkstationSidebar(numEmployees) {
+    workstationList.innerHTML = '';
+    const config = state.configData[numEmployees];
+    if (!config || Object.keys(config).length === 0) return;
+
+    const sortedStationIds = Object.keys(config).sort((a, b) => parseInt(a) - parseInt(b));
+    const numWorkstations = sortedStationIds.length;
+
+    let maxElementTime = 0;
+    sortedStationIds.forEach(stationId => {
+        config[stationId].forEach(taskId => {
+            const task = state.taskData.get(taskId);
+            if (task && task.elementTime > maxElementTime) {
+                maxElementTime = task.elementTime;
+            }
+        });
+    });
+    if (maxElementTime === 0) return;
+
+    sortedStationIds.forEach((stationId, stationIndex) => {
+        const elementsInStation = config[stationId];
+        const elementColorScale = generateElementColorScale(stationIndex, numWorkstations, elementsInStation.length);
+        const workstationDiv = document.createElement('div');
+        workstationDiv.className = 'workstation';
+
+        const title = document.createElement('div');
+        title.className = 'workstation-title';
+        title.textContent = `Workstation ${stationId}`;
+        workstationDiv.appendChild(title);
+
+        const elementsContainer = document.createElement('div');
+        elementsContainer.className = 'workstation-elements';
+        elementsInStation.forEach((taskId, elementIndex) => {
+            const task = state.taskData.get(taskId);
+            if (task) {
+                const elementColor = elementColorScale(elementIndex);
+                const elementRow = document.createElement('div');
+                elementRow.className = 'element-row';
+                elementRow.title = `Element ${taskId}: ${task.description}`;
+                elementRow.dataset.taskId = taskId;
+
+                const barWrapper = document.createElement('div');
+                barWrapper.className = 'element-bar-wrapper';
+
+                const elementTimeBar = document.createElement('div');
+                elementTimeBar.className = 'element-time-bar';
+                const elementBarWidth = (task.elementTime / maxElementTime) * 80;
+                elementTimeBar.style.width = `${elementBarWidth}%`;
+                elementTimeBar.style.backgroundColor = getComputedStyle(root).getPropertyValue('--accent').trim();
+                elementTimeBar.style.border = `3px solid ${elementColor}`;
+
+                const laborTimeBar = document.createElement('div');
+                laborTimeBar.className = 'labor-time-bar';
+                laborTimeBar.style.backgroundColor = elementColor;
+                const laborBarRatio = task.elementTime > 0 ? (task.laborTime / task.elementTime) : 0;
+                laborTimeBar.style.transform = `scaleX(${laborBarRatio})`;
+
+                if (task.elementTime > 2 * task.laborTime) {
+                    const timeText = document.createElement('span');
+                    timeText.className = 'element-time-text';
+                    timeText.textContent = taskId;
+                    elementTimeBar.appendChild(timeText);
+                } else {
+                    const laborText = document.createElement('span');
+                    laborText.className = 'labor-bar-text';
+                    laborText.textContent = taskId;
+                    elementTimeBar.appendChild(laborText);
+                }
+
+                elementTimeBar.appendChild(laborTimeBar);
+                barWrapper.appendChild(elementTimeBar);
+                elementRow.appendChild(barWrapper);
+                elementsContainer.appendChild(elementRow);
+            }
+        });
+        workstationDiv.appendChild(elementsContainer);
+        workstationList.appendChild(workstationDiv);
+    });
+
+    const firstTitle = workstationList.querySelector('.workstation-title');
+    const svgContainer = document.getElementById('svg-container');
+    if (firstTitle && svgContainer) {
+        const svgTop = svgContainer.getBoundingClientRect().top;
+        const titleTop = firstTitle.getBoundingClientRect().top;
+        const currentPadding = parseFloat(getComputedStyle(workstationList).paddingTop) || 0;
+        const offset = svgTop - titleTop;
+        const newPadding = Math.max(0, currentPadding + offset);
+        workstationList.style.paddingTop = `${newPadding}px`;
+    }
+}
+
+/**
+* Sets up event listeners for the main financial and operational input controls.
+*/
+/**
+ * UI - Set listeners for the variable inputs.
+ */
+function setupEventListeners() {
+    const inputs = [
+        dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput,
+        superSellInput, superCogsInput, ultraSellInput, ultraCogsInput,
+        megaSellInput, megaCogsInput
+    ];
+    attachCommitBehavior(inputs, (id, value) => {
+        handleInputChange(id);
+    });
+}
+
+// UPDATE: Improved input commit behavior to reduce accidental commits
+// - Focus clears visual contents but keeps committed value until commit
+// - Commit on Enter, Escape (revert), Blur (with special empty handling)
+function attachCommitBehavior(inputs, onCommit) {
+    const timers = new WeakMap();
+    const autoFlag = new WeakMap();
+
+    // Clear all auto-commit flags on global mouseup (end of middle-drag)
+    const clearAllAutoFlags = () => {
+        inputs.forEach(inp => autoFlag.set(inp, false));
+    };
+    document.addEventListener('mouseup', clearAllAutoFlags);
+
+    inputs.forEach(input => {
+        if (!input) return;
+
+        // Ensure we have a committed baseline value stored
+        if (!input.dataset.committedValue) input.dataset.committedValue = input.value ?? '';
+
+        autoFlag.set(input, false);
+        input.dataset.awaitingInput = 'false';
+
+        // When user focuses the field: show an empty box with cursor but keep committed value stored
+        input.addEventListener('focus', (e) => {
+            input.dataset.preFocusValue = input.dataset.committedValue ?? '';
+            // Only clear visual contents if there's something to hide; leave range inputs alone
+            if (input.type !== 'range') {
+                // If the user already started typing (awaitingInput), don't clear again
+                if (input.dataset.awaitingInput !== 'true') {
+                    input.dataset.awaitingInput = 'true';
+                    // Clear displayed value but do not overwrite committedValue
+                    input.value = '';
+                    // Keep cursor visible; for some browsers move caret to start
+                    try { input.setSelectionRange(0, 0); } catch (_) { }
+                }
+            }
+        });
+
+        // Middle-button drag enables auto-commit behavior (scrub)
+        input.addEventListener('mousedown', (e) => {
+            if (e.button === 1) {
+                autoFlag.set(input, true);
+            }
+        });
+
+        // Debounced auto-commit, but only if middle-scrub is active
+        input.addEventListener('input', () => {
+            const prevTimer = timers.get(input);
+            if (prevTimer) clearTimeout(prevTimer);
+
+            // Immediate commit for range inputs (sliders) so they update instantly
+            if (input.type === 'range') {
+                commitInput(input, onCommit);
+                input.dataset.awaitingInput = 'false';
+                return;
+            }
+
+            // If middle-scrub is required for auto-commit, ignore otherwise
+            if (!autoFlag.get(input)) {
+                // Mark that user did type something (so blur won't restore)
+                input.dataset.awaitingInput = 'true';
+                return;
+            }
+
+            const t = setTimeout(() => {
+                const current = (input.value || '').trim();
+                const committed = (input.dataset.committedValue || '').trim();
+                if (current !== committed) {
+                    commitInput(input, onCommit);
+                }
+            }, 200);
+            timers.set(input, t);
+        });
+
+        // Also commit on change as a safe fallback (e.g., some browsers fire change reliably)
+        input.addEventListener('change', () => {
+            const prevTimer = timers.get(input);
+            if (prevTimer) clearTimeout(prevTimer);
+            commitInput(input, onCommit);
+            input.dataset.awaitingInput = 'false';
+        });
+
+        // Commit on Enter, revert on Escape (always active)
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const prevTimer = timers.get(input);
+                if (prevTimer) clearTimeout(prevTimer);
+                commitInput(input, onCommit);
+                input.dataset.awaitingInput = 'false';
+                input.blur();
+            } else if (e.key === 'Escape') {
+                const prevTimer = timers.get(input);
+                if (prevTimer) clearTimeout(prevTimer);
+                // Restore previous committed value visually and cancel awaiting state
+                input.value = input.dataset.committedValue ?? '';
+                input.dataset.awaitingInput = 'false';
+                input.blur();
+            }
+        });
+
+        // Commit on blur (always active) with special behavior:
+        // - If user focused and did not enter a new value (still empty), restore previous committed value
+        // - Otherwise attempt to commit (commitInput will validate / clamp / persist)
+        input.addEventListener('blur', () => {
+            const prevTimer = timers.get(input);
+            if (prevTimer) clearTimeout(prevTimer);
+
+            const awaiting = input.dataset.awaitingInput === 'true';
+            const text = (input.value || '').trim();
+
+            if (awaiting && text === '') {
+                // User focused but didn't type a new value → restore previous committed value
+                input.value = input.dataset.committedValue ?? '';
+                input.dataset.awaitingInput = 'false';
+                // No commit callback needed because value didn't change
+            } else {
+                // Either user typed something, or this wasn't an "empty-until-typed" session → attempt commit
+                commitInput(input, onCommit);
+                input.dataset.awaitingInput = 'false';
+            }
+        });
+    });
+
+    // Add Ctrl+Click to reset functionality
+    const defaultValues = {
+        'dailyDemand': 180,
+        'opHours': 15.0,
+        'numEmployees': 8,
+        'laborCost': 25.0,
+        'superSell': 1250,
+        'superCogs': 450,
+        'ultraSell': 1500,
+        'ultraCogs': 550,
+        'megaSell': 1800,
+        'megaCogs': 650
+    };
+
+    inputs.forEach(input => {
+        if (!input) return;
+        input.addEventListener("click", (e) => {
+            if (e.ctrlKey) {
+                e.preventDefault();
+                const defaultValue = defaultValues[input.id];
+                if (defaultValue !== undefined) {
+                    const min = input.hasAttribute('min') ? parseFloat(input.min) : -Infinity;
+                    const max = input.hasAttribute('max') ? parseFloat(input.max) : Infinity;
+                    const step = parseFloat(input.step) || 1;
+
+                    input.value = Math.max(min, Math.min(max, defaultValue));
+                    commitInput(input, onCommit); // This will now work correctly
+
+                    input.style.backgroundColor = getComputedStyle(root).getPropertyValue('--primary').trim();
+                    setTimeout(() => { input.style.backgroundColor = ''; }, 200);
+                }
+            }
+        });
+    });
+}
+
+function commitInput(input, onCommit) {
+    const raw = (input.value || '').trim();
+    if (raw === '') {
+        // Revert to last committed to avoid propagating invalid/empty state
+        input.value = input.dataset.committedValue ?? '';
+        return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) {
+        input.value = input.dataset.committedValue ?? '';
+        return;
+    }
+    const clamped = clampByField(input.id, n);
+    input.value = String(clamped);
+    input.dataset.committedValue = input.value;
+    if (typeof onCommit === 'function') onCommit(input.id, clamped);
+}
+
+function clampByField(id, n) {
+    switch (id) {
+        case 'opHours':
+            return Math.min(Math.max(n, 0), 24);
+        case 'dailyDemand':
+            return Math.max(0, Math.floor(n));
+        case 'numEmployees':
+            return Math.max(1, Math.floor(n));
+        case 'laborCost':
+            return Math.max(0, n);
+        case 'superSell':
+        case 'superCogs':
+        case 'ultraSell':
+        case 'ultraCogs':
+        case 'megaSell':
+        case 'megaCogs':
+            return Math.max(0, n);
+        default:
+            return n;
+    }
+}
+
+/**
+* Sets up event listeners for general UI elements like sidebars and tabs.
+*/
+function setupUIEventListeners() {
+    // --- Create the Auto-Adjust Toggle Switch ---
+    const switchContainer = document.createElement('div');
+    switchContainer.style.display = 'flex';
+    switchContainer.style.alignItems = 'center';
+
+    const switchText = document.createElement('span');
+    switchText.textContent = 'Auto Adjust';
+    switchText.style.marginRight = '8px';
+    switchText.style.fontSize = '0.9em';
+
+    const switchLabel = document.createElement('label');
+    switchLabel.className = 'switch';
+
+    const switchInput = document.createElement('input');
+    switchInput.type = 'checkbox';
+    switchInput.id = 'autoAdjustToggle';
+    switchInput.checked = autoAdjustEnabled;
+
+    const sliderSpan = document.createElement('span');
+    sliderSpan.className = 'slider';
+
+    switchLabel.append(switchInput, sliderSpan);
+    switchContainer.append(switchText, switchLabel);
+
+    switchInput.addEventListener('change', () => {
+        autoAdjustEnabled = switchInput.checked;
+    });
+
+    // --- Position the Switch Next to the "Operational Inputs" Title ---
+    // Note: This robustly finds the title above the 'dailyDemand' input.
+    const demandInputContainer = dailyDemandInput.closest('.input-group, .form-group, div');
+    if (demandInputContainer) {
+        const operationalTitle = demandInputContainer.previousElementSibling;
+        if (operationalTitle && (operationalTitle.tagName === 'H3' || operationalTitle.tagName === 'H4')) {
+            const titleWrapper = document.createElement('div');
+            titleWrapper.style.display = 'flex';
+            titleWrapper.style.justifyContent = 'space-between';
+            titleWrapper.style.alignItems = 'center';
+            // Maintain original spacing by moving the title's margin to the wrapper
+            titleWrapper.style.marginBottom = getComputedStyle(operationalTitle).marginBottom;
+            operationalTitle.style.marginBottom = '0';
+
+            // Replace the original title with the new wrapper
+            operationalTitle.parentNode.insertBefore(titleWrapper, operationalTitle);
+
+            // Move the title and the new switch group into the wrapper
+            titleWrapper.appendChild(operationalTitle);
+            titleWrapper.appendChild(switchContainer);
+        } else {
+            // Fallback if the title can't be found: place it at the top.
+            rightSidebar.insertBefore(switchContainer, rightSidebar.firstChild);
+        }
+    }
+
+
+    leftToggle.addEventListener('click', () => {
+        const redrawOnTransitionEnd = () => {
+            updateUI();
+            document.getElementById('left-sidebar').removeEventListener('transitionend', redrawOnTransitionEnd);
+        };
+        document.getElementById('left-sidebar').addEventListener('transitionend', redrawOnTransitionEnd);
+        document.getElementById('left-sidebar').classList.toggle('collapsed');
+        const isCollapsed = document.getElementById('left-sidebar').classList.contains('collapsed');
+        leftToggle.innerHTML = isCollapsed ? '&raquo;' : '&laquo;';
+    });
+    rightToggle.addEventListener('click', () => {
+        const redrawOnTransitionEnd = () => {
+            updateUI();
+            document.getElementById('right-sidebar').removeEventListener('transitionend', redrawOnTransitionEnd);
+        };
+        document.getElementById('right-sidebar').addEventListener('transitionend', redrawOnTransitionEnd);
+        document.getElementById('right-sidebar').classList.toggle('collapsed');
+        const isCollapsed = document.getElementById('right-sidebar').classList.contains('collapsed');
+        rightToggle.innerHTML = isCollapsed ? '&laquo;' : '&raquo;';
+    });
+    tabs.addEventListener('click', (e) => {
+        if (e.target.classList.contains('tab-btn')) {
+            const targetTab = e.target.dataset.tab;
+            const currentActive = tabs.querySelector('.active');
+            if (currentActive && currentActive.dataset.tab === targetTab) {
+                return;
+            }
+            sessionStorage.setItem("activeTab", targetTab);
+            if (currentActive) currentActive.classList.remove('active');
+            e.target.classList.add('active');
+            visPanels.forEach(panel => {
+                panel.style.display = panel.id === `${targetTab}-panel` ? 'block' : 'none';
+            });
+            workstationList.scrollTop = 0;
+            stopAllSimulations();
+            if (targetTab === 'precedence') {
+                drawPrecedenceChart();
+            } else {
+                renderActiveTab();
+            }
+        }
+    });
+    workstationList.addEventListener('scroll', () => {
+        const scrollTop = workstationList.scrollTop;
+        const schedulePanel = document.getElementById('schedule-panel');
+        const contentGroup = schedulePanel.querySelector('.schedule-content-group');
+        if (contentGroup) {
+            contentGroup.setAttribute('transform', `translate(0, ${-scrollTop})`);
+        }
+    });
+}
+
+/**
+ * UI - Controls tab shift visibility
+ */
+function handleVisibilityChange() {
+    if (document.hidden) {
+        // Pause animations without resetting state
+        if (animationState && animationState.schedule && animationState.schedule.isRunning) {
+            animationState.schedule.isPaused = true;
+        }
+        if (animationState && animationState.layout && animationState.layout.isRunning) {
+            animationState.layout.isPaused = true;
+        }
+    } else {
+        // Resume animations; reset lastFrameTime to avoid jumps
+        if (animationState && animationState.schedule && animationState.schedule.isPaused) {
+            animationState.schedule.isPaused = false;
+            animationState.schedule.lastFrameTime = performance.now();
+        }
+        if (animationState && animationState.layout && animationState.layout.isPaused) {
+            animationState.layout.isPaused = false;
+            animationState.layout.lastFrameTime = performance.now();
+        }
+    }
+}
+
+/**
+* Sets up the event listener for browser tab visibility changes.
+*/
+function setupVisibilityListener() {
+    document.addEventListener('visibilitychange', handleVisibilityChange, false);
+}
+
+/**
+* Initializes Sortable.js for drag-and-drop functionality on workstations.
+*/
+function setupDragAndDrop() {
+    sortableInstances.forEach(instance => instance.destroy());
+    sortableInstances = [];
+    const workstationElements = document.querySelectorAll('.workstation-elements');
+    workstationElements.forEach(el => {
+        const instance = new Sortable(el, {
+            group: 'shared',
+            animation: 150,
+            onEnd: function (evt) {
+                updateWorkstationOrder();
+            }
+        });
+        sortableInstances.push(instance);
+    });
+}
+
+/**
+* Creates a new D3 tooltip element or returns an existing one.
+* @param {string} className - The class name for the tooltip.
+* @returns {d3.Selection} The D3 selection for the tooltip div.
+*/
+function createTooltip(className) {
+    let tooltip = d3.select("body > .d3-tooltip");
+    if (tooltip.empty()) {
+        tooltip = d3.select("body").append("div")
+            .attr("class", `d3-tooltip ${className || ''}`)
+            .style("opacity", 0).style("position", "absolute");
+    }
+    return tooltip;
+}
+
+/**
+* Creates a standardized SVG control button.
+* @param {d3.Selection} parent - The parent G element to append the button to.
+* @param {object} options - Configuration for the button.
+* @returns {d3.Selection} The created button group selection.
+*/
+function createControlButton(parent, options) {
+    const { className, text, transform = [0, 0] } = options;
+    const btn = parent.append("g")
+        .attr("class", className)
+        .attr("transform", `translate(${transform[0]}, ${transform[1]})`)
+        .style("cursor", "pointer");
+    btn.append("rect")
+        .attr("width", 28)
+        .attr("height", 18)
+        .attr("fill", getComputedStyle(root).getPropertyValue('--accent').trim())
+        .attr("rx", 3);
+    btn.append("text")
+        .attr("x", 14)
+        .attr("y", 13.5)
+        .attr("text-anchor", "middle")
+        .attr("fill", getComputedStyle(root).getPropertyValue('--secondary1').trim())
+        .style("font-size", "14px")
+        .text(text);
+    return btn;
+}
+
+/**
+* Generates a D3 color scale for elements within a single workstation.
+* @param {number} workstationIndex - The index of the workstation.
+* @param {number} numWorkstations - The total number of workstations.
+* @param {number} numElements - The number of elements in this workstation.
+* @returns {d3.ScaleLinear<string, string>} The D3 color scale.
+*/
+function generateElementColorScale(workstationIndex, numWorkstations, numElements) {
+    const schemeColors = [
+        getComputedStyle(root).getPropertyValue('--primary').trim(),
+        getComputedStyle(root).getPropertyValue('--secondary1').trim(),
+        getComputedStyle(root).getPropertyValue('--secondary2').trim(),
+    ];
+    const baseColor = d3.hcl(schemeColors[workstationIndex % schemeColors.length]);
+    const startColor = baseColor.copy();
+    startColor.l += 15;
+    const endColor = baseColor.copy();
+    endColor.l -= 15;
+    return d3.scaleLinear()
+        .domain([0, numElements > 1 ? numElements - 1 : 1])
+        .range([startColor.toString(), endColor.toString()])
+        .interpolate(d3.interpolateHcl);
+}
+
+/**
+* --------------------------------------------------------------------
+* Backend Logic & Calculations
+*
+* These functions handle core data processing, simulations, and
+* business logic without directly manipulating the DOM.
+* --------------------------------------------------------------------
+*/
+
+/**
+* Handles changes from any of the main input controls, triggering
+* recalculations and UI updates.
+* @param {string} driverId - The ID of the input element that changed.
+*/
+function handleInputChange(driverId) {
+    if (isRecalculating) return;
+    isRecalculating = true;
+
+    const isFinancialDriver = ['laborCost', 'superSell', 'superCogs', 'ultraSell', 'ultraCogs', 'megaSell', 'megaCogs'].includes(driverId);
+    if (isFinancialDriver) {
+        calculateOptimalProfitData();
+    }
+
+    try {
+        let dailyDemand = parseInt(dailyDemandInput.value) || 1;
+        let opHours = parseFloat(opHoursInput.value) || 1;
+        let numEmployees = parseInt(numEmployeesInput.value);
+        const isOperationalDriver = ['dailyDemand', 'opHours', 'numEmployees'].includes(driverId);
+
+        if (isOperationalDriver) {
+            workstationList.scrollTop = 0;
+        }
+
+        if (driverId === 'numEmployees') {
+            state.configData[numEmployees] = JSON.parse(JSON.stringify(originalConfigData[numEmployees]));
+        }
+
+        if (isOperationalDriver && autoAdjustEnabled) {
+            let currentBottleneck = calculateWorkstationDetails(numEmployees).bottleneckTime;
+            if (currentBottleneck === 0) {
+                console.error(`No valid workstation data for ${numEmployees} employees. Aborting.`);
+                isRecalculating = false;
+                return;
+            }
+            let taktTime = (opHours * 60) / dailyDemand;
+            if (taktTime < currentBottleneck) {
+                if (driverId === 'numEmployees') {
+                    let requiredHours = (currentBottleneck * dailyDemand) / 60;
+                    opHours = requiredHours <= 24 ? roundUpToQuarter(requiredHours) : 24;
+                    if (requiredHours > 24) {
+                        dailyDemand = Math.floor((24 * 60) / currentBottleneck);
+                    }
+                } else {
+                    numEmployees = findBestEmployeeFit(taktTime, numEmployees);
+                }
+            }
+            taktTime = (opHours * 60) / dailyDemand;
+            if (taktTime < MIN_TAKT_TIME) {
+                if (driverId === 'dailyDemand') {
+                    opHours = roundUpToQuarter((MIN_TAKT_TIME * dailyDemand) / 60);
+                    if (opHours > 24) opHours = 24;
+                } else {
+                    dailyDemand = Math.floor((opHours * 60) / MIN_TAKT_TIME);
+                }
+            }
+        }
+
+        dailyDemandInput.value = Math.round(dailyDemand);
+        opHoursInput.value = opHours.toFixed(2);
+        numEmployeesInput.value = numEmployees;
+
+        updateUI();
+    } catch (error) {
+        console.error("Error during input handling:", error);
+    } finally {
+        isRecalculating = false;
+    }
+}
+
+/**
+* Calculates the cycle time for each workstation and identifies the
+* line's bottleneck and fastest station times.
+* @param {number} numEmployees - The number of employees/workstations in the config.
+* @returns {{workstations: Array<object>, bottleneckTime: number, fastestTime: number}}
+*/
+function calculateWorkstationDetails(numEmployees) {
+    const config = state.configData[numEmployees];
+    if (!config || Object.keys(config).length === 0) return { workstations: [], bottleneckTime: 0, fastestTime: Infinity };
+
+    let workstations = [],
+        bottleneckTime = 0,
+        fastestTime = Infinity;
+
+    for (const stationId in config) {
+        let totalLaborTime = 0;
+        let totalElementTime = 0;
+
+        config[stationId].forEach(taskId => {
+            const task = state.taskData.get(taskId);
+            if (task) {
+                totalLaborTime += task.laborTime;
+                totalElementTime += task.elementTime;
+            }
+        });
+
+        const stationLength = totalElementTime * 15;
+        workstations.push({ id: stationId, cycleTime: totalLaborTime, stationLength: stationLength });
+
+        if (totalLaborTime > bottleneckTime) bottleneckTime = totalLaborTime;
+        if (totalLaborTime < fastestTime && totalLaborTime > 0) fastestTime = totalLaborTime;
+    }
+
+    return { workstations, bottleneckTime, fastestTime };
+}
+
+/**
+* Calculates all key performance indicators (KPIs) for the assembly line
+* based on the current operational and financial inputs.
+* @param {object} op - Operational inputs { dailyDemand, opHours, numEmployees }.
+* @param {object} fin - Financial inputs { laborCost, ...sell/cogs prices }.
+* @returns {object} An object containing all calculated metrics.
+*/
+function calculateMetrics(op, fin) {
+    const wsDetails = calculateWorkstationDetails(op.numEmployees);
+    const fullTotalOpMinutes = Math.floor(op.opHours * 4) * 15;
+    const bottleneckCycleTime = wsDetails.bottleneckTime;
+    const productSpacing = wsDetails.fastestTime === Infinity ? 0 : wsDetails.fastestTime * 15;
+
+    if (productSpacing <= 0 || bottleneckCycleTime <= 0) {
+        return {
+            wip: 0, throughputUnitsPerHour: 0, conveyorSpeed: 0, productSpacing: 0, dailyGrossProfit: -(op.numEmployees * op.opHours * (fin.laborCost || 0)),
+            grossProfitMargin: 0, meetsDemand: false, effectiveCycleTime: Infinity, workstations: wsDetails.workstations,
+            averageEfficiency: 0, totalIdleTime: fullTotalOpMinutes * op.numEmployees, balanceDelay: 100, idleTimeCv: 0, throughputUnitsPerDay: 0
+        };
+    }
+
+    let requiredTaktTime;
+    const demandIntervals = op.dailyDemand > 1 ? op.dailyDemand - 1 : 0;
+    const throughputTimeAsIntervals = ASSEMBLY_LINE_LENGTH / productSpacing;
+    if (op.dailyDemand <= 1) {
+        requiredTaktTime = Infinity;
+    } else {
+        const totalIntervals = demandIntervals + throughputTimeAsIntervals;
+        requiredTaktTime = fullTotalOpMinutes / totalIntervals;
+    }
+    const meetsDemand = bottleneckCycleTime <= requiredTaktTime;
+    const effectiveCycleTime = meetsDemand ? requiredTaktTime : bottleneckCycleTime;
+    const cycleTimeToUseForSpeedCalc = isFinite(effectiveCycleTime) ? effectiveCycleTime : bottleneckCycleTime;
+    const conveyorSpeed = productSpacing / cycleTimeToUseForSpeedCalc;
+    const actualThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * effectiveCycleTime;
+
+    let throughputUnitsPerDay;
+    if (fullTotalOpMinutes < actualThroughputTime) {
+        throughputUnitsPerDay = 0;
+    } else if (op.dailyDemand <= 1) {
+        throughputUnitsPerDay = 1;
+    } else {
+        const launchWindowMinutes = fullTotalOpMinutes - actualThroughputTime;
+        throughputUnitsPerDay = Math.floor(launchWindowMinutes / effectiveCycleTime) + 1;
+    }
+
+    const wip = ASSEMBLY_LINE_LENGTH / productSpacing;
+    let actualProductionMinutes;
+    if (op.dailyDemand <= 0) {
+        actualProductionMinutes = 0;
+    } else if (op.dailyDemand === 1) {
+        actualProductionMinutes = actualThroughputTime;
+    } else {
+        actualProductionMinutes = effectiveCycleTime * (demandIntervals) + actualThroughputTime;
+    }
+
+    const throughputUnitsPerHour = actualProductionMinutes > 0 ? (op.dailyDemand / actualProductionMinutes) * 60 : 0;
+    let totalWorkstationCycleTime = 0;
+    wsDetails.workstations.forEach(ws => {
+        totalWorkstationCycleTime += ws.cycleTime;
+        ws.efficiency = bottleneckCycleTime > 0 ? (ws.cycleTime / bottleneckCycleTime) * 100 : 0;
+        const idleTimePerCycle = bottleneckCycleTime - ws.cycleTime;
+        ws.dailyIdleTime = idleTimePerCycle * throughputUnitsPerDay;
+    });
+
+    const totalAvailableTime = op.numEmployees * fullTotalOpMinutes;
+    const totalDailyLaborCost = op.numEmployees * op.opHours * (fin.laborCost || 0);
+    const totalProductiveTime = throughputUnitsPerDay * totalWorkstationCycleTime;
+    const totalIdleTime = Math.max(0, totalAvailableTime - totalProductiveTime);
+    const averageEfficiency = totalAvailableTime > 0 ? (totalProductiveTime / totalAvailableTime) * 100 : 0;
+
+    const efficiencies = wsDetails.workstations.map(ws => ws.efficiency);
+    const balanceActive = efficiencies.length > 0 ? efficiencies.reduce((a, b) => a + b, 0) / efficiencies.length : 0;
+    const balanceDelay = 100 - balanceActive;
+
+    const idleTimesPerCycle = wsDetails.workstations.map(ws => bottleneckCycleTime - ws.cycleTime);
+    const idleMean = idleTimesPerCycle.length > 0 ? idleTimesPerCycle.reduce((a, b) => a + b, 0) / idleTimesPerCycle.length : 0;
+    const stdDev = Math.sqrt(idleTimesPerCycle.map(x => Math.pow(x - idleMean, 2)).reduce((a, b) => a + b, 0) / (idleTimesPerCycle.length || 1));
+    const idleTimeCv = idleMean > 0 ? (stdDev / idleMean) * 100 : 0;
+
+    const totalRevenue = throughputUnitsPerDay * ((BUILD_RATIOS.super * (fin.superSell || 0)) + (BUILD_RATIOS.ultra * (fin.ultraSell || 0)) + (BUILD_RATIOS.mega * (fin.megaSell || 0)));
+    const totalCogs = throughputUnitsPerDay * ((BUILD_RATIOS.super * (fin.superCogs || 0)) + (BUILD_RATIOS.ultra * (fin.ultraCogs || 0)) + (BUILD_RATIOS.mega * (fin.megaCogs || 0)));
+    const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost;
+    const grossProfitMargin = totalRevenue > 0 ? (dailyGrossProfit / totalRevenue) * 100 : 0;
+
+    return {
+        wip, throughputUnitsPerHour, conveyorSpeed, productSpacing, dailyGrossProfit,
+        grossProfitMargin, meetsDemand, effectiveCycleTime, workstations: wsDetails.workstations,
+        averageEfficiency, totalIdleTime, balanceDelay, idleTimeCv, throughputUnitsPerDay
+    };
+}
+
+/**
+* Finds the minimum number of employees required to meet a given takt time,
+* starting the search from a given employee count.
+* @param {number} requiredTaktTime - The target cycle time to meet.
+* @param {number} startingCount - The number of employees to start searching from.
+* @returns {number} The optimal number of employees.
+*/
+function findBestEmployeeFit(requiredTaktTime, startingCount) {
+    for (let i = startingCount; i <= 13; i++) {
+        if (calculateWorkstationDetails(i).bottleneckTime <= requiredTaktTime) return i;
+    }
+    return 13;
+}
+
+/**
+* Updates the workstation configuration in the global state based on the
+* current DOM structure after a drag-and-drop operation.
+*/
+function updateWorkstationOrder() {
+    const numEmployees = parseInt(numEmployeesInput.value);
+    const newConfig = {};
+
+    document.querySelectorAll('.workstation').forEach(workstationDiv => {
+        const title = workstationDiv.querySelector('.workstation-title').textContent;
+        const stationMatch = title.match(/\d+/);
+        if (stationMatch) {
+            const stationId = stationMatch[0];
+            const elements = [];
+            workstationDiv.querySelectorAll('.element-row').forEach(elRow => {
+                elements.push(parseInt(elRow.dataset.taskId));
+            });
+            newConfig[stationId] = elements;
+        }
+    });
+
+    state.configData[numEmployees] = newConfig;
+    const invalidPrecedenceMap = validatePrecedence();
+    invalidPrecedenceNodes = new Set(Array.from(invalidPrecedenceMap.keys()));
+
+    if (document.querySelector('.tab-btn[data-tab="precedence"].active')) {
+        updatePrecedenceChart();
+    }
+    setTimeout(updateUI, 0);
+}
+
+/**
+* Validates the current element order against the precedence map,
+* adding error classes to invalid elements in the DOM.
+* @returns {Set<number>} A set of task IDs that violate precedence rules.
+*/
+function validatePrecedence() {
+    const seenTasks = new Set();
+    const allElementRows = document.querySelectorAll('.element-row');
+    const invalidNodes = new Set();
+
+    allElementRows.forEach(row => {
+        const taskId = parseInt(row.dataset.taskId);
+        const predecessors = precedenceMap.get(taskId) || new Set();
+        let isTaskValid = true;
+
+        for (const pId of predecessors) {
+            if (!seenTasks.has(pId)) {
+                isTaskValid = false;
+                break;
+            }
+        }
+
+        if (!isTaskValid) {
+            row.classList.add('precedence-error');
+            invalidNodes.add(taskId);
+        } else {
+            row.classList.remove('precedence-error');
+        }
+        seenTasks.add(taskId);
+    });
+
+    return invalidNodes;
+}
+
+/**
+* Generates a mixed-model production sequence based on daily demand
+* using the Model-Mix Sequencing Algorithm (MSSA).
+* @param {number} dailyDemand - The total number of units to produce.
+* @returns {Array<number>} An array representing the production queue (1=Super, 2=Ultra, 3=Mega).
+*/
+function generateProductionQueue(dailyDemand) {
+    const productionQueue = [];
+    const modelRatios = Object.values(BUILD_RATIOS);
+    let modelDemand = [];
+    let sumOfDemands = 0;
+
+    for (let i = 0; i < modelRatios.length - 1; i++) {
+        const demand = Math.round(modelRatios[i] * dailyDemand);
+        modelDemand.push(demand);
+        sumOfDemands += demand;
+    }
+    modelDemand.push(dailyDemand - sumOfDemands);
+
+    let totalDemand = dailyDemand;
+    const wModel = modelDemand.map(d => (d > 0 ? totalDemand / d : Infinity));
+    let aModel = wModel.map(w => w / 2);
+
+    for (let j = 0; j < dailyDemand; j++) {
+        let minIndex = -1;
+        let minValue = Infinity;
+
+        for (let k = 0; k < aModel.length; k++) {
+            if (modelDemand[k] > 0 && aModel[k] < minValue) {
+                minValue = aModel[k];
+                minIndex = k;
+            }
+        }
+
+        if (minIndex === -1) {
+            break;
+        }
+        productionQueue.push(minIndex + 1);
+        aModel[minIndex] += wModel[minIndex];
+        modelDemand[minIndex]--;
+    }
+    return productionQueue;
+}
+
+/**
+* Generates a unique key based on the current financial inputs
+* for caching profit calculation results.
+* @returns {string} The cache key.
+*/
+function getFinancialInputsKey() {
+    const finInputs = {
+        laborCost: parseFloat(laborCostInput.value),
+        superSell: parseFloat(superSellInput.value),
+        superCogs: parseFloat(superCogsInput.value),
+        ultraSell: parseFloat(ultraSellInput.value),
+        ultraCogs: parseFloat(ultraCogsInput.value),
+        megaSell: parseFloat(megaSellInput.value),
+        megaCogs: parseFloat(megaCogsInput.value),
+    };
+    return 'profitDataCache-v1-' + JSON.stringify(finInputs);
+}
+
+/**
+* Checks for cached profit data in session storage. If found, loads it.
+* Otherwise, triggers a new calculation.
+*/
+function runProfitCalculation() {
+    const cacheKey = getFinancialInputsKey();
+    try {
+        const cachedData = sessionStorage.getItem(cacheKey);
+        if (cachedData) {
+            console.log("Loading profit data from session cache.");
+            profitMaximizationCache = { key: cacheKey, data: JSON.parse(cachedData) };
+            if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
+                ProfitTab.draw();
+            }
+        } else {
+            console.log("No valid cache found. Calculating optimal profit data for the first time.");
+            calculateOptimalProfitData();
+        }
+    } catch (e) {
+        console.error("Could not access session storage. Recalculating profit data.", e);
+        calculateOptimalProfitData();
+    }
+}
+
+/**
+* Finds the most profitable and highest margin configuration for a single demand value.
+* @param {number} demand - The daily demand to analyze.
+* @param {object} finInputs - The financial inputs object.
+* @param {Map<number, number>} maxDemandMap - A pre-calculated map of max demands per workstation.
+* @returns {{profitResult: object, marginResult: object}} An object containing the results.
+*/
+function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
+    let maxProfit = -Infinity;
+    let maxProfitConfig = { emp: 0, hrs: 0 };
+    let maxMargin = -Infinity;
+    let maxMarginConfig = { emp: 0, hrs: 0 };
+
+    for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
+        if (demand > (maxDemandMap.get(numEmployees) || 0)) {
+            continue;
+        }
+
+        if (!originalConfigData[numEmployees] || Object.keys(originalConfigData[numEmployees]).length === 0) continue;
+
+        const { bottleneckTime, fastestTime } = calculateWorkstationDetails(numEmployees);
+        if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) continue;
+
+        const productSpacing = fastestTime * 15;
+        const throughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckTime;
+        const totalRequiredMinutes = (demand > 1 ? (demand - 1) * bottleneckTime : 0) + throughputTime;
+        const minRequiredHours = totalRequiredMinutes / 60;
+
+        if (minRequiredHours > 24) continue;
+
+        const startHours = roundUpToQuarter(minRequiredHours);
+        for (let opHours = startHours; opHours <= 24; opHours += 0.25) {
+            const metrics = calculateMetrics({ dailyDemand: demand, opHours, numEmployees }, finInputs);
+
+            if (metrics && metrics.throughputUnitsPerDay >= demand) {
+                if (metrics.dailyGrossProfit > maxProfit) {
+                    maxProfit = metrics.dailyGrossProfit;
+                    maxProfitConfig = { emp: numEmployees, hrs: opHours };
+                }
+                if (metrics.grossProfitMargin > maxMargin) {
+                    maxMargin = metrics.grossProfitMargin;
+                    maxMarginConfig = { emp: numEmployees, hrs: opHours };
+                }
+                break;
+            }
+        }
+    }
+
+    const profitResult = { demand, value: isFinite(maxProfit) ? maxProfit : 0, config: maxProfitConfig };
+    const marginResult = { demand, value: isFinite(maxMargin) ? maxMargin : 0, config: maxMarginConfig };
+
+    return { profitResult, marginResult };
+}
+
+/**
+ * Calculates the optimal profit for every demand level from 50 to 552 for the Profit Tab.
+ */
+async function calculateOptimalProfitData() {
+    if (isProfitCalculating) return;
+    isProfitCalculating = true;
+
+    const finInputs = {
+        laborCost: parseFloat(laborCostInput.value),
+        superSell: parseFloat(superSellInput.value),
+        superCogs: parseFloat(superCogsInput.value),
+        ultraSell: parseFloat(ultraSellInput.value),
+        ultraCogs: parseFloat(ultraCogsInput.value),
+        megaSell: parseFloat(megaSellInput.value),
+        megaCogs: parseFloat(megaCogsInput.value),
+    };
+
+    const key = getFinancialInputsKey() + '-demand50plus';
+    if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
+        ProfitTab.draw(); // Show loading state
+    }
+
+    setTimeout(() => {
+        const profitData = [];
+        const marginData = [];
+        const originalStateConfig = JSON.parse(JSON.stringify(state.configData));
+
+        try {
+            state.configData = originalConfigData;
+            const maxDemandMap = new Map(WORKSTATION_CAPACITIES.map(c => [c.ws, c.maxDemand]));
+
+            for (let demand = 50; demand <= 552; demand++) {
+                const { profitResult, marginResult } = findOptimalConfigForDemand(demand, finInputs, maxDemandMap);
+                profitData.push(profitResult);
+                marginData.push(marginResult);
+            }
+
+            const calculatedData = { profitData, marginData };
+            profitMaximizationCache = { key, data: calculatedData };
+            try {
+                sessionStorage.setItem(key, JSON.stringify(calculatedData));
+            } catch (e) {
+                console.error("Could not save profit data to session storage.", e);
+            }
+        } finally {
+            state.configData = originalStateConfig;
+            isProfitCalculating = false;
+            if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
+                ProfitTab.draw();
+            }
+        }
+    }, 200);
+}
+
+/**
+* Checks if a specific assembly element is used in the construction
+* of a given refrigerator model.
+* @param {number} elementId - The ID of the assembly element.
+* @param {number} modelId - The ID of the model (1=Super, 2=Ultra, 3=Mega).
+* @returns {boolean} True if the element is used for the model.
+*/
+function doesElementBuildModel(elementId, modelId) {
+    const task = state.taskData.get(elementId);
+    if (!task) return false;
+    const modelMap = { 1: 'Super', 2: 'Ultra', 3: 'Mega' };
+    const modelFieldName = modelMap[modelId];
+    return task[modelFieldName] > 0;
+}
+
+/**
+* Runs a detailed simulation of the production day to generate task data
+* for the Gantt chart visualization.
+* @returns {{tasks: Array<object>}} An object containing the list of simulated tasks.
+*/
+function runGanttSimulation() {
+    const numEmployees = parseInt(numEmployeesInput.value);
+    const dailyDemand = parseInt(dailyDemandInput.value);
+    const opHours = parseFloat(opHoursInput.value);
+    const config = state.configData[numEmployees];
+
+    if (!config || Object.keys(config).length === 0 || invalidPrecedenceNodes.size > 0) {
+        return { tasks: [] };
+    }
+
+    const productionQueue = generateProductionQueue(dailyDemand);
+    const metrics = calculateMetrics({ dailyDemand, opHours, numEmployees }, {});
+    const launchInterval = metrics.effectiveCycleTime;
+    const conveyorSpeed = metrics.conveyorSpeed;
+
+    if (conveyorSpeed <= 0 || !isFinite(conveyorSpeed)) {
+        return { tasks: [] };
+    }
+
+    let allFinishedTasks = [];
+    let arrivalsForNextStation = productionQueue.map((modelId, index) => {
+        let arrivalTime = index * launchInterval;
+        if (index === 0 && isNaN(arrivalTime)) {
+            arrivalTime = 0;
+        }
+        return {
+            modelId: modelId,
+            arrivalTime: arrivalTime,
+            uniqueId: `${modelId}-${index}`
+        };
+    });
+
+    const sortedWorkstationIds = Object.keys(config).sort((a, b) => parseInt(a) - parseInt(b));
+    const totalElementTimeOfLine = sortedWorkstationIds.reduce((lineSum, stationId) => {
+        const elements = config[stationId] || [];
+        const stationTime = elements.reduce((stationSum, elId) => stationSum + (state.taskData.get(elId)?.elementTime || 0), 0);
+        return lineSum + stationTime;
+    }, 0);
+    const totalPhysicalThroughputTime = ASSEMBLY_LINE_LENGTH / conveyorSpeed;
+
+    for (const stationId of sortedWorkstationIds) {
+        const elements = config[stationId] || [];
+        if (elements.length === 0) continue;
+        let workerFreeTime = 0;
+        let processedModels = [];
+        const totalElementTimeInStation = elements.reduce((sum, elId) => sum + (state.taskData.get(elId)?.elementTime || 0), 0);
+        let travelTimeMinutes = 0;
+        if (totalElementTimeOfLine > 0) {
+            travelTimeMinutes = (totalElementTimeInStation / totalElementTimeOfLine) * totalPhysicalThroughputTime;
+        }
+
+        arrivalsForNextStation.sort((a, b) => a.arrivalTime - b.arrivalTime);
+
+        for (const model of arrivalsForNextStation) {
+            if (!isFinite(model.arrivalTime)) continue;
+            const startProcessingTime = Math.max(model.arrivalTime, workerFreeTime);
+            let currentTaskTime = startProcessingTime;
+
+            for (const elementId of elements) {
+                if (doesElementBuildModel(elementId, model.modelId)) {
+                    const task = state.taskData.get(elementId);
+                    if (task) {
+                        const taskStartTime = currentTaskTime;
+                        const taskEndTime = taskStartTime + task.elementTime;
+                        allFinishedTasks.push({
+                            workstationId: `WS ${stationId}`,
+                            modelId: model.modelId,
+                            taskId: elementId,
+                            startTime: taskStartTime,
+                            endTime: taskEndTime,
+                            uniqueId: model.uniqueId
+                        });
+                        currentTaskTime = taskEndTime;
+                    }
+                }
+            }
+            const endProcessingTime = currentTaskTime;
+            workerFreeTime = endProcessingTime;
+
+            const endTravelTime = model.arrivalTime + travelTimeMinutes;
+            const exitTime = Math.max(endProcessingTime, endTravelTime);
+
+            processedModels.push({ ...model, arrivalTime: exitTime });
+        }
+        arrivalsForNextStation = processedModels;
+    }
+
+    return { tasks: allFinishedTasks };
+}
+
+/**
+* Rounds a number up to the nearest quarter (0.25).
+* @param {number} value - The number to round.
+* @returns {number} The rounded number.
+*/
+function roundUpToQuarter(value) {
+    return Math.ceil(value / 0.25) * 0.25;
+}
+
+/**
+* --------------------------------------------------------------------
+* Visualization Panels (Tabs)
+*
+* These functions are responsible for rendering the primary content
+* for each of the main application tabs.
+* --------------------------------------------------------------------
+*/
+
+/**
+* @tab General
+* Renders the content for the currently active visualization tab.
+*/
+function renderActiveTab() {
+    const activeTab = document.querySelector('.tab-btn.active').dataset.tab;
+    if (activeTab === 'overview') drawOverviewPanel();
+    else if (activeTab === 'precedence') drawPrecedenceChart();
+    else if (activeTab === 'schedule') ScheduleTab.draw();
+    else if (activeTab === 'efficiency') EfficiencyTab.draw();
+    else if (activeTab === 'layout') LayoutTab.draw();
+    else if (activeTab === 'profit') ProfitTab.draw();
+    else if (activeTab === 'investment') drawInvestmentPanel();
+}
+
+/**
+* @tab Overview
+* Fetches and renders the content for the Overview panel.
+*/
 async function drawOverviewPanel() {
-    const panel = d3.select("#overview-panel");
-    panel.html('');
-    const fo = panel.append("foreignObject").attr("width", "100%").attr("height", "100%");
-    const container = fo.append("xhtml:div").attr("class", "overview-container");
+    const svg = d3.select("#overview-panel");
+    svg.selectAll("*").remove();
+    const fo = svg.append("foreignObject")
+        .attr("x", 0)
+        .attr("y", 0)
+        .attr("width", "100%")
+        .attr("height", "100%");
+    const container = fo.append("xhtml:div")
+        .attr("class", "overview-container");
+
     try {
         const response = await fetch('Pages/overview.html');
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        if (!response.ok) {
+            throw new Error(`Failed to load HTML: ${response.statusText}`);
+        }
         let html = await response.text();
-        const replacements = { 'overview-num-employees': numEmployeesInput.value, 'overview-daily-demand': dailyDemandInput.value, 'overview-op-hours': opHoursInput.value, 'overview-labor-cost': parseFloat(laborCostInput.value).toFixed(2) };
-        for (const [id, value] of Object.entries(replacements)) { html = html.replace(new RegExp(`(<span id="${id}">)(.*?)(<\\/span>)`), `$1${value}$3`); }
+
+        const replacements = {
+            'overview-num-employees': document.getElementById('numEmployees')?.value || '8',
+            'overview-daily-demand': document.getElementById('dailyDemand')?.value || '180',
+            'overview-op-hours': document.getElementById('opHours')?.value || '15',
+            'overview-labor-cost': parseFloat(document.getElementById('laborCost')?.value || '25.00').toFixed(2)
+        };
+
+        for (const [id, value] of Object.entries(replacements)) {
+            const regex = new RegExp(`(<span id="${id}">)(.*?)(<\\/span>)`);
+            html = html.replace(regex, `$1${value}$3`);
+        }
+
         container.html(html);
     } catch (error) {
         console.error("Could not render Overview panel:", error);
@@ -327,5 +1614,5 @@ async function drawOverviewPanel() {
     }
 }
 
-// --- Start the application ---
+// Run the application
 main();
