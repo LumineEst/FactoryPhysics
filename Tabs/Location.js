@@ -58,11 +58,27 @@ const LocationTab = (() => {
         return 1.35;
     };
 
-    const getLTLRate = (distance) => {
+    /**
+     * **CORRECTED LTL RATE CALCULATION**
+     * Calculates the LTL rate based on the user-provided formula.
+     * @param {number} distance - The road distance (d).
+     * @param {number} shipmentWeight - The LTL shipment weight in tons (q).
+     * @returns {number} The LTL cost per ton-mile.
+     */
+    const getLTLRate = (distance, shipmentWeight) => {
         const s = CUBE_OUT_DENSITY;
-        const PPI_TL = 250;
-        const numerator = PPI_TL * (((s ** 2) / 8) + 14);
-        const denominator = (distance ** 0.29 - (7 / 2)) * (s ** 2 + (2 * s) + 14);
+        const q = shipmentWeight;
+        const d = distance;
+
+        if (q <= 0 || d <= 0) return 0;
+
+        const numerator = 188 * (((s ** 2) / 8) + 14);
+        const term_q = Math.pow(q, 1 / 7);
+        const term_d = Math.pow(d, 15 / 29);
+        const denominator = (term_q * term_d - (7 / 2)) * (s ** 2 + 2 * s + 14);
+
+        if (denominator === 0) return Infinity; // Avoid division by zero
+
         return numerator / denominator;
     };
 
@@ -74,7 +90,8 @@ const LocationTab = (() => {
         const numFTL = Math.floor(tonsPerShipment / ftl_payload_tons);
         const remainingTons = tonsPerShipment % ftl_payload_tons;
 
-        const avg_ltl_rate = getLTLRate(1000);
+        // Use a representative distance (1000 miles) and the LTL weight to get a stable rate for weighting
+        const avg_ltl_rate = remainingTons > 0 ? getLTLRate(1000, remainingTons) : 0;
 
         const costPerShipmentPerMile = (numFTL * FTL_RATE_PER_MILE) + (remainingTons * avg_ltl_rate);
         const effectiveRatePerTonMile = costPerShipmentPerMile / tonsPerShipment;
@@ -375,7 +392,8 @@ const LocationTab = (() => {
 
         const numFTL = Math.floor(tonsPerShipment / ftl_payload_tons);
         const remainingTonsLTL = tonsPerShipment % ftl_payload_tons;
-        const ltl_rate = getLTLRate(roadDistance);
+
+        const ltl_rate = getLTLRate(roadDistance, remainingTonsLTL);
 
         const costFTL = numFTL * FTL_RATE_PER_MILE * roadDistance;
         const costLTL = remainingTonsLTL > 0 ? ltl_rate * remainingTonsLTL * roadDistance : 0;
