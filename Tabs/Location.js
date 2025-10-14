@@ -1,12 +1,8 @@
 const LocationTab = (() => {
     // --- Constants and State ---
-    const EARTH_RADIUS_MILES = 3963.34;
     const DEMAND_UNIT_LBS = 410;
-    const LBS_PER_TON = 2000;
-    const CUBE_OUT_DENSITY = 56; // lbs/ft³
-    const TRUCK_WEIGHT_CAPACITY_TONS = 25;
-    const TRUCK_CUBE_CAPACITY_CFT = 2750;
-    const FTL_RATE_PER_MILE = 2.50;
+    const TRUCK_CAPACITY_UNITS = 54;
+    const FTL_RATE_PER_MILE = 2.1;
 
     const majorCities = {
         "New York, NY": [-74.0060, 40.7128],
@@ -42,6 +38,7 @@ const LocationTab = (() => {
     const toRadians = (deg) => deg * (Math.PI / 180);
 
     const greatCircleDistance = (coords1, coords2) => {
+        if (!coords1 || !coords2) return 0;
         const [lon1, lat1] = coords1.map(toRadians);
         const [lon2, lat2] = coords2.map(toRadians);
         const distanceRad = Math.acos(
@@ -49,7 +46,7 @@ const LocationTab = (() => {
             (Math.cos(lat1) * Math.cos(lat2) * Math.cos(lon1 - lon2))
         );
         const meanLat = (coords1[1] + coords2[1]) / 2;
-        const radius = EARTH_RADIUS_MILES - (13.35 * Math.sin(toRadians(meanLat)));
+        const radius = 3963.34 - (13.35 * Math.sin(toRadians(meanLat)));
         return distanceRad * radius;
     };
 
@@ -58,45 +55,14 @@ const LocationTab = (() => {
         return 1.35;
     };
 
-    /**
-     * **CORRECTED LTL RATE CALCULATION**
-     * Calculates the LTL rate based on the user-provided formula.
-     * @param {number} distance - The road distance (d).
-     * @param {number} shipmentWeight - The LTL shipment weight in tons (q).
-     * @returns {number} The LTL cost per ton-mile.
-     */
-    const getLTLRate = (distance, shipmentWeight) => {
-        const s = CUBE_OUT_DENSITY;
-        const q = shipmentWeight;
+    const calculateLTLCost = (distance, shipmentWeightTons) => {
+        const q = shipmentWeightTons;
         const d = distance;
-
         if (q <= 0 || d <= 0) return 0;
-
-        const numerator = 188 * (((s ** 2) / 8) + 14);
-        const term_q = Math.pow(q, 1 / 7);
-        const term_d = Math.pow(d, 15 / 29);
-        const denominator = (term_q * term_d - (7 / 2)) * (s ** 2 + 2 * s + 14);
-
-        if (denominator === 0) return Infinity; // Avoid division by zero
-
+        const numerator = 43.78 * q * d;
+        const denominator = (q ** (1 / 7) * d ** (15 / 29)) - 3.5;
+        if (denominator <= 0) return Infinity;
         return numerator / denominator;
-    };
-
-    const calculateEffectiveRate = (shipmentQty) => {
-        const ftl_payload_tons = Math.min(TRUCK_WEIGHT_CAPACITY_TONS, (TRUCK_CUBE_CAPACITY_CFT * CUBE_OUT_DENSITY) / LBS_PER_TON);
-        const tonsPerShipment = (shipmentQty * DEMAND_UNIT_LBS) / LBS_PER_TON;
-        if (tonsPerShipment <= 0) return 0;
-
-        const numFTL = Math.floor(tonsPerShipment / ftl_payload_tons);
-        const remainingTons = tonsPerShipment % ftl_payload_tons;
-
-        // Use a representative distance (1000 miles) and the LTL weight to get a stable rate for weighting
-        const avg_ltl_rate = remainingTons > 0 ? getLTLRate(1000, remainingTons) : 0;
-
-        const costPerShipmentPerMile = (numFTL * FTL_RATE_PER_MILE) + (remainingTons * avg_ltl_rate);
-        const effectiveRatePerTonMile = costPerShipmentPerMile / tonsPerShipment;
-
-        return effectiveRatePerTonMile;
     };
 
     const runOptimization = () => {
@@ -107,8 +73,9 @@ const LocationTab = (() => {
                 optimalFactoryLocation = null;
             } else {
                 cities.forEach(c => {
-                    const tons = (c.annualDemand * DEMAND_UNIT_LBS) / LBS_PER_TON;
-                    c.monetaryWeight = tons * c.effectiveRate;
+                    const costPerShipmentPerMile = getShipmentDetails(null, c, 1).costPerShipment;
+                    const shipmentsPerYear = 365.2425 / c.freq;
+                    c.monetaryWeight = costPerShipmentPerMile * shipmentsPerYear;
                 });
 
                 let sumLon = 0, sumLat = 0, totalMonetaryWeight = 0;
@@ -140,8 +107,7 @@ const LocationTab = (() => {
             if (cities.length < 1) {
                 optimalFactoryLocation = null;
             } else {
-                let bestLocation = null;
-                let minCost = Infinity;
+                let bestLocation = null, minCost = Infinity;
                 for (const potentialSite of cities) {
                     const currentCost = calculateTotalCost(potentialSite.coordinates, cities);
                     if (currentCost < minCost) {
@@ -153,6 +119,7 @@ const LocationTab = (() => {
             }
         }
         updateOptimalFactoryMarker();
+        updateSummaryPanel();
     };
 
     // --- D3 Drawing and Updating Functions ---
@@ -183,8 +150,9 @@ const LocationTab = (() => {
         infoDiv.append("button").text("Remove City").attr("id", "info-remove-btn");
 
         d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json").then(us => {
+            const continentalStates = topojson.feature(us, us.objects.states).features.filter(d => d.id !== '02' && d.id !== '15');
             svg.select(".us-map").selectAll("path")
-                .data(topojson.feature(us, us.objects.states).features)
+                .data(continentalStates)
                 .enter().append("path")
                 .attr("d", path)
                 .attr("class", "state-boundary");
@@ -214,8 +182,8 @@ const LocationTab = (() => {
 
         const demandBox = svg.append("foreignObject")
             .attr("class", "demand-capacity-box")
-            .attr("x", width - 235).attr("y", 15)
-            .attr("width", 220).attr("height", 200);
+            .attr("x", 15).attr("y", height - 180)
+            .attr("width", 220).attr("height", 165);
         const demandDiv = demandBox.append("xhtml:div");
         demandDiv.append("h4").text("Annual Demand");
         demandDiv.append("div").attr("class", "demand-row").html(`<span>P10 (Low):</span><span id="demand-p10">0</span>`);
@@ -225,9 +193,16 @@ const LocationTab = (() => {
         demandDiv.append("div").attr("class", "demand-bar-container")
             .append("div").attr("class", "demand-bar").attr("id", "demand-bar-fill").text("0%");
 
-        const switchGroup = demandDiv.append("div").attr("class", "inv-button-group");
+        const summaryPanel = svg.append("foreignObject").attr("class", "summary-panel")
+            .attr("x", width - 235).attr("y", 15) // **FIX: Correctly positions the panel to the top right**
+            .attr("width", 220).attr("height", 120);
+        const summaryDiv = summaryPanel.append("xhtml:div");
+        const switchGroup = summaryDiv.append("div").attr("class", "inv-button-group");
         switchGroup.append("button").attr("id", "loc-new-btn").text("New");
         switchGroup.append("button").attr("id", "loc-existing-btn").text("Existing");
+        summaryDiv.append("h4").text("Optimal Summary");
+        summaryDiv.append("div").attr("class", "demand-row").html(`<span>Annual Cost:</span><span id="summary-cost">$0</span>`);
+        summaryDiv.append("div").attr("class", "demand-row").html(`<span>Shipments:</span><span id="summary-shipments">0</span>`);
 
         d3.select("#loc-new-btn").on('click', () => {
             if (optimizationMode === 'Existing') {
@@ -258,8 +233,7 @@ const LocationTab = (() => {
 
             if (name && qty > 0 && freq > 0) {
                 const annualDemand = (qty / freq) * totalDemandCapacity.workingDays;
-                const effectiveRate = calculateEffectiveRate(qty);
-                cityData.set(name, { name, coordinates: majorCities[name], annualDemand, effectiveRate, qty, freq });
+                cityData.set(name, { name, coordinates: majorCities[name], annualDemand, qty, freq });
                 updateCityMarkers();
                 runOptimization();
                 updateDemandCapacityBox();
@@ -277,6 +251,9 @@ const LocationTab = (() => {
             }
         });
 
+        updateCityMarkers();
+        runOptimization();
+
         function updateCityMarkers() {
             const tooltip = createTooltip('city-calc-tooltip');
             const markers = d3.select(".city-markers").selectAll(".city-marker").data(Array.from(cityData.values()), d => d.name);
@@ -290,14 +267,12 @@ const LocationTab = (() => {
 
                     tooltip.style("opacity", 1).html(
                         `<strong>${d.name} Calcs:</strong><br>
-                         GCD: ${details.distance.toFixed(1)} mi<br>
-                         Road Dist: ${details.roadDistance.toFixed(1)} mi<br>
-                         - TL Shipments: ${details.numFTL}<br>
-                         - TL Weight: ${details.weightFTL.toFixed(2)} tons<br>
-                         - TL Cost/Ship: ${details.costFTL.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}<br>
-                         - LTL Shipments: ${details.numLTL}<br>
-                         - LTL Weight: ${details.weightLTL.toFixed(2)} tons<br>
-                         - LTL Cost/Ship: ${details.costLTL.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}`
+                         GCD: ${details.distance.toFixed(1)} mi<br>
+                         Road Dist: ${details.roadDistance.toFixed(1)} mi<br>
+                         - TL Shipments: ${details.numFTL}<br>
+                         - TL Cost/Ship: ${details.costFTL.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}<br>
+                         - Remainder Cost: ${details.costRemainder.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} (${details.remainderChoice})<br>
+                         - Remainder Units: ${details.remainderUnits}`
                     );
                 })
                 .on("mousemove", (event) => tooltip.style("left", `${event.pageX + 15}px`).style("top", `${event.pageY - 28}px`))
@@ -352,6 +327,26 @@ const LocationTab = (() => {
         bar.style("background-color", allocated > totalDemandCapacity.p50 ? "var(--failure-color)" : "var(--primary)");
     }
 
+    function updateSummaryPanel() {
+        let totalCost = 0;
+        let totalShipments = 0;
+        const cities = Array.from(cityData.values());
+
+        if (optimalFactoryLocation && cities.length > 0) {
+            totalCost = calculateTotalCost(optimalFactoryLocation, cities);
+            totalShipments = cities.reduce((sum, city) => {
+                const shipmentsPerYear = 365.2425 / city.freq;
+                const numFTL = Math.floor(city.qty / TRUCK_CAPACITY_UNITS);
+                const remainderUnits = city.qty % TRUCK_CAPACITY_UNITS;
+                const totalShipmentsForCity = shipmentsPerYear * (numFTL + (remainderUnits > 0 ? 1 : 0));
+                return sum + totalShipmentsForCity;
+            }, 0);
+        }
+
+        d3.select("#summary-cost").text(totalCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 }));
+        d3.select("#summary-shipments").text(Math.round(totalShipments).toLocaleString());
+    }
+
     function updateOptimalFactoryMarker() {
         if (!projection) return;
         const container = d3.select(".optimal-factory-container");
@@ -368,10 +363,10 @@ const LocationTab = (() => {
             .on("mouseover", (event, d) => {
                 tooltip.style("opacity", 1).html(
                     `<div class="tooltip-header">Optimal Location</div>
-                     <div class="tooltip-row">
-                         <span class="tooltip-key">Est. Yearly Cost:</span>
-                         <span>${calculateTotalCost(d, Array.from(cityData.values())).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 })}</span>
-                     </div>`
+                     <div class="tooltip-row">
+                         <span class="tooltip-key">Est. Yearly Cost:</span>
+                         <span>${calculateTotalCost(d, Array.from(cityData.values())).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 })}</span>
+                     </div>`
                 );
             })
             .on("mousemove", (event) => tooltip.style("left", `${event.pageX + 15}px`).style("top", `${event.pageY - 28}px`))
@@ -381,41 +376,38 @@ const LocationTab = (() => {
             .style("opacity", 1);
     }
 
-    function getShipmentDetails(factoryCoords, city) {
-        if (!factoryCoords) return null;
+    function getShipmentDetails(factoryCoords, city, overrideDistance = null) {
+        if (!city) return null;
+        if (!factoryCoords && !overrideDistance) return null;
 
-        const distance = greatCircleDistance(factoryCoords, city.coordinates);
+        const distance = overrideDistance || greatCircleDistance(factoryCoords, city.coordinates);
+
+        if (distance <= 10 && !overrideDistance) {
+            return { distance: distance, roadDistance: 0, numFTL: 0, costFTL: 0, remainderUnits: 0, costRemainder: 0, remainderChoice: 'Local', costPerShipment: 0 };
+        }
+
         const roadDistance = distance * getCircuitryFactor(distance);
-
-        const ftl_payload_tons = Math.min(TRUCK_WEIGHT_CAPACITY_TONS, (TRUCK_CUBE_CAPACITY_CFT * CUBE_OUT_DENSITY) / LBS_PER_TON);
-        const tonsPerShipment = (city.qty * DEMAND_UNIT_LBS) / LBS_PER_TON;
-
-        const numFTL = Math.floor(tonsPerShipment / ftl_payload_tons);
-        const remainingTonsLTL = tonsPerShipment % ftl_payload_tons;
-
-        const ltl_rate = getLTLRate(roadDistance, remainingTonsLTL);
-
+        const numFTL = Math.floor(city.qty / TRUCK_CAPACITY_UNITS);
+        const remainderUnits = city.qty % TRUCK_CAPACITY_UNITS;
+        const remainderTons = (remainderUnits * DEMAND_UNIT_LBS) / 2000;
         const costFTL = numFTL * FTL_RATE_PER_MILE * roadDistance;
-        const costLTL = remainingTonsLTL > 0 ? ltl_rate * remainingTonsLTL * roadDistance : 0;
+        let costRemainder = 0, remainderChoice = "N/A";
 
-        return {
-            distance: distance,
-            roadDistance: roadDistance,
-            numFTL: numFTL,
-            weightFTL: numFTL * ftl_payload_tons,
-            costFTL: costFTL,
-            numLTL: remainingTonsLTL > 0 ? 1 : 0,
-            weightLTL: remainingTonsLTL,
-            costLTL: costLTL
-        };
+        if (remainderTons > 0) {
+            const ltlCost = calculateLTLCost(roadDistance, remainderTons);
+            const ftlCostForRemainder = FTL_RATE_PER_MILE * roadDistance;
+            costRemainder = Math.min(ltlCost, ftlCostForRemainder);
+            remainderChoice = ltlCost < ftlCostForRemainder ? "LTL" : "FTL";
+        }
+
+        return { distance, roadDistance, numFTL, costFTL, remainderUnits, costRemainder, remainderChoice, costPerShipment: costFTL + costRemainder };
     }
 
     function calculateTotalCostForCity(factoryCoords, city) {
         const details = getShipmentDetails(factoryCoords, city);
         if (!details) return 0;
-
-        const shipmentsPerYear = totalDemandCapacity.workingDays / city.freq;
-        return (details.costFTL + details.costLTL) * shipmentsPerYear;
+        const shipmentsPerYear = 365.2425 / city.freq;
+        return details.costPerShipment * shipmentsPerYear;
     }
 
     function calculateTotalCost(factoryCoords, cities) {
