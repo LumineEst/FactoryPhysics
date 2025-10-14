@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="style.css">
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+    <script src="https://unpkg.com/topojson@3"></script>
 </head>
 
 <body>
@@ -32,6 +33,7 @@
                     <button class="tab-btn" data-tab="layout">Layout</button>
                     <button class="tab-btn" data-tab="profit">Profit</button> 
                     <button class="tab-btn" data-tab="investment">Investment</button> 
+                    <button class="tab-btn" data-tab="location">Location</button>
                 </nav>
             </header>
             <div id="svg-container">
@@ -43,6 +45,7 @@
                     <g id="layout-panel" class="vis-panel" style="display: none;"></g>
                     <g id="profit-panel" class="vis-panel" style="display: none;"></g>
                     <g id="investment-panel" class="vis-panel" style="display: none;"></g>
+                    <g id="location-panel" class="vis-panel" style="display: none;"></g>
                 </svg>
             </div>
         </main>
@@ -112,6 +115,7 @@
             </div>
         </aside>
     </div>
+    <script src="Tabs/Location.js"></script>
     <script src="Tabs/Layout.js"></script> 
     <script src="Tabs/Schedule.js"></script> 
     <script src="Tabs/Profit.js"></script>
