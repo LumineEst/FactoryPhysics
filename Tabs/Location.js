@@ -14,17 +14,20 @@ const LocationTab = (() => {
         "San Antonio, TX": [-98.4936, 29.4241],
         "San Diego, CA": [-117.1611, 32.7157],
         "Dallas, TX": [-96.7970, 32.7767],
-        "San Jose, CA": [-121.8863, 37.3382],
-        "Austin, TX": [-97.7431, 30.2672],
+        "Columbus, OH": [-82.9988, 39.9612],
+        "Charlotte, NC": [-80.8431, 35.2271],
+        "Indianapolis, IN": [-86.1581, 39.7684],
         "Jacksonville, FL": [-81.6557, 30.3322],
         "San Francisco, CA": [-122.4194, 37.7749],
-        "Indianapolis, IN": [-86.1581, 39.7684],
         "Seattle, WA": [-122.3321, 47.6062],
         "Denver, CO": [-104.9903, 39.7392],
         "Washington, D.C.": [-77.0369, 38.9072],
         "Boston, MA": [-71.0589, 42.3601],
         "Detroit, MI": [-83.0458, 42.3314],
-        "Nashville, TN": [-86.7816, 36.1627],
+        "Memphis, TN": [-90.0490, 35.1495],
+        "Salt Lake City, UT": [-111.8910, 40.7608],
+        "Las Vegas, NV": [-115.1398, 36.1699],
+        "St. Louis, MO": [-90.1994, 38.6270],
         "Miami, FL": [-80.1918, 25.7617],
         "Atlanta, GA": [-84.3880, 33.7490]
     };
@@ -120,14 +123,29 @@ const LocationTab = (() => {
         }
         updateOptimalFactoryMarker();
         updateSummaryPanel();
+        updateConnectionLines();
     };
 
     // --- D3 Drawing and Updating Functions ---
     let projection;
+    let radiusScale;
 
     const draw = () => {
         const svg = d3.select("#location-panel");
         svg.selectAll("*").remove();
+
+        const defs = svg.append("defs");
+        defs.append("marker")
+            .attr("id", "arrowhead")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 5)
+            .attr("refY", 0)
+            .attr("markerWidth", 4)
+            .attr("markerHeight", 4)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M0,-5L10,0L0,5")
+            .attr("class", "arrowhead");
 
         const svgContainer = d3.select("#svg-container").node();
         const width = svgContainer.getBoundingClientRect().width;
@@ -135,11 +153,15 @@ const LocationTab = (() => {
 
         projection = d3.geoAlbersUsa().scale(width * 1.1).translate([width / 2, height / 2]);
         const path = d3.geoPath().projection(projection);
-        const radiusScale = d3.scaleSqrt().domain([100, 100000]).range([4, 25]).clamp(true);
+        radiusScale = d3.scaleSqrt().domain([100, 100000]).range([4, 25]).clamp(true);
 
-        svg.append("g").attr("class", "us-map").on("click", () => infoBox.style("display", "none"));
-        svg.append("g").attr("class", "optimal-factory-container");
-        svg.append("g").attr("class", "city-markers");
+        const yShift = height * 0.05;
+        const mainMapGroup = svg.append("g").attr("transform", `translate(0, ${yShift})`);
+
+        mainMapGroup.append("g").attr("class", "us-map").on("click", () => infoBox.style("display", "none"));
+        mainMapGroup.append("g").attr("class", "connection-lines");
+        mainMapGroup.append("g").attr("class", "optimal-factory-container");
+        mainMapGroup.append("g").attr("class", "city-markers");
 
         const infoBox = svg.append("foreignObject")
             .attr("width", 200).attr("height", 120).attr("class", "city-info-box").style("display", "none");
@@ -151,7 +173,7 @@ const LocationTab = (() => {
 
         d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json").then(us => {
             const continentalStates = topojson.feature(us, us.objects.states).features.filter(d => d.id !== '02' && d.id !== '15');
-            svg.select(".us-map").selectAll("path")
+            mainMapGroup.select(".us-map").selectAll("path")
                 .data(continentalStates)
                 .enter().append("path")
                 .attr("d", path)
@@ -164,7 +186,7 @@ const LocationTab = (() => {
         const cityGroup = controlsDiv.append("div").attr("class", "input-group");
         cityGroup.append("label").text("City");
         const citySelect = cityGroup.append("select").attr("id", "city-select");
-        Object.keys(majorCities).forEach(city => citySelect.append("option").attr("value", city).text(city));
+        Object.keys(majorCities).sort().forEach(city => citySelect.append("option").attr("value", city).text(city));
 
         const demandGroup = controlsDiv.append("div").attr("class", "input-group");
         demandGroup.append("label").text("Shipment Qty");
@@ -194,8 +216,8 @@ const LocationTab = (() => {
             .append("div").attr("class", "demand-bar").attr("id", "demand-bar-fill").text("0%");
 
         const summaryPanel = svg.append("foreignObject").attr("class", "summary-panel")
-            .attr("x", width - 235).attr("y", 15) // **FIX: Correctly positions the panel to the top right**
-            .attr("width", 220).attr("height", 120);
+            .attr("x", width - 235).attr("y", 15)
+            .attr("width", 220).attr("height", 140);
         const summaryDiv = summaryPanel.append("xhtml:div");
         const switchGroup = summaryDiv.append("div").attr("class", "inv-button-group");
         switchGroup.append("button").attr("id", "loc-new-btn").text("New");
@@ -203,6 +225,7 @@ const LocationTab = (() => {
         summaryDiv.append("h4").text("Optimal Summary");
         summaryDiv.append("div").attr("class", "demand-row").html(`<span>Annual Cost:</span><span id="summary-cost">$0</span>`);
         summaryDiv.append("div").attr("class", "demand-row").html(`<span>Shipments:</span><span id="summary-shipments">0</span>`);
+        summaryDiv.append("div").attr("class", "demand-row").html(`<span>Avg Cost/Unit:</span><span id="summary-avg-cost">$0.00</span>`);
 
         d3.select("#loc-new-btn").on('click', () => {
             if (optimizationMode === 'Existing') {
@@ -265,26 +288,54 @@ const LocationTab = (() => {
                     const details = getShipmentDetails(optimalFactoryLocation, d);
                     if (!details) return;
 
+                    const annualCost = calculateTotalCostForCity(optimalFactoryLocation, d);
+                    const avgCostPerUnit = d.annualDemand > 0 ? (annualCost / d.annualDemand) : 0;
+
                     tooltip.style("opacity", 1).html(
-                        `<strong>${d.name} Calcs:</strong><br>
-                         GCD: ${details.distance.toFixed(1)} mi<br>
-                         Road Dist: ${details.roadDistance.toFixed(1)} mi<br>
-                         - TL Shipments: ${details.numFTL}<br>
-                         - TL Cost/Ship: ${details.costFTL.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}<br>
-                         - Remainder Cost: ${details.costRemainder.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} (${details.remainderChoice})<br>
-                         - Remainder Units: ${details.remainderUnits}`
+                        `<div class="tooltip-header">${d.name} Details</div>
+                         <div class="tooltip-row"><span>Est. Road Dist:</span> <span>${details.roadDistance.toFixed(0)} mi</span></div>
+                         <hr>
+                         <div class="tooltip-row"><span>FTL Trucks/Ship:</span> <span>${details.numFTL}</span></div>
+                         <div class="tooltip-row"><span>LTL Weight/Ship:</span> <span>${details.remainderTons.toFixed(2)} tons</span></div>
+                         <hr>
+                         <div class="tooltip-row"><span>FTL Cost/Ship:</span> <span>${details.costFTL.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</span></div>
+                         <div class="tooltip-row"><span>LTL Cost/Ship:</span> <span>${details.costRemainder.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })} (${details.remainderChoice})</span></div>
+                         <hr>
+                         <div class="tooltip-row"><span>Annual Qty:</span> <span>${Math.round(d.annualDemand).toLocaleString()}</span></div>
+                         <div class="tooltip-row"><span>Annual Cost:</span> <span>${annualCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</span></div>
+                         <div class="tooltip-row"><span>Avg Cost/Unit:</span> <span>${avgCostPerUnit.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span></div>`
                     );
+
+                    const tooltipNode = tooltip.node();
+                    if (!tooltipNode) return;
+                    const { width, height } = tooltipNode.getBoundingClientRect();
+                    const padding = 15;
+                    let left = event.pageX + padding;
+                    let top = event.pageY + padding;
+                    if (left + width > window.innerWidth) { left = event.pageX - width - padding; }
+                    if (top + height > window.innerHeight) { top = event.pageY - height - padding; }
+                    tooltip.style("left", `${left}px`).style("top", `${top}px`);
                 })
-                .on("mousemove", (event) => tooltip.style("left", `${event.pageX + 15}px`).style("top", `${event.pageY - 28}px`))
+                .on("mousemove", (event) => {
+                    const tooltipNode = tooltip.node();
+                    if (!tooltipNode) return;
+                    const { width, height } = tooltipNode.getBoundingClientRect();
+                    const padding = 15;
+                    let left = event.pageX + padding;
+                    let top = event.pageY + padding;
+                    if (left + width > window.innerWidth) { left = event.pageX - width - padding; }
+                    if (top + height > window.innerHeight) { top = event.pageY - height - padding; }
+                    tooltip.style("left", `${left}px`).style("top", `${top}px`);
+                })
                 .on("mouseout", () => tooltip.style("opacity", 0))
                 .on("click", (event, d) => {
                     event.stopPropagation();
                     const [x, y] = projection(d.coordinates);
-                    d3.select("#info-header").text(d.name);
+                    d3.select("#info-header").html(`<span style="color: var(--secondary2);">${d.name}</span>`);
                     d3.select("#info-demand").html(`<strong>Demand:</strong> ${Math.round(d.annualDemand).toLocaleString()} Units/Yr`);
                     d3.select("#info-annual-cost").html(`<strong>Annual Cost:</strong> ${calculateTotalCostForCity(optimalFactoryLocation, d).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}`);
                     d3.select("#info-remove-btn").attr("data-city-name", d.name);
-                    infoBox.attr("x", x + 15).attr("y", y - 15).style("display", "block");
+                    infoBox.attr("x", x + 15 + "px").attr("y", y + yShift - 15 + "px").style("display", "block");
                 })
                 .transition().duration(500)
                 .attr("r", d => radiusScale(d.annualDemand))
@@ -317,19 +368,34 @@ const LocationTab = (() => {
 
     function updateDemandCapacityBox() {
         const allocated = Array.from(cityData.values()).reduce((sum, city) => sum + city.annualDemand, 0);
-        d3.select("#demand-p10").text(Math.round(totalDemandCapacity.p10).toLocaleString());
-        d3.select("#demand-p50").text(Math.round(totalDemandCapacity.p50).toLocaleString());
-        d3.select("#demand-p90").text(Math.round(totalDemandCapacity.p90).toLocaleString());
+
+        d3.select("#demand-p10")
+            .text(Math.round(totalDemandCapacity.p10).toLocaleString())
+            .style("font-weight", allocated > totalDemandCapacity.p10 ? "bold" : null)
+            .style("color", allocated > totalDemandCapacity.p10 ? "var(--failure-color)" : null);
+
+        d3.select("#demand-p50")
+            .text(Math.round(totalDemandCapacity.p50).toLocaleString())
+            .style("font-weight", allocated > totalDemandCapacity.p50 ? "bold" : null)
+            .style("color", allocated > totalDemandCapacity.p50 ? "var(--failure-color)" : null);
+
+        d3.select("#demand-p90")
+            .text(Math.round(totalDemandCapacity.p90).toLocaleString())
+            .style("font-weight", allocated > totalDemandCapacity.p90 ? "bold" : null)
+            .style("color", allocated > totalDemandCapacity.p90 ? "var(--failure-color)" : null);
+
         d3.select("#demand-allocated").text(Math.round(allocated).toLocaleString());
-        const percent = totalDemandCapacity.p50 > 0 ? Math.min((allocated / totalDemandCapacity.p50) * 100, 100) : 0;
+
+        const percent = totalDemandCapacity.p50 > 0 ? (allocated / totalDemandCapacity.p50) * 100 : 0;
         const bar = d3.select("#demand-bar-fill");
-        bar.style("width", `${percent}%`).text(`${Math.round(percent)}%`);
-        bar.style("background-color", allocated > totalDemandCapacity.p50 ? "var(--failure-color)" : "var(--primary)");
+        bar.style("width", `${Math.min(percent, 100)}%`).text(`${Math.round(percent)}%`);
+        bar.style("background-color", percent > 100 ? "var(--failure-color)" : "var(--primary)");
     }
 
     function updateSummaryPanel() {
         let totalCost = 0;
         let totalShipments = 0;
+        let totalAllocatedDemand = 0;
         const cities = Array.from(cityData.values());
 
         if (optimalFactoryLocation && cities.length > 0) {
@@ -341,10 +407,14 @@ const LocationTab = (() => {
                 const totalShipmentsForCity = shipmentsPerYear * (numFTL + (remainderUnits > 0 ? 1 : 0));
                 return sum + totalShipmentsForCity;
             }, 0);
+            totalAllocatedDemand = cities.reduce((sum, city) => sum + city.annualDemand, 0);
         }
 
-        d3.select("#summary-cost").text(totalCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 }));
+        const avgCostPerUnit = totalAllocatedDemand > 0 ? totalCost / totalAllocatedDemand : 0;
+
+        d3.select("#summary-cost").text(totalCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }));
         d3.select("#summary-shipments").text(Math.round(totalShipments).toLocaleString());
+        d3.select("#summary-avg-cost").text(avgCostPerUnit.toLocaleString('en-US', { style: 'currency', currency: 'USD' }));
     }
 
     function updateOptimalFactoryMarker() {
@@ -363,17 +433,105 @@ const LocationTab = (() => {
             .on("mouseover", (event, d) => {
                 tooltip.style("opacity", 1).html(
                     `<div class="tooltip-header">Optimal Location</div>
-                     <div class="tooltip-row">
-                         <span class="tooltip-key">Est. Yearly Cost:</span>
-                         <span>${calculateTotalCost(d, Array.from(cityData.values())).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 })}</span>
-                     </div>`
+                     <div class="tooltip-row">
+                         <span class="tooltip-key">Est. Yearly Cost:</span>
+                         <span>${calculateTotalCost(d, Array.from(cityData.values())).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</span>
+                     </div>`
                 );
             })
-            .on("mousemove", (event) => tooltip.style("left", `${event.pageX + 15}px`).style("top", `${event.pageY - 28}px`))
+            .on("mousemove", (event) => {
+                const tooltipNode = tooltip.node();
+                if (!tooltipNode) return;
+                const { width, height } = tooltipNode.getBoundingClientRect();
+                const padding = 15;
+                let left = event.pageX + padding;
+                let top = event.pageY + padding;
+                if (left + width > window.innerWidth) { left = event.pageX - width - padding; }
+                if (top + height > window.innerHeight) { top = event.pageY - height - padding; }
+                tooltip.style("left", `${left}px`).style("top", `${top}px`);
+            })
             .on("mouseout", () => tooltip.style("opacity", 0))
             .transition().duration(500)
             .attr("transform", d => `translate(${projection(d)})`)
             .style("opacity", 1);
+    }
+
+    function updateConnectionLines() {
+        if (!projection || !radiusScale) return;
+        const lineGroup = d3.select(".connection-lines");
+        const cities = Array.from(cityData.values());
+
+        if (!optimalFactoryLocation || cities.length < 1) {
+            lineGroup.selectAll(".connection-group").remove();
+            return;
+        }
+
+        const costs = cities.map(city => calculateTotalCostForCity(optimalFactoryLocation, city));
+        const maxCost = d3.max(costs);
+
+        const widthScale = d3.scaleLinear().domain([0, maxCost || 1]).range([1, 8]).clamp(true);
+        const dashScale = d3.scaleLinear().domain([1, TRUCK_CAPACITY_UNITS * 3]).range([5, 30]).clamp(true);
+        const gapScale = d3.scaleLinear().domain([1, 30]).range([15, 100]).clamp(true);
+
+        const groups = lineGroup.selectAll(".connection-group").data(cities, d => d.name);
+        groups.exit().remove();
+
+        const enterGroups = groups.enter()
+            .append("g")
+            .attr("class", "connection-group");
+
+        enterGroups.append("line").attr("class", "connection-line-bg");
+        enterGroups.append("line").attr("class", "connection-line");
+
+        enterGroups.merge(groups)
+            .each(function (d) {
+                const group = d3.select(this);
+                const startPoint = projection(optimalFactoryLocation);
+                const endPoint = projection(d.coordinates);
+                const radius = radiusScale(d.annualDemand) + 3;
+
+                const dx = endPoint[0] - startPoint[0];
+                const dy = endPoint[1] - startPoint[1];
+                const lineLength = Math.sqrt(dx * dx + dy * dy);
+                if (lineLength === 0) {
+                    group.selectAll('line').style('display', 'none');
+                    return;
+                } else {
+                    group.selectAll('line').style('display', null);
+                }
+
+                const newEndPointX = endPoint[0] - (dx / lineLength) * radius;
+                const newEndPointY = endPoint[1] - (dy / lineLength) * radius;
+
+                const strokeWidth = widthScale(calculateTotalCostForCity(optimalFactoryLocation, d));
+
+                group.select(".connection-line-bg")
+                    .attr("x1", startPoint[0]).attr("y1", startPoint[1])
+                    .attr("x2", newEndPointX).attr("y2", newEndPointY)
+                    .attr("marker-end", "url(#arrowhead)")
+                    .style("stroke-width", strokeWidth);
+
+                const animLine = group.select(".connection-line")
+                    .attr("x1", startPoint[0]).attr("y1", startPoint[1])
+                    .attr("x2", newEndPointX).attr("y2", newEndPointY)
+                    .style("stroke-width", strokeWidth)
+                    .style("stroke", "var(--secondary1)")
+                    .attr("stroke-dasharray", `${dashScale(d.qty)} ${gapScale(d.freq)}`)
+                    .attr("marker-end", "url(#arrowhead)");
+
+                animLine.transition();
+
+                function repeat() {
+                    const totalLength = dashScale(d.qty) + gapScale(d.freq);
+                    animLine.attr("stroke-dashoffset", totalLength)
+                        .transition()
+                        .ease(d3.easeLinear)
+                        .duration(d.freq * 100)
+                        .attr("stroke-dashoffset", 0)
+                        .on("end", repeat);
+                }
+                repeat();
+            });
     }
 
     function getShipmentDetails(factoryCoords, city, overrideDistance = null) {
@@ -383,7 +541,7 @@ const LocationTab = (() => {
         const distance = overrideDistance || greatCircleDistance(factoryCoords, city.coordinates);
 
         if (distance <= 10 && !overrideDistance) {
-            return { distance: distance, roadDistance: 0, numFTL: 0, costFTL: 0, remainderUnits: 0, costRemainder: 0, remainderChoice: 'Local', costPerShipment: 0 };
+            return { distance, roadDistance: 0, numFTL: 0, costFTL: 0, remainderUnits: city.qty, remainderTons: 0, costRemainder: 0, remainderChoice: 'Local', costPerShipment: 0 };
         }
 
         const roadDistance = distance * getCircuitryFactor(distance);
@@ -400,10 +558,13 @@ const LocationTab = (() => {
             remainderChoice = ltlCost < ftlCostForRemainder ? "LTL" : "FTL";
         }
 
-        return { distance, roadDistance, numFTL, costFTL, remainderUnits, costRemainder, remainderChoice, costPerShipment: costFTL + costRemainder };
+        return { distance, roadDistance, numFTL, costFTL, remainderUnits, remainderTons, costRemainder, remainderChoice, costPerShipment: costFTL + costRemainder };
     }
 
     function calculateTotalCostForCity(factoryCoords, city) {
+        if (factoryCoords && city.coordinates[0] === factoryCoords[0] && city.coordinates[1] === factoryCoords[1]) {
+            return 0;
+        }
         const details = getShipmentDetails(factoryCoords, city);
         if (!details) return 0;
         const shipmentsPerYear = 365.2425 / city.freq;
