@@ -771,8 +771,9 @@ function setupUIEventListeners() {
     switchContainer.style.alignItems = 'center';
 
     const switchText = document.createElement('span');
-    switchText.textContent = 'Auto Adjust';
-    switchText.style.marginRight = '8px';
+    switchText.textContent = ' Auto\nAdjust';
+    switchText.style.marginRight = '0.3em';
+    switchText.style.marginLeft = '0.3em';
     switchText.style.fontSize = '0.9em';
 
     const switchLabel = document.createElement('label');
