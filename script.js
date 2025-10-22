@@ -57,8 +57,8 @@ let profitMaximizationCache = { key: null, data: null };
 let isProfitCalculating = false;
 let animationState = {
     speedMultiplier: 1.0,
-    layout: { frameId: null, isRunning: false, isPaused: false },
-    schedule: { frameId: null, isRunning: false, isPaused: false },
+    layout: { frameId: null, isRunning: false, isPaused: false, isManuallyPaused: false },
+    schedule: { frameId: null, isRunning: false, isPaused: false, isManuallyPaused: false },
     speedo: { currentAngle: 0 }
 };
 
@@ -156,6 +156,7 @@ async function main() {
     restoreActiveTab();
     updateUI();
     renderActiveTab();
+    setWorkstationListHeight();
     document.querySelectorAll("input[type='number']").forEach(input => {
         enableMiddleDragNumberInput(input, 1, 1);
     });
@@ -297,12 +298,12 @@ function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
         'opHours': 15.0,
         'numEmployees': 8,
         'laborCost': 25.0,
-        'superSell': 1250,
-        'superCogs': 450,
-        'ultraSell': 1500,
-        'ultraCogs': 550,
-        'megaSell': 1800,
-        'megaCogs': 650
+        'superSell': 400,
+        'superCogs': 375,
+        'ultraSell': 650,
+        'ultraCogs': 590,
+        'megaSell': 1000,
+        'megaCogs': 960
     };
     const getConstraints = () => {
         const min = input.hasAttribute('min') ? parseFloat(input.min) : -Infinity;
@@ -385,10 +386,19 @@ function restoreActiveTab() {
 * Main UI update function. It recalculates metrics and updates all
 * output displays and visualizations.
 */
-function updateUI() {
+function updateUI(options = {}) {
     employeeCountDisplay.textContent = numEmployeesInput.value;
+
     renderWorkstationSidebar(parseInt(numEmployeesInput.value));
+    setWorkstationListHeight();
+
     setupDragAndDrop();
+
+    // Run precedence check *unless* we're being called by updateWorkstationOrder
+    // which has *just* done this.
+    if (!options.skipPrecedence) {
+        invalidPrecedenceNodes = validatePrecedence();
+    }
 
     if (invalidPrecedenceNodes.size > 0) {
         demandStatusEl.textContent = "Fails to Meet Precedence";
@@ -430,19 +440,42 @@ function updateUI() {
             animateValue(totalIdleTimeEl, parseElementValue(totalIdleTimeEl), results.totalIdleTime / 60, 800, val => `${val.toFixed(2)} hrs`);
             animateValue(balanceDelayEl, parseElementValue(balanceDelayEl), results.balanceDelay, 800, val => `${val.toFixed(1)}%`);
             animateValue(idleTimeCvEl, parseElementValue(idleTimeCvEl), results.idleTimeCv, 800, val => `${val.toFixed(1)}%`);
-            demandStatusEl.textContent = results.meetsDemand ? "Meets Demand" : "Fails to Meet Demand";
-            demandStatusEl.className = results.meetsDemand ? "status success" : "status failure";
+
+            const idleHoursTotal = (results.totalIdleTime || 0) / 60;
+            const idleHoursPerEmployee = (opInputs && opInputs.numEmployees && opInputs.numEmployees > 0)
+                ? idleHoursTotal / opInputs.numEmployees
+                : idleHoursTotal;
+
+            if (results.meetsDemand && idleHoursPerEmployee > 12) {
+                demandStatusEl.textContent = "Too Much Idle Time";
+                demandStatusEl.className = "status failure";
+            } else {
+                demandStatusEl.textContent = results.meetsDemand ? "Meets Demand" : "Fails to Meet Demand";
+                demandStatusEl.className = results.meetsDemand ? "status success" : "status failure";
+            }
         }
     }
 
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-    if (activeTab === 'layout' || activeTab === 'schedule' || activeTab === 'efficiency' || activeTab === 'profit') {
+
+    // We *update* precedence, we don't *redraw* it.
+    if (activeTab === 'precedence') {
+        if (!options.skipPrecedence) {
+            PrecedenceTab.update(invalidPrecedenceNodes);
+        }
+    }
+    // Handle all OTHER tabs by redrawing them
+    else if (activeTab === 'layout' || activeTab === 'schedule' || activeTab === 'efficiency' || activeTab === 'profit' || activeTab === 'location') {
         stopAllSimulations();
         if (activeTab === 'layout') LayoutTab.draw();
         if (activeTab === 'schedule') ScheduleTab.draw();
         if (activeTab === 'efficiency') EfficiencyTab.draw();
         if (activeTab === 'profit') ProfitTab.draw();
+        if (activeTab === 'location') LocationTab.draw();
     }
+    // *** END KEY FIX ***
+
+    setWorkstationListHeight();
 }
 
 /**
@@ -544,7 +577,6 @@ function renderWorkstationSidebar(numEmployees) {
     }
 }
 
-
 /**
 * Sets up event listeners for the main financial and operational input controls.
 */
@@ -562,9 +594,8 @@ function setupEventListeners() {
     });
 }
 
-// UPDATE: Improved input commit behavior to reduce accidental commits
-// - Focus clears visual contents but keeps committed value until commit
-// - Commit on Enter, Escape (revert), Blur (with special empty handling)
+// Focus clears visual contents but keeps committed value until commit
+// Commit on Enter, Escape (revert), Blur (with special empty handling)
 function attachCommitBehavior(inputs, onCommit) {
     const timers = new WeakMap();
     const autoFlag = new WeakMap();
@@ -575,6 +606,10 @@ function attachCommitBehavior(inputs, onCommit) {
     };
     document.addEventListener('mouseup', clearAllAutoFlags);
 
+    // Track pointer interactions to distinguish: (a) quick click, (b) hover-then-click, (c) spinner-area click
+    let lastPointerEnterTime = 0;
+    const lastPointerDown = new WeakMap(); // stores { time, inSpinnerArea }
+
     inputs.forEach(input => {
         if (!input) return;
 
@@ -584,18 +619,63 @@ function attachCommitBehavior(inputs, onCommit) {
         autoFlag.set(input, false);
         input.dataset.awaitingInput = 'false';
 
+        // Track pointerenter to know if the user hovered over the control earlier
+        input.addEventListener('pointerenter', () => {
+            lastPointerEnterTime = Date.now();
+            input._hovering = true;
+        });
+        input.addEventListener('pointerleave', () => {
+            input._hovering = false;
+        });
+
+        // On pointerdown, capture whether the down occurred in the right-side "spinner" region.
+        // This is an approximation (32px from the right) to detect clicks on native step buttons so we can avoid clearing.
+        input.addEventListener('pointerdown', (ev) => {
+            const rect = input.getBoundingClientRect();
+            const inSpinnerArea = (ev.clientX >= rect.right - 32);
+            lastPointerDown.set(input, { time: Date.now(), inSpinnerArea });
+            // If middle-button drag starts, enable auto-commit scrub flag
+            if (ev.button === 1) {
+                autoFlag.set(input, true);
+            }
+        });
+
         // When user focuses the field: show an empty box with cursor but keep committed value stored
-        input.addEventListener('focus', (e) => {
+        input.addEventListener('focus', (focusEv) => {
             input.dataset.preFocusValue = input.dataset.committedValue ?? '';
-            // Only clear visual contents if there's something to hide; leave range inputs alone
-            if (input.type !== 'range') {
-                // If the user already started typing (awaitingInput), don't clear again
+
+            // Never clear ranges; keep their native behavior
+            if (input.type === 'range') return;
+
+            const now = Date.now();
+            const pd = lastPointerDown.get(input);
+            const pointerDownRecent = pd && (now - pd.time < 300);
+            const hoveredLongAgo = input._hovering && (now - lastPointerEnterTime) > 300;
+            const clickedOnSpinner = pointerDownRecent && pd.inSpinnerArea;
+
+            // Decision logic:
+            // - If user clicked on the approximate spinner area, DO NOT clear (allow spinner to work)
+            // - If the user hovered over the input for >300ms before focusing, treat as "hover intent" -> DO NOT clear
+            // - Otherwise (keyboard focus or quick click to type), CLEAR for typing experience
+            const shouldClearForTyping = !(clickedOnSpinner || hoveredLongAgo);
+
+            if (shouldClearForTyping) {
+                // Clear for typing and mark awaitingInput so blur logic knows
+                input.dataset.awaitingInput = 'true';
+                input.value = '';
+                try {
+                    if (typeof input.select === 'function') input.select();
+                    else input.setSelectionRange(0, 0);
+                } catch (_) { }
+            } else {
+                // Preserve visible value so arrows / spinner behave predictably
                 if (input.dataset.awaitingInput !== 'true') {
                     input.dataset.awaitingInput = 'true';
-                    // Clear displayed value but do not overwrite committedValue
-                    input.value = '';
-                    // Keep cursor visible; for some browsers move caret to start
-                    try { input.setSelectionRange(0, 0); } catch (_) { }
+                    input.value = input.dataset.committedValue ?? input.value ?? '';
+                    try {
+                        if (typeof input.select === 'function') input.select();
+                        else input.setSelectionRange(0, input.value.length);
+                    } catch (_) { }
                 }
             }
         });
@@ -691,12 +771,12 @@ function attachCommitBehavior(inputs, onCommit) {
         'opHours': 15.0,
         'numEmployees': 8,
         'laborCost': 25.0,
-        'superSell': 1250,
-        'superCogs': 450,
-        'ultraSell': 1500,
-        'ultraCogs': 550,
-        'megaSell': 1800,
-        'megaCogs': 650
+        'superSell': 400,
+        'superCogs': 375,
+        'ultraSell': 650,
+        'ultraCogs': 590,
+        'megaSell': 1000,
+        'megaCogs': 960
     };
 
     inputs.forEach(input => {
@@ -771,9 +851,8 @@ function setupUIEventListeners() {
     switchContainer.style.alignItems = 'center';
 
     const switchText = document.createElement('span');
-    switchText.textContent = ' Auto\nAdjust';
-    switchText.style.marginRight = '0.3em';
-    switchText.style.marginLeft = '0.3em';
+    switchText.textContent = 'Auto Adjust';
+    switchText.style.marginRight = '8px';
     switchText.style.fontSize = '0.9em';
 
     const switchLabel = document.createElement('label');
@@ -820,27 +899,75 @@ function setupUIEventListeners() {
         }
     }
 
+    /**
+     * Smoothly resizes the active visualization during a 300ms animation window.
+     * For "overview" and "investment" tabs we avoid re-drawing (which clears and re-fetches
+     * the foreignObject content) and instead adjust sizes / emit a resize event so the
+     * existing DOM can smoothly adapt without going white.
+     */
+    function smoothResize() {
+        const duration = 300; // Match CSS transition duration
+        let start = null;
+
+        function resizeActiveVisual() {
+            const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+            if (!activeTab) return;
+
+            // If tab uses an SVG with a foreignObject (overview / investment), don't re-render.
+            if (activeTab === 'overview' || activeTab === 'investment') {
+                const panelEl = document.getElementById(`${activeTab}-panel`);
+                if (panelEl) {
+                    // Ensure the foreignObject spans the available area (prevents white flash)
+                    const fo = panelEl.querySelector('foreignObject');
+                    if (fo) {
+                        fo.setAttribute('width', '100%');
+                        fo.setAttribute('height', '100%');
+                    }
+                    // Also dispatch a resize event so any listeners can adapt layouts (e.g., charts)
+                    window.dispatchEvent(new Event('resize'));
+                }
+            } else if (activeTab === 'precedence') {
+                // For precedence, resize the SVG and restart simulation to animate expansion
+                PrecedenceTab.resize();
+            } else {
+                // For other tabs, continue to use existing rendering functions
+                renderActiveTab();
+            }
+        }
+
+        function step(timestamp) {
+            if (!start) start = timestamp;
+            const progress = timestamp - start;
+
+            // Update the UI for the intermediate frame without clearing foreignObject content
+            resizeActiveVisual();
+
+            if (progress < duration) {
+                requestAnimationFrame(step);
+            } else {
+                // Final ensure layout is correct at the end of animation
+                resizeActiveVisual();
+            }
+        }
+        requestAnimationFrame(step);
+    }
 
     leftToggle.addEventListener('click', () => {
-        const redrawOnTransitionEnd = () => {
-            updateUI();
-            document.getElementById('left-sidebar').removeEventListener('transitionend', redrawOnTransitionEnd);
-        };
-        document.getElementById('left-sidebar').addEventListener('transitionend', redrawOnTransitionEnd);
-        document.getElementById('left-sidebar').classList.toggle('collapsed');
-        const isCollapsed = document.getElementById('left-sidebar').classList.contains('collapsed');
+        const leftSidebarEl = document.getElementById('left-sidebar');
+        leftSidebarEl.classList.toggle('collapsed');
+        const isCollapsed = leftSidebarEl.classList.contains('collapsed');
         leftToggle.innerHTML = isCollapsed ? '&raquo;' : '&laquo;';
+        smoothResize();
     });
+
     rightToggle.addEventListener('click', () => {
-        const redrawOnTransitionEnd = () => {
-            updateUI();
-            document.getElementById('right-sidebar').removeEventListener('transitionend', redrawOnTransitionEnd);
-        };
-        document.getElementById('right-sidebar').addEventListener('transitionend', redrawOnTransitionEnd);
-        document.getElementById('right-sidebar').classList.toggle('collapsed');
-        const isCollapsed = document.getElementById('right-sidebar').classList.contains('collapsed');
+        const rightSidebarEl = document.getElementById('right-sidebar');
+        rightSidebarEl.classList.toggle('collapsed');
+        const isCollapsed = rightSidebarEl.classList.contains('collapsed');
         rightToggle.innerHTML = isCollapsed ? '&laquo;' : '&raquo;';
+        smoothResize();
     });
+
     tabs.addEventListener('click', (e) => {
         if (e.target.classList.contains('tab-btn')) {
             const targetTab = e.target.dataset.tab;
@@ -858,11 +985,13 @@ function setupUIEventListeners() {
             stopAllSimulations();
             if (targetTab === 'precedence') {
                 drawPrecedenceChart();
+                setWorkstationListHeight();
             } else {
                 renderActiveTab();
             }
         }
     });
+
     workstationList.addEventListener('scroll', () => {
         const scrollTop = workstationList.scrollTop;
         const schedulePanel = document.getElementById('schedule-panel');
@@ -879,19 +1008,19 @@ function setupUIEventListeners() {
 function handleVisibilityChange() {
     if (document.hidden) {
         // Pause animations without resetting state
-        if (animationState && animationState.schedule && animationState.schedule.isRunning) {
+        if (animationState && animationState.schedule && animationState.schedule.isRunning && !animationState.schedule.isManuallyPaused) {
             animationState.schedule.isPaused = true;
         }
-        if (animationState && animationState.layout && animationState.layout.isRunning) {
+        if (animationState && animationState.layout && animationState.layout.isRunning && !animationState.layout.isManuallyPaused) {
             animationState.layout.isPaused = true;
         }
     } else {
         // Resume animations; reset lastFrameTime to avoid jumps
-        if (animationState && animationState.schedule && animationState.schedule.isPaused) {
+        if (animationState && animationState.schedule && animationState.schedule.isPaused && !animationState.schedule.isManuallyPaused) {
             animationState.schedule.isPaused = false;
             animationState.schedule.lastFrameTime = performance.now();
         }
-        if (animationState && animationState.layout && animationState.layout.isPaused) {
+        if (animationState && animationState.layout && animationState.layout.isPaused && !animationState.layout.isManuallyPaused) {
             animationState.layout.isPaused = false;
             animationState.layout.lastFrameTime = performance.now();
         }
@@ -930,7 +1059,7 @@ function setupDragAndDrop() {
 * @returns {d3.Selection} The D3 selection for the tooltip div.
 */
 function createTooltip(className) {
-    let tooltip = d3.select(`body > .d3-tooltip.${className}`);
+    let tooltip = d3.select("body > .d3-tooltip");
     if (tooltip.empty()) {
         tooltip = d3.select("body").append("div")
             .attr("class", `d3-tooltip ${className || ''}`)
@@ -1233,13 +1362,15 @@ function updateWorkstationOrder() {
     });
 
     state.configData[numEmployees] = newConfig;
-    const invalidPrecedenceMap = validatePrecedence();
-    invalidPrecedenceNodes = new Set(Array.from(invalidPrecedenceMap.keys()));
+    invalidPrecedenceNodes = validatePrecedence();
 
+    // Explicitly update the precedence chart visuals
     if (document.querySelector('.tab-btn[data-tab="precedence"].active')) {
-        updatePrecedenceChart();
+        PrecedenceTab.update(invalidPrecedenceNodes);
     }
-    setTimeout(updateUI, 0);
+
+    // Call updateUI to refresh the financial panel
+    setTimeout(() => updateUI({ skipPrecedence: true }), 0);
 }
 
 /**
@@ -1599,11 +1730,28 @@ function roundUpToQuarter(value) {
 */
 
 /**
+* Sets the maxHeight of the workstation list based on the current tab's container height and header height.
+*/
+function setWorkstationListHeight() {
+    const header = document.querySelector('.main-header');
+    const headerHeight = header.offsetHeight;
+    const svgContainer = document.getElementById('svg-container');
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+    let containerHeight = svgContainer.clientHeight;
+    let marginTop = 0;
+    if (activeTab === 'schedule' && ScheduleTab.containerHeight) {
+        containerHeight = ScheduleTab.containerHeight;
+        marginTop = ScheduleTab.margin?.top || 0;
+    }
+    workstationList.style.maxHeight = `${(containerHeight * 0.93) - marginTop + headerHeight}px`;
+}
+
+/**
 * @tab General
 * Renders the content for the currently active visualization tab.
 */
 function renderActiveTab() {
-    const activeTab = document.querySelector('.tab-btn.active').dataset.tab;
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     if (activeTab === 'overview') drawOverviewPanel();
     else if (activeTab === 'precedence') drawPrecedenceChart();
     else if (activeTab === 'schedule') ScheduleTab.draw();
@@ -1612,6 +1760,7 @@ function renderActiveTab() {
     else if (activeTab === 'profit') ProfitTab.draw();
     else if (activeTab === 'investment') drawInvestmentPanel();
     else if (activeTab === 'location') LocationTab.draw();
+    setWorkstationListHeight();
 }
 
 /**
