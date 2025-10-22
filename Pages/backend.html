@@ -1,0 +1,425 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factory Physics - Technical Documentation</title>
+    <!-- Link to your existing stylesheet -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- MathJax for rendering LaTeX equations -->
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+    <style>
+        /* Allows body to scroll on this standalone page */
+        body {
+            overflow-y: auto;
+            overflow-x: hidden; /* Prevent horizontal scroll */
+        }
+        /* Style for documentation page layout */
+        .documentation-container {
+            max-width: 960px; /* Or adjust as needed */
+            margin: 2rem auto;
+            padding: 1rem;
+            font-size: clamp(0.8rem, 1.5vw, 1rem); /* Use clamp for responsive base font */
+            line-height: 1.6;
+        }
+
+            .documentation-container h2 {
+                font-size: clamp(1.3rem, 2.5vw, 1.6rem); /* Responsive H2 */
+                color: var(--header-bg);
+                margin-bottom: 1rem;
+                padding-bottom: 0.5rem;
+                border-bottom: 2px solid var(--accent-color);
+            }
+
+            .documentation-container h3 {
+                font-size: clamp(1rem, 2vw, 1.2rem); /* Responsive H3 */
+                color: var(--header-bg);
+                margin-top: 1.5rem;
+                margin-bottom: 0.75rem;
+            }
+
+            .documentation-container h4 {
+                font-size: clamp(0.9rem, 1.8vw, 1.1rem); /* Responsive H4 */
+                color: var(--accent);
+                margin-top: 1rem;
+                margin-bottom: 0.5rem;
+                font-weight: 600;
+            }
+
+            .documentation-container p {
+                margin-bottom: 1rem;
+            }
+
+            .documentation-container ul, .documentation-container ol {
+                margin-bottom: 1rem;
+                padding-left: 2rem;
+            }
+
+            .documentation-container li {
+                margin-bottom: 0.5rem;
+            }
+            /* Updated style for tooltip keywords */
+            .documentation-container strong[data-tooltip] {
+                cursor: help;
+                border-bottom: 1px dotted var(--secondary2); /* Use color for underline */
+                color: var(--secondary2); /* Use color for text */
+                font-weight: 600; /* Slightly bolder */
+            }
+        /* Style for inline code snippets */
+        code {
+            background-color: var(--idle-color, #e5e7e9);
+            color: var(--accent, #37474F);
+            padding: 0.2em 0.4em;
+            margin: 0;
+            font-size: 85%;
+            border-radius: 6px;
+            font-family: monospace;
+            word-wrap: break-word; /* Prevent long code from overflowing */
+        }
+        /* Styling for centered equations - prevent scrollbars */
+        mjx-container[display="true"] {
+            margin: 1.5em auto; /* Center horizontally */
+            overflow-x: visible; /* Prevent scrollbar, allow natural overflow if needed */
+            display: block; /* Ensure block display for centering */
+            max-width: 100%; /* Prevent overflow */
+            text-align: center; /* Center content within */
+        }
+        /* Ensure MathJax SVG output scales correctly */
+        mjx-container svg {
+            max-width: 100%;
+            display: block;
+            margin: 0 auto;
+        }
+
+        /* Table styles */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+            font-size: clamp(0.75rem, 1.3vw, 0.9rem);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+            .data-table th, .data-table td {
+                border: 1px solid #ddd;
+                padding: 8px 10px;
+                text-align: center;
+                vertical-align: middle;
+            }
+
+            .data-table th {
+                background-color: var(--accent);
+                color: var(--white);
+                font-weight: bold;
+            }
+
+            .data-table tr:nth-child(even) {
+                background-color: #f9f9f9;
+            }
+
+            .data-table tr:hover {
+                background-color: #f1f1f1;
+            }
+
+            .data-table td:nth-child(2) { /* Description column */
+                text-align: left;
+            }
+    </style>
+</head>
+<body>
+
+    <div class="documentation-container">
+
+        <h2>Factory Physics: Website Backend Mechanics</h2>
+        <p>This document details the formulas and algorithms used to calculate the backend mechanics of the factory physics simulation website. Hover over <strong data-tooltip="Key technical terms have tooltips like this!">highlighted key terms</strong> for definitions.</p>
+
+        <h3>Global Constants & Constraints</h3>
+        <p>These values are foundational to the simulation and cannot be changed by the user in the interface, ensuring consistency and computational feasibility:</p>
+        <ul>
+            <li><strong>Build Ratios:</strong> The fixed production mix for the <strong data-tooltip="An assembly line that produces multiple product variations sharing common steps.">mixed assembly line</strong> is 35% Super, 45% Ultra, and 20% Mega. Fixing this prevents calculations from becoming too complex for a web browser.</li>
+            <li><strong>Precedence Data:</strong> The required order of assembly <strong data-tooltip="Atomic tasks done by one person; cannot be shared or split.">elements</strong> (<code>PRECEDENCE_DATA</code>) is fixed, reflecting non-negotiable engineering and assembly logic based on the physical requirements of building the refrigerators.</li>
+        </ul>
+
+        <h4>Element Data Summary</h4>
+        <p>The following table details the 31 assembly elements, their individual times, precedence requirements, and which refrigerator model requires them (1 = Yes, 0 = No).</p>
+        <div style="overflow-x:auto;">
+            <!-- Wrapper for table responsiveness -->
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Element</th>
+                        <th>Element Description</th>
+                        <th>Element Time</th>
+                        <th>Predecessor(s)</th>
+                        <th>Super</th>
+                        <th>Ultra</th>
+                        <th>Mega</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>1</td><td>Place frame on holder and secure</td><td>0.8</td><td>-</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>2</td><td>Install internal heat exchanging pipes (IHEPs)</td><td>1.5</td><td>1</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>3</td><td>Install compressor motor/pump kit</td><td>1.0</td><td>1</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>4</td><td>Install compressor electrical kit</td><td>1.3</td><td>3</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>5</td><td>Connect IHEPs to compressor</td><td>0.5</td><td>2, 3</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>6</td><td>Install defrost heater kit</td><td>0.7</td><td>1</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>7</td><td>Install defrost drain tube</td><td>0.7</td><td>6</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>8</td><td>Install water filter kit</td><td>0.8</td><td>1</td><td>0</td><td>1</td><td>1</td></tr>
+                    <tr><td>9</td><td>Connect and route water pipes</td><td>0.5</td><td>8</td><td>0</td><td>1</td><td>1</td></tr>
+                    <tr><td>10</td><td>Install basic electronic control board</td><td>1.2</td><td>1</td><td>1</td><td>1</td><td>0</td></tr>
+                    <tr><td>11</td><td>Install advanced electronic control board</td><td>1.5</td><td>1</td><td>0</td><td>0</td><td>1</td></tr>
+                    <tr><td>12</td><td>Connect and route electrical wires</td><td>2.0</td><td>10, 11</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>13</td><td>Install internal panels</td><td>2.5</td><td>4, 5, 7, 9, 12</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>14</td><td>Install evaporator and evaporator fans</td><td>1.5</td><td>13</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>15</td><td>Install external panels</td><td>2.2</td><td>14</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>16</td><td>Install external heat exchanging pipes (EHEPs)</td><td>1.2</td><td>15</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>17</td><td>Connect EHEPs to compressor</td><td>0.5</td><td>16</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>18</td><td>Install door brackets</td><td>0.8</td><td>14</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>19</td><td>Install freezer compartment door</td><td>1.1</td><td>18</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>20</td><td>Install icemaker kit into freezer door</td><td>0.5</td><td>19</td><td>0</td><td>1</td><td>1</td></tr>
+                    <tr><td>21</td><td>Connect pre-routed water pipes to icemaker</td><td>0.5</td><td>20</td><td>0</td><td>1</td><td>1</td></tr>
+                    <tr><td>22</td><td>Install refrigerator compartment door</td><td>1.3</td><td>18</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>23</td><td>Install touchscreen (TS) into refrigerator door</td><td>0.7</td><td>22</td><td>0</td><td>0</td><td>1</td></tr>
+                    <tr><td>24</td><td>Connect pre-routed electrical wires to TS</td><td>0.9</td><td>23</td><td>0</td><td>1</td><td>1</td></tr>
+                    <tr><td>25</td><td>Install sensors and switches</td><td>1.3</td><td>19, 22</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>26</td><td>Install lighting kit</td><td>1.0</td><td>19, 22</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>27</td><td>Connect remaining pre-routed electrical wires</td><td>0.7</td><td>25, 26</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>28</td><td>Assemble internal shelves and drawers</td><td>1.0</td><td>27</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>29</td><td>Install feet and wheels</td><td>0.7</td><td>15</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>30</td><td>Visual and structural inspection</td><td>0.5</td><td>17, 21, 24, 27, 29</td><td>1</td><td>1</td><td>1</td></tr>
+                    <tr><td>31</td><td>Remove from holder and package</td><td>0.4</td><td>30, 28</td><td>1</td><td>1</td><td>1</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <ul>
+            <li>
+                <strong>Assembly Line Length:</strong> Fixed at <code>486 feet</code>. This dimension is based on providing adequate physical <strong data-tooltip="Physical area required for an operation.">floor space</strong> (6 feet) for the task with the shortest element time (0.4 minutes), ensuring no task is physically constrained.
+                \[\left( \frac{\text{Total Element Time (32.4 min)}}{0.4 \text{ min/element}} \right) \times 6 \text{ feet/element} = 486 \text{ feet}\]
+            </li>
+            <li>
+                <strong>Workstation Capacities & Configurations:</strong> For each potential number of employees (<strong data-tooltip="A designated area where a specific set of assembly tasks (elements) are performed, typically by one operator.">workstations</strong>) from 3 to 13, a near-optimal task assignment configuration is pre-defined in the code (derived from <code>CONFIGS.csv</code>). These configurations were generated using a custom algorithm, <strong data-tooltip="Backpropagating Iterative Ranked Weights: Custom algorithm used to improve line balance by iteratively applying a reversed RPW method.">BIRW</strong> (Backpropagating Iterative Ranked Weights). This algorithm refines an initial assignment from the standard <strong data-tooltip="Ranked Positional Weights: Algorithm for assigning tasks to workstations based on task time and precedence constraints, often resulting in front-loaded imbalance.">RPW</strong> (Ranked Positional Weights) method. RPW tends to front-load tasks, leading to imbalance. BIRW addresses this by:
+                <ol>
+                    <li>Running RPW forward to get a baseline number of stations (<code>minStations</code>) and average station time.</li>
+                    <li>Calculating the standard deviation of individual element times.</li>
+                    <li>Iteratively running a *reversed* RPW (processing tasks from last to first, using successors instead of predecessors) with varying workstation time capacities.</li>
+                    <li>Selecting the configuration from these iterations that yielded the lowest variance in workstation idle times.</li>
+                </ol>
+                Associated with these BIRW-optimized configurations are pre-calculated maximum daily demand capacities:
+                <code>
+                    <pre>
+[
+ { ws: 3, maxDemand: 147 }, { ws: 4, maxDemand: 192 }, { ws: 5, maxDemand: 229 },
+ { ws: 6, maxDemand: 284 }, { ws: 7, maxDemand: 312 }, { ws: 8, maxDemand: 350 },
+ { ws: 9, maxDemand: 407 }, { ws: 10, maxDemand: 419 }, { ws: 11, maxDemand: 499 },
+ { ws: 12, maxDemand: 501 }, { ws: 13, maxDemand: 552 }
+]
+                </pre>
+                </code>These capacities significantly speed up the profit optimization by eliminating impossible scenarios early.
+            </li>
+        </ul>
+
+        <h3>Core Operational Calculations (<code>calculateMetrics</code>)</h3>
+        <p>This central function translates user inputs (Demand, Op Hours, Employees, Costs/Prices) into the primary operational and financial KPIs displayed in the UI.</p>
+
+        <h4>1. Workstation Details & Bottleneck Identification</h4>
+        <p>The function first calls <code>calculateWorkstationDetails</code>. For the selected number of employees, this sub-function determines:</p>
+        <ul>
+            <li><strong>Station <strong data-tooltip="The actual time it takes for one unit to be completed at the slowest workstation. This determines your line's true output rate.">Cycle Time</strong> (min):</strong> Calculated for each workstation by summing the <strong data-tooltip="The average time an operator spends on a task per unit, considering the mix of models being built and task requirements.">labor time</strong> (<code>laborTime</code>) of all tasks assigned to it. This represents the average workload per unit for that station.</li>
+            <li><strong>Line <strong data-tooltip="The single process or workstation that limits the overall output rate of the entire system.">Bottleneck</strong> Time (min):</strong> The maximum Station Cycle Time found across all workstations. This value dictates the absolute fastest rate the entire line can produce units.</li>
+            <li><strong>Fastest Station Time (min):</strong> The minimum non-zero Station Cycle Time. Used to calculate product spacing.</li>
+        </ul>
+        <p>It's crucial that <code>laborTime</code> (work content) determines the bottleneck and cycle time, while <code>elementTime</code> (task duration) influences physical layout and travel times.</p>
+
+        <h4>2. Conveyor Speed & Spacing (User-Visible KPIs)</h4>
+        <p>These are calculated to ensure smooth <strong data-tooltip="The movement of materials and products through the production process.">flow</strong> and prevent starving the fastest workstation of work:</p>
+        <ul>
+            <li>
+                <strong>Product Spacing (ft):</strong> Fixed based on the fastest station's labor time and a maximum theoretical conveyor speed of 15 ft/min (chosen for reasonable work pace). Displayed in the UI.
+                \[\text{Product Spacing} = \text{Fastest Labor Time} \times 15 \text{ ft/min}\]
+            </li>
+            <li>
+                <strong>Actual Conveyor Speed (ft/min):</strong> The calculated speed the conveyor must run at based on the fixed spacing and the line's actual operating pace (Effective Cycle Time). Displayed in the UI.
+                \[\text{Conveyor Speed} = \frac{\text{Product Spacing}}{\text{Effective Cycle Time}}\]
+            </li>
+        </ul>
+
+        <h4>3. Required <strong data-tooltip="The required pace (time per unit) of production needed to meet customer demand within the available operating time.">Takt Time</strong> Calculation</h4>
+        <p>This determines the pace (minutes per unit) required to meet the user-set <code>dailyDemand</code> within the specified <code>opHours</code>. The formula correctly accounts for the initial time needed to fill the entire assembly line before the first unit is completed:</p>
+        \[ \text{Required Takt Time} = \frac{\text{Total Operational Minutes}}{(\text{Daily Demand} - 1) + (\frac{\text{Assembly Line Length}}{\text{Product Spacing}})} \]
+        <p>(Note: Takt Time becomes infinite if Daily Demand ≤ 1).</p>
+
+        <h4>4. Effective Cycle Time</h4>
+        <p>This is the actual time between units completing, representing the true pace the line will run at. It's limited by either the demand requirement or the line's physical capability:</p>
+        \[\text{Effective Cycle Time} = \max(\text{Required Takt Time, Bottleneck Time})\]
+
+        <h4>5. <strong data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong> & <strong data-tooltip="Work In Progress: The average number of incomplete products currently physically present on the assembly line.">WIP</strong> Calculation (User-Visible KPIs)</h4>
+        <ul>
+            <li>
+                <strong>Actual <strong data-tooltip="The total time it takes for a single unit to travel from the start to the end of the assembly line.">Process Time</strong> (min):</strong> The total time for one unit to traverse the entire line at the effective pace:
+                \[\text{Actual Process Time} = \frac{\text{Assembly Line Length}}{\text{Product Spacing}} \times \text{Effective Cycle Time}\]
+            </li>
+            <li>
+                <strong><strong data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong> (Units per Day):</strong> The total number of units the line can actually produce within the operating hours. Calculated based on the "launch window" (total time minus the time for the first unit to exit):
+                \[\text{Throughput}_{\text{Units/Day}} = \left\lfloor \frac{\text{Total Op Minutes} - \text{Actual Process Time}}{\text{Effective Cycle Time}} \right\rfloor + 1\]
+                (Throughput is 0 if Total Op Minutes < Actual Process Time).
+            </li>
+            <li><strong><strong data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong> (Units per Hour):</strong> Calculated for display in the UI based on the actual production achieved over the *effective* production time (which might be less than opHours if demand is low).</li>
+            <li>
+                <strong><strong data-tooltip="Work In Progress: The average number of incomplete products currently physically present on the assembly line.">WIP</strong> (Units):</strong> The average number of units physically on the line at any given time. Displayed in the UI.
+                \[\text{WIP} = \frac{\text{Assembly Line Length}}{\text{Product Spacing}}\]
+            </li>
+        </ul>
+
+        <h3>Efficiency and Balance Metrics (User-Visible KPIs)</h3>
+        <ul>
+            <li>
+                <strong>Average <strong data-tooltip="Percentage of total available operator time that is spent productively working on units.">Efficiency</strong> (%):</strong> Overall measure of labor utilization. Displayed in the UI.
+                \[\text{Avg. Efficiency} = \frac{\text{Throughput}_{\text{Units/Day}} \times \sum \text{Task Labor Times}}{\text{Num Employees} \times \text{Total Op Minutes}} \times 100\%\]
+            </li>
+            <li>
+                <strong>Total Idle Time (hrs):</strong> Total non-productive paid labor time across all employees per day. Displayed in the UI.
+                \[ \text{Total Idle Time} = (\text{Num Employees} \times \text{Total Op Minutes}) - (\text{Throughput}_{\text{Units/Day}} \times \sum \text{Task Labor Times}) \]
+            </li>
+            <li>
+                <strong data-tooltip="The percentage of time operators are idle specifically due to unequal workload distribution between workstations.">Balance Delay</strong> (%): Measures inefficiency specifically from unequal task distribution. Displayed in the UI.
+                <ol type="a" style="padding-left: 1.5rem; margin-top: 0.5rem;">
+                    <li>Workstation Efficiency = \( \frac{\text{Workstation Cycle Time}}{\text{Bottleneck Cycle Time}} \times 100\% \)</li>
+                    <li>Balance Delay = \( 100\% - \text{Average}(\text{All Workstation Efficiencies}) \)</li>
+                </ol>
+            </li>
+            <li>
+                <strong data-tooltip="The Coefficient of Variation (standard deviation / mean) of idle times across workstations. Measures how *evenly* the idle time (imbalance) is distributed. Lower is better.">Idle Time CV (BD CV)</strong> (%): Quantifies the *variation* in idle time between stations. A high CV means some stations are very busy while others are very idle, even if the average Balance Delay isn't terrible. Displayed in the UI.
+                \[ \text{Idle Time CV} = \left( \frac{\text{StdDev}(\text{Station Idle Times per Cycle})}{\text{Mean}(\text{Station Idle Times per Cycle})} \right) \times 100\% \]
+                (Where Station Idle Time per Cycle = Bottleneck Time - Station Cycle Time).
+            </li>
+        </ul>
+
+        <h3>Integrated Financial Model (Daily KPIs)</h3>
+        <p>Connects the calculated operational <code>throughputUnitsPerDay</code> to daily financial performance shown in the UI:</p>
+        <ul>
+            <li><code>Total Revenue</code> = Throughput × Weighted Avg. Selling Price (per model price × <code>BUILD_RATIOS</code>)</li>
+            <li><strong data-tooltip="Cost Of Goods Sold: Variable costs (materials, direct labor) associated directly with producing goods."><code>Total COGS</code></strong> = Throughput × Weighted Avg. COGS (per model COGS × <code>BUILD_RATIOS</code>)</li>
+            <li><code>Total Daily Labor Cost</code> = Num Employees × Op Hours × Labor Rate</li>
+            <li>
+                <strong data-tooltip="Revenue minus COGS and direct Labor Cost. Profit generated directly from production before overheads."><code>Daily Gross Profit</code></strong> ($): Displayed in the UI.
+                \[ \text{Gross Profit} = \text{Revenue} - \text{COGS} - \text{Labor Cost} \]
+            </li>
+            <li>
+                <strong data-tooltip="Gross Profit expressed as a percentage of total revenue. Measures profitability of production itself."><code>Gross Profit Margin</code></strong> (%): Displayed in the UI.
+                \[ \text{Gross Profit Margin} = \left( \frac{\text{Gross Profit}}{\text{Revenue}} \right) \times 100\% \]
+            </li>
+        </ul>
+
+        <h3>Precedence Constraint Validation (<code>validatePrecedence</code>)</h3>
+        <p>Ensures tasks follow the sequence defined in <code>PRECEDENCE_DATA</code>. It iterates through tasks in their current workstation order (left sidebar), using a <code>Set</code> (<code>seenTasks</code>) to track completed tasks. If a task is encountered before all its required <strong data-tooltip="Tasks that must be completed before a given task can begin.">predecessors</strong> are in <code>seenTasks</code>, the task is flagged with an error in the UI, and KPI calculations are halted.</p>
+
+        <h3>Profit Maximization Algorithm (<code>calculateOptimalProfitData</code>)</h3>
+        <p>Used by the Profit Tab to find the optimal configuration (employees & hours) for each demand level (50-552). It uses a grid search optimized by:</p>
+        <ol>
+            <li><strong>Capacity Pruning:</strong> Uses <code>WORKSTATION_CAPACITIES</code> to skip employee counts that cannot possibly meet the target demand.</li>
+            <li><strong>Early Exit:</strong> For a fixed demand and employee count, it calculates the minimum required <code>opHours</code>. It then iterates hours upwards in 0.25 increments. The *first* hour value that achieves <code>throughput >= demand</code> is guaranteed to be the most profitable (lowest cost) for that combination, so the inner loop breaks immediately.</li>
+        </ol>
+
+        <h3>Model-Mix Sequencing (MSSA / <strong data-tooltip="A lean manufacturing method (also called Heijunka) for leveling production by sequencing different product models in a repeating pattern to smooth demand on components and workload.">Heijunka</strong>) (<code>generateProductionQueue</code>)</h3>
+        <p>Used by the Layout and Schedule tabs to create a balanced production sequence for simulations:</p>
+        <ol>
+            <li><strong>Calculate Interval (\(w\)):</strong> Average production frequency per model: \(w_{\text{model}} = \frac{\text{Total Demand}}{\text{Model Demand}}\).</li>
+            <li><strong>Initialize Accumulator (\(a\)):</strong> Each model starts at \(a = w/2\) (ensures highest frequency model goes first).</li>
+            <li><strong>Iterate & Select:</strong> For each unit in the total demand, select the model with the currently lowest \(a\) value (the one most "behind schedule").</li>
+            <li><strong>Update Accumulator:</strong> Add the full interval \(w\) to the selected model's accumulator: \(a \leftarrow a + w\).</li>
+        </ol>
+
+        <h3>Discrete-Event Simulation for Gantt Scheduling (<code>runGanttSimulation</code>)</h3>
+        <p>Models product flow through each task for the Schedule Tab visualization:</p>
+        <ul>
+            <li>
+                <strong>Station Travel Time:</strong> Calculates how long a product takes to physically move across a station's length on the conveyor. It's proportional to the station's share of the total line <code>elementTime</code>:
+                \[\text{Travel Time}_{\text{station}} = \left( \frac{\sum \text{Element Time}_{\text{station}}}{\sum \text{Element Time}_{\text{line}}} \right) \times \left( \frac{\text{Line Length}}{\text{Conveyor Speed}} \right)\]
+            </li>
+            <li><strong>Task Start Time:</strong> Accurately models waiting scenarios (product waiting for worker, or worker waiting for product): <code>max(product_arrival_time, worker_free_time)</code>.</li>
+            <li><strong>Product Exit Time from Station:</strong> Accounts for both processing completion and travel time: <code>max(end_processing_time, product_arrival_time + station_travel_time)</code>.</li>
+        </ul>
+
+        <h3>Capital Investment Analysis (Investment Tab)</h3>
+        <p>Evaluates long-term investment viability over the <code>analysisPeriod</code> using the <code>calculateFinancialScenario</code> function.</p>
+
+        <h4>1. <strong data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">Free Cash Flow (FCF)</strong> Calculation</h4>
+        <p>FCF is the basis for investment metrics. For each year (\(t\)) from 1 to \(n\) (analysis period), it's calculated as:</p>
+        <ol type="a">
+            <li>
+                Calculate Earnings Before Interest and Taxes:
+                \[ \text{EBIT}_t = \text{Revenue}_t - \text{COGS}_t - \text{Labor}_t - \text{Overheads}_t - \text{Depreciation}_t \]
+            </li>
+            <li>
+                Calculate <strong data-tooltip="Net Operating Profit After Tax. A measure of profitability that excludes debt financing effects.">Net Operating Profit After Tax (NOPAT)</strong>:
+                \[ \text{NOPAT}_t = \text{EBIT}_t \times (1 - \text{Tax Rate}) \]
+            </li>
+            <li>
+                Calculate <strong data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">Free Cash Flow (FCF)</strong>:
+                \[ \text{FCF}_t = \text{NOPAT}_t + \text{Depreciation}_t \]
+                (Depreciation is calculated using the selected <strong data-tooltip="Modified Accelerated Cost Recovery System. A US tax depreciation system specifying depreciation rates per year.">MACRS</strong> schedule. In the final year \(n\), the after-tax Salvage Value is added: \( \text{FCF}_n \leftarrow \text{FCF}_n + \text{Salvage Value} \times (1 - \text{Tax Rate}) \)). The Year 0 FCF is the negative Initial Investment.
+            </li>
+        </ol>
+
+        <h4>2. Investment Metrics</h4>
+        <p>The FCF series (\(FCF_0, FCF_1, ..., FCF_n\)) is used to compute:</p>
+        <ul>
+            <li>
+                <strong data-tooltip="A project's total discounted future cash flows minus the initial investment. If positive, the project is expected to generate more value than its cost.">Net Present Value (NPV)</strong>: Discounts future FCFs back to present value using the <strong data-tooltip="Minimum Acceptable Rate of Return: The hurdle rate or required return an investor expects for undertaking the risk of an investment.">MARR</strong>. A positive NPV suggests a potentially acceptable investment.
+                \[NPV = \sum_{t=0}^{n} \frac{FCF_t}{(1 + MARR)^t}\]
+            </li>
+            <li><strong data-tooltip="The discount rate (%) at which a project's Net Present Value (NPV) equals zero. Represents the project's effective rate of return. Higher is better.">Internal Rate of Return (IRR)</strong> (%): The effective rate of return of the investment. It's the discount rate (\(r\)) where NPV = 0. Calculated numerically using the bisection method (iteratively narrowing a rate range [low, high] until the NPV at the midpoint is close to zero).</li>
+            <li>
+                <strong data-tooltip="The time (in years or days) required for an investment's cumulative positive cash inflows to equal the initial investment cost.">Payback Period</strong> (Years/Days): Time until cumulative positive FCFs (\( \sum_{t=1}^{k} FCF_t \)) recover the initial investment (\( |FCF_0| \)). If payback occurs between year \(k-1\) and year \(k\):
+                \[ \text{Payback Period} = (k-1) + \frac{|FCF_0| - \sum_{t=1}^{k-1} FCF_t}{FCF_k} \]
+                (Result is Infinity if investment is never recovered). Calculated in days for UI display.
+            </li>
+        </ul>
+
+        <h4>3. Analysis Modes: Base Case vs. Expansion Case</h4>
+        <p>This critical switch affects the configuration used and the initial investment calculation:</p>
+        <ol>
+            <li><strong>Base Case:</strong> Uses the current UI configuration (employees, hours). Production is capped by this configuration's capacity. Initial investment (Year 0 FCF) is the *full* calculated equipment cost + installation cost.</li>
+            <li><strong>Expansion Case:</strong> Ignores the current UI setup. Runs <code>findOptimalNPVConfig</code> to determine the best employee/hour combination for the target demand, maximizing NPV. Initial investment is the *incremental* cost: \( (\text{Cost}_{\text{new line}} - \text{Cost}_{\text{old line}}) + \text{Installation Cost} \). This can be negative if downsizing generates salvage value.</li>
+        </ol>
+
+        <h3>Probabilistic Demand Forecasting Model</h3>
+        <p>Allows analysis under uncertainty (P10, P50, P90 demand scenarios) using an asymmetrical calculation approach:</p>
+        <ul>
+            <li>If user inputs P10 or P90 → Std Dev & CV are recalculated based on that single point estimate (using Z=1.28155 for 90% point).</li>
+            <li>If user inputs Std Dev or CV → P10 & P90 are recalculated symmetrically based on the selected Confidence Interval Z-score (e.g., Z=1.960 for 95% CI).</li>
+        </ul>
+
+        <h3>Facility Location Optimization (<code>LocationTab</code>)</h3>
+        <p>Finds the optimal factory location to minimize total annual transportation costs, solving the <strong data-tooltip="A classic optimization problem to find a single point that minimizes the weighted sum of distances to a set of destination points.">Weber Problem</strong> using calculated annual shipping costs as weights.</p>
+
+        <h4>Optimization Modes: New vs. Existing</h4>
+        <ol>
+            <li>
+                <strong>New (Greenfield):</strong> Iteratively finds the best *coordinate* using the Weiszfeld algorithm, weighted by annual cost to each city:
+                \[\text{New Coordinate} = \frac{\sum_{i} \frac{\text{City Coordinate}_i \times \text{Annual Cost}_i}{\text{Distance}_i}}{\sum_{i} \frac{\text{Annual Cost}_i}{\text{Distance}_i}}\]
+            </li>
+            <p>Upon determining an optimal median value, all existing locations are then checked to see if any have a lower cost.</p>
+            <li><strong>Existing (Brownfield):</strong> Evaluates the total annual shipping cost if the factory were located *at each user-added city*, then selects the existing city with the minimum total cost.</li>
+        </ol>
+
+        <h4>Logistics Cost Model</h4>
+        <ul>
+            <li><strong>Distances:</strong> Uses Great-Circle distance adjusted by a Circuitry Factor (1.2 for > 250mi, 1.35 for < 250mi). Shipments under 10 miles are considered local with zero transport cost.</li>
+            <li>
+                <strong><strong data-tooltip="Full Truckload. Shipping method where an entire truck is dedicated to one shipment, typically cheaper per mile but requires a full load.">FTL</strong> vs. <strong data-tooltip="Less-Than-Truckload. Shipping method where multiple smaller shipments share space on the same truck, more flexible but typically more expensive per unit weight/distance.">LTL</strong>:</strong> Conceptually, FTL reserves a whole truck, offering a lower cost per mile (here, fixed at $2.10/mile) but requires a full load. LTL shares truck space, suitable for smaller quantities but with a complex, higher cost per unit/mile. This model assumes trucks "cube out" (fill up space) at 54 units, based on refrigerator dimensions and stacking constraints (cannot stack Mega, Super can go on Ultra). The average weight per unit is assumed to be ~410 lbs. The model calculates the number of full 54-unit FTLs needed per shipment. For the remaining units (remainder), it compares the calculated LTL cost vs. the cost of sending another FTL for just those units, then chooses the minimum cost option for the remainder.
+            </li>
+            <li>
+                <strong>LTL Cost Formula:</strong> A non-linear estimation based on weight (\(q\) in tons) and road distance (\(d\) in miles):
+                \[\text{LTL Rate} = \frac{43.78 \cdot q \cdot d}{(q^{1/7} \cdot d^{15/29}) - 3.5}\]
+            </li>
+        </ul>
+
+    </div>
+
+</body>
+</html>
+
