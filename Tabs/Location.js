@@ -3,7 +3,7 @@ const LocationTab = (() => {
     const DEMAND_UNIT_LBS = 410;
     const TRUCK_CAPACITY_UNITS = 60;
 
-    let PPI = 170;
+    let PPI = 170; // Default PPI, will be updated from input
 
     const majorCities = {
         "New York, NY": [-74.0060, 40.7128],
@@ -36,7 +36,7 @@ const LocationTab = (() => {
     const cityData = new Map();
     let optimalFactoryLocation = null;
     let totalDemandCapacity = { p10: 0, p50: 0, p90: 0, workingDays: 250 };
-    let optimizationMode = 'New'; 
+    let optimizationMode = 'New';
 
     let resizeObserver = null;
 
@@ -65,6 +65,7 @@ const LocationTab = (() => {
         const q = shipmentWeightTons;
         const d = distance;
         if (q <= 0 || d <= 0) return 0;
+        // Use the globally set PPI
         const numerator = (PPI * q * d) / 5.14;
         const denominator = (q ** (1 / 7) * d ** (15 / 29)) - 3.5;
         if (denominator <= 0) return Infinity;
@@ -73,6 +74,10 @@ const LocationTab = (() => {
 
     const runOptimization = () => {
         const cities = Array.from(cityData.values());
+
+        // Update PPI from input field just in case
+        const ppiInput = d3.select("#loc-ppi-input").property("value");
+        PPI = ppiInput ? parseFloat(ppiInput) : 170;
 
         if (optimizationMode === 'New') {
             if (cities.length < 2) {
@@ -154,9 +159,236 @@ const LocationTab = (() => {
     let projection;
     let radiusScale;
 
+    /**
+     * --- Loads baseline PPI data from CSV ---
+     * Reads monthly data.
+     */
+    async function loadCsvBaselineData() {
+        try {
+            const data = await d3.csv("Data/PPI.csv");
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            
+            // Flatten data to monthly points
+            let monthlyData = [];
+            
+            data.forEach(row => {
+                const year = parseInt(row.Year);
+                if (isNaN(year)) return; // Skip invalid rows
+
+                months.forEach((month, index) => {
+                    const valueStr = row[month];
+                    const value = parseFloat(valueStr); // Will be NaN if empty/invalid
+                    
+                    monthlyData.push({
+                        date: new Date(year, index, 1), // index is 0-11
+                        value: value // Keep NaN to create gaps in the line
+                    });
+                    
+                });
+            });
+
+            return monthlyData.sort((a, b) => a.date - b.date); // Sort by date
+
+        } catch (error) {
+            console.error("Failed to load PPI.csv:", error);
+            return []; // Return empty on error
+        }
+    }
+
+
+    /**
+     * Draws the PPI trend chart using baseline data
+     */
+    async function drawPPITrendChart() {
+        const svg = d3.select("#ppi-chart-svg");
+        svg.selectAll("*").remove(); // Clear previous chart
+
+        const margin = { top: 20, right: 30, bottom: 40, left: 50 };
+        const width = 500 - margin.left - margin.right;
+        const height = 280 - margin.top - margin.bottom;
+
+        const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // Add tooltip div relative to the modal content
+        // We select the parent of the SVG (the modal content div)
+        const tooltip = d3.select(svg.node().parentNode)
+            .append("div")
+            .attr("class", "d3-tooltip ppi-tooltip") // Use existing class + a new one
+            .style("opacity", 0);
+
+        // Error message placeholder
+        const errorText = g.append("text")
+            .attr("class", "ppi-loading-text") // Re-use style for error
+            .attr("x", width / 2)
+            .attr("y", height / 2)
+            .attr("fill", "var(--failure-color)")
+            .style("display", "none");
+
+        try {
+            // 1. Load data from CSV
+            let combinedData = await loadCsvBaselineData();
+
+            if (combinedData.length === 0) {
+                 throw new Error("Failed to load baseline data from Data/PPI.csv");
+            }
+
+            // 4. Use all data
+            combinedData.sort((a, b) => a.date - b.date); // Ensure sorted
+            const finalPpiData = combinedData; 
+
+            if (finalPpiData.length === 0) {
+                throw new Error("No PPI data available to display.");
+            }
+
+            // Add one month padding to the end of the domain
+            const maxDate = d3.max(finalPpiData, d => d.date);
+            const domainMaxDate = new Date(maxDate.getFullYear(), maxDate.getMonth() + 1, 1);
+
+            const x = d3.scaleTime()
+                .domain([d3.min(finalPpiData, d => d.date), domainMaxDate]) // Full data domain + padding
+                .range([0, width]);
+
+            // Filter out NaN values for y-domain calculation
+            const validValues = finalPpiData.map(d => d.value).filter(v => !isNaN(v));
+            const y = d3.scaleLinear()
+                .domain([d3.min(validValues) * 0.9, d3.max(validValues) * 1.1]) // Widen padding
+                .range([height, 0]);
+            
+            const bisectDate = d3.bisector(d => d.date).left;
+            const formatDate = d3.timeFormat("%b %Y");
+
+            // X-Axis
+            g.append("g")
+                .attr("class", "axis")
+                .attr("transform", `translate(0,${height})`)
+                .call(d3.axisBottom(x)
+                    .ticks(d3.timeYear.every(3)) // Show ticks every 3 years to avoid crowding
+                    .tickFormat(d3.timeFormat("%Y"))
+                )
+                .append("text")
+                .attr("class", "axis-label")
+                .attr("fill", "var(--accent)")
+                .attr("x", width / 2)
+                .attr("y", 35)
+                .attr("text-anchor", "middle")
+                .text("Year");
+
+            // Y-Axis
+            g.append("g")
+                .attr("class", "axis")
+                .call(d3.axisLeft(y))
+                .append("text")
+                .attr("class", "axis-label")
+                .attr("fill", "var(--accent)")
+                .attr("transform", "rotate(-90)")
+                .attr("y", -40)
+                .attr("x", -height / 2)
+                .attr("text-anchor", "middle")
+                .text("Producer Price Index"); // CHANGED: Removed acronym
+
+            // Line
+            const line = d3.line()
+                .x(d => x(d.date))
+                .y(d => y(d.value))
+                .defined(d => !isNaN(d.value)); // Skips gaps in data
+
+            g.append("path")
+                .datum(finalPpiData)
+                .attr("class", "ppi-line") // This class is styled by ppi-chart-styles.css
+                .attr("d", line);
+
+            // --- Tooltip Interaction Elements ---
+            const focus = g.append("g")
+                .attr("class", "ppi-focus")
+                .style("display", "none");
+
+            focus.append("circle")
+                .attr("r", 5)
+                .attr("class", "ppi-focus-circle"); // This class is styled by ppi-chart-styles.css
+
+            g.append("rect")
+                .attr("class", "ppi-overlay") // This class is styled by ppi-chart-styles.css
+                .attr("width", width)
+                .attr("height", height)
+                .on("mouseover", () => {
+                    focus.style("display", null);
+                    tooltip.style("opacity", 1);
+                })
+                .on("mouseout", () => {
+                    focus.style("display", "none");
+                    tooltip.style("opacity", 0);
+                })
+                .on("mousemove", mousemove);
+
+            function mousemove(event) {
+                const x0 = x.invert(d3.pointer(event)[0]);
+                const i = bisectDate(finalPpiData, x0, 1);
+                const d0 = finalPpiData[i - 1];
+                const d1 = finalPpiData[i];
+                
+                if (!d0 || !d1) return; 
+                const d = (x0 - d0.date > d1.date - x0) ? d1 : d0;
+                
+                if (isNaN(d.value)) {
+                    focus.style("display", "none");
+                    tooltip.style("opacity", 0);
+                    return;
+                } else {
+                    focus.style("display", null);
+                    tooltip.style("opacity", 1);
+                }
+
+                focus.attr("transform", `translate(${x(d.date)},${y(d.value)})`);
+
+                tooltip.html(
+                    `<strong>${formatDate(d.date)}</strong>` +
+                    `<div class="tooltip-row"><span>Price Index:</span> <span>${d.value.toFixed(2)}</span></div>`
+                );
+
+                const [modalX, modalY] = d3.pointer(event, svg.node().parentNode);
+                const modalContentNode = svg.node().parentNode;
+                const modalWidth = modalContentNode.clientWidth;
+                
+                const tooltipNode = tooltip.node();
+                if (!tooltipNode) return;
+
+                const tooltipRect = tooltipNode.getBoundingClientRect();
+                const tooltipWidth = tooltipRect.width;
+                const tooltipHeight = tooltipRect.height;
+                const padding = 15;
+                
+                let left = modalX + padding;
+                let top = modalY - padding - tooltipHeight; 
+
+                if (left + tooltipWidth > modalWidth - padding) {
+                    left = modalX - padding - tooltipWidth; 
+                }
+                
+                if (top < padding) {
+                    top = modalY + padding; 
+                }
+                
+                tooltip.style("left", left + "px").style("top", top + "px");
+            }
+
+        } catch (error) {
+            console.error("Failed to draw PPI chart:", error);
+            errorText.text(`Error: ${error.message}`).style("display", null);
+        }
+    }
+
+
     const draw = () => {
         const svg = d3.select("#location-panel");
         svg.selectAll("*").remove();
+        
+        // --- Clean up any stray tooltips from previous draws ---
+        // This targets the parent of the #location-panel (which is #svg-container)
+        // to find any tooltips that were attached to the modal's parent
+        // This was the WRONG place. Tooltips are inside the modal.
+        // d3.select(svg.node().parentNode).selectAll(".ppi-tooltip").remove(); 
+        // The cleanup is now correctly handled in the close button listener.
+
 
         const defs = svg.append("defs");
         defs.append("marker")
@@ -189,7 +421,7 @@ const LocationTab = (() => {
         const path = d3.geoPath().projection(projection);
         radiusScale = d3.scaleSqrt().domain([100, 100000]).range([4, 25]).clamp(true);
 
-        const yShift = height * 0.05;
+        const yShift = 0; // Map shift is fixed
         const mainMapGroup = svg.append("g").attr("transform", `translate(0, ${yShift})`);
 
         mainMapGroup.append("g").attr("class", "us-map").on("click", () => infoBox.style("display", "none"));
@@ -239,10 +471,37 @@ const LocationTab = (() => {
 
         controlsDiv.append("button").attr("class", "loc-control-btn").text("Add City").on("click", addCity);
 
+        // --- User Input Box (Bottom Left) ---
+        const userInputBox = svg.append("foreignObject")
+            .attr("class", "user-input-box")
+            .attr("x", 15)
+            .attr("y", height - 195) 
+            .attr("width", 220)
+            .attr("height", 180);
+        
+        const userInputDiv = userInputBox.append("xhtml:div"); 
+        userInputDiv.append("h4").text("Cost Inputs");
+
+        const ppiGroup = userInputDiv.append("div").attr("class", "user-input-row");
+        ppiGroup.append("label").attr("for", "loc-ppi-input").text("Producer Price Index");
+        ppiGroup.append("input").attr("type", "number").attr("id", "loc-ppi-input").attr("value", PPI);
+
+        const holdingGroup = userInputDiv.append("div").attr("class", "user-input-row");
+        holdingGroup.append("label").attr("for", "loc-holding-cost-input").text("Annual Holding Cost (%)");
+        holdingGroup.append("input").attr("type", "number").attr("id", "loc-holding-cost-input").attr("value", 25); 
+
+        const buttonGroup = userInputDiv.append("div").attr("class", "user-input-buttons");
+        buttonGroup.append("button").attr("class", "loc-control-btn").attr("id", "show-ppi-chart-btn").text("What is my PPI?");
+        buttonGroup.append("button").attr("class", "loc-control-btn").attr("id", "show-holding-info-btn").text("What is Holding Cost?");
+
+
+        // --- Demand Box (Bottom Right) ---
         const demandBox = svg.append("foreignObject")
-            .attr("class", "demand-capacity-box")
-            .attr("x", 15).attr("y", height - 180)
+            .attr("class", "demand-capacity-box") 
+            .attr("x", width - 235) 
+            .attr("y", height - 180) 
             .attr("width", 220).attr("height", 165);
+
         const demandDiv = demandBox.append("xhtml:div");
         demandDiv.append("h4").text("Annual Demand");
         demandDiv.append("div").attr("class", "demand-row").html(`<span>P10 (Low):</span><span id="demand-p10">0</span>`);
@@ -252,9 +511,11 @@ const LocationTab = (() => {
         demandDiv.append("div").attr("class", "demand-bar-container")
             .append("div").attr("class", "demand-bar").attr("id", "demand-bar-fill").text("0%");
 
+        // --- Summary Panel (Top Right) ---
         const summaryPanel = svg.append("foreignObject").attr("class", "summary-panel")
             .attr("x", width - 235).attr("y", 15)
             .attr("width", 220).attr("height", 165);
+            
         const summaryDiv = summaryPanel.append("xhtml:div");
         const switchGroup = summaryDiv.append("div").attr("class", "inv-button-group");
         switchGroup.append("button").attr("id", "loc-new-btn").text("New");
@@ -263,8 +524,26 @@ const LocationTab = (() => {
         summaryDiv.append("div").attr("class", "demand-row").html(`<span><strong>Location:</strong></span><span id="summary-location">N/A</span>`);
         summaryDiv.append("div").attr("class", "demand-row").html(`<span><strong>Annual Cost:</strong></span><span id="summary-cost">$0</span>`);
         summaryDiv.append("div").attr("class", "demand-row").html(`<span><strong>Shipments:</strong></span><span id="summary-shipments">0</span>`);
-        summaryDiv.append("div").attr("class", "demand-row").html(`<span><strong>Avg Cost/Unit:</strong></span><span id="summary-avg-cost">$0.00</span>`);
+        summaryDiv.append("div").attr("class","demand-row").html(`<span><strong>Avg Cost/Unit:</strong></span><span id="summary-avg-cost">$0.00</span>`);
 
+        // --- PPI Chart Modal (Hidden) ---
+        const ppiModal = svg.append("foreignObject")
+            .attr("id", "ppi-chart-modal")
+            .attr("x", "50%").attr("y", "50%")
+            .attr("width", 500).attr("height", 350)
+            .style("transform", "translate(-50%, -50%)")
+            .style("display", "none");
+
+        const ppiModalDiv = ppiModal.append("xhtml:div").attr("class", "ppi-modal-content");
+        ppiModalDiv.append("button").attr("class", "close-btn").attr("id", "close-ppi-chart-btn").html("&times;");
+        ppiModalDiv.append("h4").text("Historical PPI: General Freight Trucking (WPU112)"); 
+        ppiModalDiv.append("svg")
+            .attr("id", "ppi-chart-svg")
+            .attr("width", "100%")
+            .attr("height", "280px"); 
+
+
+        // --- Event Listeners ---
         d3.select("#loc-new-btn").on('click', () => {
             if (optimizationMode === 'Existing') {
                 optimizationMode = 'New';
@@ -312,6 +591,30 @@ const LocationTab = (() => {
             }
         });
 
+        d3.select("#loc-ppi-input").on("change", function () {
+            PPI = +this.value; 
+            runOptimization(); 
+        });
+
+        d3.select("#show-ppi-chart-btn").on("click", () => {
+            d3.select("#ppi-chart-modal").style("display", "block");
+            drawPPITrendChart(); 
+        });
+
+        d3.select("#close-ppi-chart-btn").on("click", () => {
+            d3.select("#ppi-chart-modal").style("display", "none");
+            d3.select("#ppi-chart-svg").selectAll("*").remove(); // Clear chart
+            
+            // --- FIX for Lingering Border ---
+            // Selects the modal, then finds the tooltip *inside* it and removes it.
+            d3.select("#ppi-chart-modal").select(".ppi-tooltip").remove(); 
+        });
+
+        d3.select("#show-holding-info-btn").on("click", () => {
+            console.log("Holding Cost info button clicked.");
+        });
+
+
         runOptimization();
         updateDemandCapacityBox();
 
@@ -324,8 +627,8 @@ const LocationTab = (() => {
 
             markers.enter()
                 .append("circle").attr("class", "city-marker").attr("r", 0)
-                .merge(markers) 
-                .on("mouseover", (event, d) => { 
+                .merge(markers)
+                .on("mouseover", (event, d) => {
                     const details = getShipmentDetails(optimalFactoryLocation, d);
                     if (!details) return;
 
@@ -335,7 +638,6 @@ const LocationTab = (() => {
                     const costFormat = { style: 'currency', currency: 'USD', maximumFractionDigits: 0 };
 
                     if (details.remainderChoice === 'LTL') {
-                        // Condition 2: LTL is used. Group FTL and LTL.
                         shipmentDetailsHtml = `
                             <div class="tooltip-row"><span>FTL Trucks/Ship:</span> <span>${details.numFTL}</span></div>
                             <div class="tooltip-row"><span>FTL Cost/Ship:</span> <span>${details.costFTL.toLocaleString('en-US', costFormat)}</span></div>
@@ -344,7 +646,6 @@ const LocationTab = (() => {
                             <div class="tooltip-row"><span>LTL Cost/Ship:</span> <span>${details.costRemainder.toLocaleString('en-US', costFormat)}</span></div>
                         `;
                     } else {
-                        // Condition 1: All FTL (full + partial, or just full)
                         const totalFTL = details.numFTL + (details.remainderChoice === 'FTL' ? 1 : 0);
                         const totalFTLCost = details.costFTL + details.costRemainder;
 
@@ -357,11 +658,11 @@ const LocationTab = (() => {
                     tooltip.style("opacity", 1).html(
                         `<div class="tooltip-header">${d.name} Details</div>
                          <div class="tooltip-row"><span>Est. Road Dist:</span> <span>${details.roadDistance.toFixed(0)} mi</span></div>
-                         <hr>
+transform                  <hr>
                          ${shipmentDetailsHtml}
                          <hr>
                          <div class="tooltip-row"><span>Annual Qty:</span> <span>${Math.round(d.annualDemand).toLocaleString()}</span></div>
-                         <div class="tooltip-row"><span>Annual Cost:</span> <span>${annualCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</span></div>
+              _        <div class="tooltip-row"><span>Annual Cost:</span> <span>${annualCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</span></div>
                          <div class="tooltip-row"><span>Avg Cost/Unit:</span> <span>${avgCostPerUnit.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span></div>`
                     );
 
@@ -395,7 +696,7 @@ const LocationTab = (() => {
                     d3.select("#info-demand").html(`<strong>Demand:</strong> ${Math.round(d.annualDemand).toLocaleString()} Units/Yr`);
                     d3.select("#info-annual-cost").html(`<strong>Annual Cost:</strong> ${calculateTotalCostForCity(optimalFactoryLocation, d).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}`);
                     d3.select("#info-remove-btn").attr("data-city-name", d.name);
-                    infoBox.attr("x", x + 15 + "px").attr("y", y + yShift - 15 + "px").style("display", "block");
+                    infoBox.attr("x", x + 15 + "px").attr("y", y - 15 + "px").style("display", "block");
                 })
                 .transition().duration(500)
                 .attr("r", d => radiusScale(d.annualDemand))
@@ -457,7 +758,7 @@ const LocationTab = (() => {
         let totalShipments = 0;
         let totalAllocatedDemand = 0;
         const cities = Array.from(cityData.values());
-        let locationText = "  N/A"; 
+        let locationText = "  N/A";
 
         if (optimalFactoryLocation && cities.length > 0) {
             totalCost = calculateTotalCost(optimalFactoryLocation, cities);
@@ -613,12 +914,14 @@ const LocationTab = (() => {
         const numFTL = Math.floor(city.qty / TRUCK_CAPACITY_UNITS);
         const remainderUnits = city.qty % TRUCK_CAPACITY_UNITS;
         const remainderTons = (remainderUnits * DEMAND_UNIT_LBS) / 2000;
+        // Use the globally set PPI
         const costFTL = (numFTL * PPI * roadDistance) / 51.35;
         let costRemainder = 0, remainderChoice = "N/A";
 
         if (remainderTons > 0) {
             const ltlCost = calculateLTLCost(roadDistance, remainderTons);
-            const ftlCostForRemainder = (PPI * roadDistance)/51.35;
+            // Use the globally set PPI
+            const ftlCostForRemainder = (PPI * roadDistance) / 51.35;
             costRemainder = Math.min(ltlCost, ftlCostForRemainder);
             remainderChoice = ltlCost < ftlCostForRemainder ? "LTL" : "FTL";
         }
@@ -685,3 +988,4 @@ const LocationTab = (() => {
 
     return { draw };
 })();
+
