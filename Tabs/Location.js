@@ -1,8 +1,9 @@
 const LocationTab = (() => {
     // --- Constants and State ---
     const DEMAND_UNIT_LBS = 410;
-    const TRUCK_CAPACITY_UNITS = 54;
-    const FTL_RATE_PER_MILE = 2.1;
+    const TRUCK_CAPACITY_UNITS = 60;
+
+    let PPI = 170;
 
     const majorCities = {
         "New York, NY": [-74.0060, 40.7128],
@@ -64,7 +65,7 @@ const LocationTab = (() => {
         const q = shipmentWeightTons;
         const d = distance;
         if (q <= 0 || d <= 0) return 0;
-        const numerator = 43.78 * q * d;
+        const numerator = (PPI * q * d) / 5.14;
         const denominator = (q ** (1 / 7) * d ** (15 / 29)) - 3.5;
         if (denominator <= 0) return Infinity;
         return numerator / denominator;
@@ -612,12 +613,12 @@ const LocationTab = (() => {
         const numFTL = Math.floor(city.qty / TRUCK_CAPACITY_UNITS);
         const remainderUnits = city.qty % TRUCK_CAPACITY_UNITS;
         const remainderTons = (remainderUnits * DEMAND_UNIT_LBS) / 2000;
-        const costFTL = numFTL * FTL_RATE_PER_MILE * roadDistance;
+        const costFTL = (numFTL * PPI * roadDistance) / 51.35;
         let costRemainder = 0, remainderChoice = "N/A";
 
         if (remainderTons > 0) {
             const ltlCost = calculateLTLCost(roadDistance, remainderTons);
-            const ftlCostForRemainder = FTL_RATE_PER_MILE * roadDistance;
+            const ftlCostForRemainder = (PPI * roadDistance)/51.35;
             costRemainder = Math.min(ltlCost, ftlCostForRemainder);
             remainderChoice = ltlCost < ftlCostForRemainder ? "LTL" : "FTL";
         }
