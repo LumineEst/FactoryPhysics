@@ -33,6 +33,34 @@ const WORKSTATION_CAPACITIES = [
     { ws: 12, maxDemand: 501 }, { ws: 13, maxDemand: 552 }
 ];
 
+const majorCities = {
+    "New York, NY": [-74.0060, 40.7128],
+    "Los Angeles, CA": [-118.2437, 34.0522],
+    "Chicago, IL": [-87.6298, 41.8781],
+    "Houston, TX": [-95.3698, 29.7604],
+    "Phoenix, AZ": [-112.0740, 33.4484],
+    "Philadelphia, PA": [-75.1652, 39.9526],
+    "San Antonio, TX": [-98.4936, 29.4241],
+    "San Diego, CA": [-117.1611, 32.7157],
+    "Dallas, TX": [-96.7970, 32.7767],
+    "Columbus, OH": [-82.9988, 39.9612],
+    "Charlotte, NC": [-80.8431, 35.2271],
+    "Indianapolis, IN": [-86.1581, 39.7684],
+    "Jacksonville, FL": [-81.6557, 30.3322],
+    "San Francisco, CA": [-122.4194, 37.7749],
+    "Seattle, WA": [-122.3321, 47.6062],
+    "Denver, CO": [-104.9903, 39.7392],
+    "Washington, D.C.": [-77.0369, 38.9072],
+    "Boston, MA": [-71.0589, 42.3601],
+    "Detroit, MI": [-83.0458, 42.3314],
+    "Memphis, TN": [-90.0490, 35.1495],
+    "Salt Lake City, UT": [-111.8910, 40.7608],
+    "Las Vegas, NV": [-115.1398, 36.1699],
+    "St. Louis, MO": [-90.1994, 38.6270],
+    "Miami, FL": [-80.1918, 25.7617],
+    "Atlanta, GA": [-84.3880, 33.7490]
+};
+
 const root = document.documentElement;
 const PERT_PIE_STROKE = getComputedStyle(root).getPropertyValue('--white').trim();
 const PERT_PIE_COLORS = {
