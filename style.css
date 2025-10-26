@@ -1463,6 +1463,12 @@ input:checked+.slider:before {
     border-radius: 4px;
 }
 
+#location-panel .location-controls .loc-control-btn:hover {
+    background-color: var(--secondary1);
+    /* Optional: Change hover color */
+    border-color: var(--secondary1);
+}
+
 /* --- 1. Main Ribbon Container --- */
 .bottom-ribbon-bar {
     /* This is the foreignObject */
@@ -1899,7 +1905,6 @@ input:checked+.slider:before {
     text-anchor: middle;
 }
 
-
 #holding-cost-summary {
     font-size: 0.9em;
     padding: 5px 10px;
@@ -2017,4 +2022,72 @@ input:checked+.slider:before {
     overflow: hidden;
     display: flex;
     flex-direction: column;
+}
+
+.drag-indicator {
+    stroke: var(--failure-color, #FF00FF);
+    /* Or choose another distinct color */
+    stroke-width: 2px;
+    stroke-dasharray: 4, 4;
+    pointer-events: none;
+    /* Make sure it doesn't interfere with mouse events */
+}
+
+/* Optional: Add style for grab cursor during drag */
+.grabbing {
+    cursor: grabbing !important;
+}
+
+/* Style for the new Remove All button */
+#location-panel .location-controls .remove-all-btn {
+    background-color: var(--secondary2);
+    /* Use secondary color */
+    border-color: var(--secondary2);
+}
+
+#location-panel .location-controls .remove-all-btn:hover {
+    background-color: var(--secondary1);
+    /* Optional: Change hover color */
+    border-color: var(--secondary1);
+}
+
+/* Align text in Annual Demand and Summary Panel rows */
+#location-panel .ribbon-demand-panel .demand-row,
+#location-panel .summary-panel .summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2px;
+    padding: 1px 0;
+}
+
+/* Style for the Total Cost row in summary */
+#location-panel .summary-panel .summary-row.summary-total {
+    font-weight: bold;
+    border-top: 1px solid var(--border-color, #ccc);
+    margin-top: 2px;
+    padding-top: 2px;
+}
+
+/* Ensure spans within the rows behave correctly */
+#location-panel .ribbon-demand-panel .demand-row span:first-child,
+#location-panel .summary-panel .summary-row span:first-child {
+    text-align: left;
+    padding-right: 5px;
+    color: var(--accent);
+    font-weight: normal;
+}
+
+#location-panel .ribbon-demand-panel .demand-row span:last-child,
+#location-panel .summary-panel .summary-row span:last-child {
+    text-align: right;
+    font-weight: bold;
+}
+
+#location-panel .demand-capacity-box .demand-row span:first-child {
+    font-weight: normal;
+}
+
+#location-panel .summary-panel .summary-row span:first-child {
+    font-weight: 500;
 }
