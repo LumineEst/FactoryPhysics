@@ -38,7 +38,7 @@ const LocationTab = (() => {
         // --- Constants ---
         ribbonHeaderHeight: 30,
         ribbonContentHeight: 250,
-        topPanelMargin: 15,
+        topPanelMargin: 5,
         modalWidth: 500,
         modalHeight: 350,
         controlsHeight: 100, // Fixed height for controls bar
@@ -79,14 +79,15 @@ const LocationTab = (() => {
         },
 
         getSummaryRect() {
-            const gap = 10;
+            const gap = 5;
             const x = this.svgWidth * 0.6 + gap;
             const width = this.svgWidth * 0.2 - gap;
+            const height = this.controlsHeight * 2;
             return {
                 x: x,
                 y: this.topPanelMargin,
                 width: Math.max(50, width),
-                height: this.controlsHeight * 2.5
+                height: height
             };
         },
 
@@ -148,7 +149,6 @@ const LocationTab = (() => {
 
 
     // --- toggleBottomRibbon ---
-    // (Unchanged from previous version - uses 310ms timeout)
     function toggleBottomRibbon() {
         isBottomRibbonOpen = !isBottomRibbonOpen;
         console.log(`Toggling ribbon. New state: ${isBottomRibbonOpen ? 'Open' : 'Closed'}`);
@@ -332,7 +332,6 @@ const LocationTab = (() => {
         }
     }
 
-    // --- *** MODIFIED: drawHoldingCostChart *** ---
     function drawHoldingCostChart() {
         const svg = d3.select("#holding-cost-chart-svg");
         svg.selectAll("*").remove();
