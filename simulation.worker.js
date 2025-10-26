@@ -1,9 +1,3 @@
-
-// --- simulation.worker.js ---
-
-// --- Globals & Solver Initialization ---
-
-// Flag and error storage for HiGHS script loading
 let highsScriptLoaded = false;
 let highsScriptError = null;
 let highsLoaderFunction = null; // Stores the function to initialize HiGHS
@@ -47,7 +41,9 @@ try {
 }
 
 // --- Constants ---
-const MAX_START_DAY_OPTIONS = 11; // Max start days to consider per city in solver if freq is high
+const HIGH_FREQUENCY_THRESHOLD = 11; // Frequencies above this use the heuristic
+const HEURISTIC_CANDIDATE_COUNT = 7; // Number of best candidates to pass to MILP for high freq
+const SCORE_DOW_WEIGHT = 0.1; // Weight for day-of-week variance in heuristic score
 
 // --- Async Solver Loader ---
 /**
@@ -90,17 +86,70 @@ async function getSolverInstance() {
     return highsInstancePromise;
 }
 
+// --- Heuristic Scoring Helper ---
+/**
+ * Calculates a score for a potential start day based on potential clashes and day-of-week distribution.
+ * Lower scores are better (fewer clashes, more even distribution).
+ * @param {number} startDay - The candidate start day (1-based).
+ * @param {number} frequency - The frequency of the city being scored.
+ * @param {number} quantity - The quantity shipped by the city being scored.
+ * @param {Array<object>} allCities - The full list of cities for clash checking.
+ * @param {number} cityIndexToScore - The index of the city being scored in allCities.
+ * @returns {number} The calculated score.
+ */
+function scoreCandidateStartDay(startDay, frequency, quantity, allCities, cityIndexToScore) {
+    let clashScore = 0;
+    const dowCounts = [0, 0, 0, 0, 0, 0, 0]; // Counts for Sunday (0) to Saturday (6)
+
+    for (let k = 0; ; k++) {
+        const shipDay_0idx = (startDay - 1) + k * frequency;
+        if (shipDay_0idx >= 365) break;
+
+        // --- Day of Week Calculation ---
+        const dayOfWeek = shipDay_0idx % 7; // Simple modulo for relative day of week
+        dowCounts[dayOfWeek]++;
+
+        // --- Clash Calculation ---
+        // Check against all *other* cities, assuming they start on day 1 (or forced day)
+        for (let otherCityIdx = 0; otherCityIdx < allCities.length; otherCityIdx++) {
+            if (otherCityIdx === cityIndexToScore) continue; // Don't check against self
+
+            const otherCity = allCities[otherCityIdx];
+            const otherFreq = Math.max(1, Math.round(otherCity.freq));
+            const otherStart_0idx = (otherCity.chosenStartDay > 0 ? otherCity.chosenStartDay : 1) - 1;
+
+            if (shipDay_0idx >= otherStart_0idx && (shipDay_0idx - otherStart_0idx) % otherFreq === 0) {
+                clashScore += otherCity.qty; // Add the quantity of the clashing shipment
+            }
+        }
+    }
+
+    // --- Calculate Day-of-Week Variance ---
+    const totalShipments = dowCounts.reduce((a, b) => a + b, 0);
+    const meanDowCount = totalShipments / 7;
+    const dowVariance = dowCounts.reduce((sumSqDiff, count) => sumSqDiff + Math.pow(count - meanDowCount, 2), 0) / 7;
+
+    // --- Combine Scores ---
+    // Lower clash score is better, lower variance is better.
+    // Weighting can be adjusted.
+    const totalScore = clashScore + (dowVariance * quantity * SCORE_DOW_WEIGHT); // Scale variance by quantity
+
+    return totalScore;
+}
+
+
 // --- Async MILP Helper Function ---
 /**
  * Generates and solves a Mixed Integer Linear Program (MILP) to find an optimal
  * shipment start day schedule for cities, minimizing the peak daily shipment load.
  * Populates the `scheduleData` array with the resulting schedule.
+ * Uses a heuristic to select candidate start days for high-frequency shipments.
  * @param {Array<object>} cities - Array of city objects { name, qty, freq, chosenStartDay? }.
  * @param {Array<object>} scheduleData - Array representing 365 days, to be populated with schedule.
  * @returns {Promise<object>} A promise resolving to { status, peakDemand, dailyData: scheduleData } or an error status.
  */
 async function findOptimalShipmentSchedule(cities, scheduleData) {
-    console.log("WORKER: Entered findOptimalShipmentSchedule.");
+    console.log("WORKER: Entered findOptimalShipmentSchedule (with Heuristic).");
     let solverInstance;
 
     // Get the solver instance
@@ -108,7 +157,7 @@ async function findOptimalShipmentSchedule(cities, scheduleData) {
         solverInstance = await getSolverInstance();
     } catch (error) {
         console.error("WORKER: Solver failed load/init in findOptimalShipmentSchedule", error);
-        // Fallback: Provide a basic schedule if solver fails
+        // Fallback: Provide a basic schedule if solver fails (remains unchanged)
         const safeScheduleData = scheduleData || Array.from({ length: 365 }, () => ({ shipments: 0, shipmentDetails: [] }));
         safeScheduleData.forEach(d => { if (d) { d.shipments = 0; d.shipmentDetails = []; } });
         if (Array.isArray(cities)) {
@@ -122,7 +171,6 @@ async function findOptimalShipmentSchedule(cities, scheduleData) {
                 }
             });
         }
-        // Return structure consistent with success/failure cases
         return { status: 'error_loading_solver', peakDemand: -1, dailyData: safeScheduleData, message: `Solver init error: ${error.message}` };
     }
 
@@ -134,7 +182,7 @@ async function findOptimalShipmentSchedule(cities, scheduleData) {
     let objectiveParts = ["1 Z"]; // Minimize Z
 
     try {
-        console.log("WORKER: Starting LP string generation...");
+        console.log("WORKER: Starting LP string generation with Heuristic...");
         lpString += "Minimize\n obj: " + objectiveParts.join(' + ') + "\n";
         lpString += "Subject To\n";
 
@@ -148,11 +196,34 @@ async function findOptimalShipmentSchedule(cities, scheduleData) {
                 lpString += ` city_${cityIndex}_forced: 1 ${varName} = 1\n`;
             } else { // Solver chooses start day
                 const freq = Math.max(1, Math.round(city.freq));
-                const k = Math.min(freq, MAX_START_DAY_OPTIONS);
-                const possibleStartDays = [];
-                if (k === freq) { for (let d = 1; d <= freq; d++) possibleStartDays.push(d); }
-                else { for (let i = 0; i < k; i++) possibleStartDays.push(Math.floor(i * freq / k) + 1); }
+                let possibleStartDays = [];
 
+                if (freq <= HIGH_FREQUENCY_THRESHOLD) {
+                    // Low frequency: consider all possible start days
+                    for (let d = 1; d <= freq; d++) possibleStartDays.push(d);
+                    console.log(`WORKER: City ${cityIndex} (freq ${freq}): Using all ${possibleStartDays.length} start days.`);
+                } else {
+                    // High frequency: Use the heuristic
+                    console.log(`WORKER: City ${cityIndex} (freq ${freq}): Applying heuristic...`);
+                    const initialCandidates = [];
+                    // 1. Generate evenly spaced candidates
+                    for (let i = 0; i < HIGH_FREQUENCY_THRESHOLD; i++) {
+                        initialCandidates.push(Math.floor(i * freq / HIGH_FREQUENCY_THRESHOLD) + 1);
+                    }
+
+                    // 2. Score candidates
+                    const scoredCandidates = initialCandidates.map(startDay => ({
+                        startDay: startDay,
+                        score: scoreCandidateStartDay(startDay, freq, city.qty, cities, cityIndex)
+                    }));
+
+                    // 3. Select best N candidates
+                    scoredCandidates.sort((a, b) => a.score - b.score); // Sort by score ascending (lower is better)
+                    possibleStartDays = scoredCandidates.slice(0, HEURISTIC_CANDIDATE_COUNT).map(c => c.startDay);
+                    console.log(`WORKER: City ${cityIndex} selected candidates: [${possibleStartDays.join(', ')}] (Scores: ${scoredCandidates.slice(0, HEURISTIC_CANDIDATE_COUNT).map(c => c.score.toFixed(1)).join(', ')})`);
+                }
+
+                // Add constraints and variables for the chosen possible start days
                 const constraintName = `city_${cityIndex}_start`;
                 let cityConstraintParts = [];
                 possibleStartDays.forEach((d) => {
@@ -164,12 +235,12 @@ async function findOptimalShipmentSchedule(cities, scheduleData) {
                 if (cityConstraintParts.length > 0) {
                     lpString += ` ${constraintName}: ${cityConstraintParts.join(' + ')} = 1\n`;
                 } else {
-                    console.warn(`WORKER: City ${cityIndex} generated no solver variables.`);
+                    console.warn(`WORKER: City ${cityIndex} generated no solver variables (Freq: ${freq}).`);
                 }
             }
         });
 
-        // Constraints for each day: Daily load <= Z
+        // Constraints for each day: Daily load <= Z (Unchanged)
         for (let t = 0; t < 365; t++) { // t is 0-indexed day
             const constraintName = `day_${t}_load`;
             let dayConstraintParts = [];
@@ -184,12 +255,12 @@ async function findOptimalShipmentSchedule(cities, scheduleData) {
             }
         }
 
-        // Variable Types
+        // Variable Types (Unchanged)
         lpString += "Bounds\n";
         lpString += "General\n";
         lpString += ` ${generalVars.join(' ')}\n`;
         lpString += "Binary\n";
-        lpString += ` ${binaryVars.join(' ')}\n`; // Ensure space even if empty? Check HiGHS docs.
+        lpString += ` ${binaryVars.join(' ')}\n`;
         lpString += "End\n";
 
         console.log("WORKER: LP string generation complete.");
@@ -204,7 +275,7 @@ async function findOptimalShipmentSchedule(cities, scheduleData) {
     try {
         const result = await solverInstance.solve(lpString);
 
-        // --- Parse Results ---
+        // --- Parse Results --- (Unchanged from previous version)
         const rawStatus = result?.Status ?? 'Unknown';
         const statusString = typeof rawStatus === 'string' ? rawStatus.trim() : 'Unknown';
         const isOptimalOrFeasible = statusString === 'Optimal' || statusString === 'Feasible';
@@ -239,7 +310,7 @@ async function findOptimalShipmentSchedule(cities, scheduleData) {
             return { status: 'solver_result_error', peakDemand: -1, dailyData: scheduleData, message: 'Solver result Columns object missing/invalid.' };
         }
 
-        // --- Apply Schedule to scheduleData ---
+        // --- Apply Schedule to scheduleData --- (Unchanged from previous version)
         let assignmentsMade = 0;
         try {
             cityVarMap.forEach((v, varName) => {
@@ -293,7 +364,7 @@ async function performSimulation(params) {
     let functionStep = "1. Deconstruct Params"; // Track current step
 
     try {
-        // --- 1. Deconstruct params ---
+        // --- 1. Deconstruct params --- (Unchanged)
         console.log(`WORKER: ${functionStep}...`);
         const {
             cities, workingDaysSchedule, standardOpHours, numEmployees, laborCost,
@@ -311,7 +382,7 @@ async function performSimulation(params) {
         const productionPerStdHour = standardDailyProduction / standardOpHours;
         console.log(`WORKER: ${functionStep} complete.`);
 
-        // --- 2. Initialize Data Array (Single array approach) ---
+        // --- 2. Initialize Data Array (Single array approach) --- (Unchanged)
         functionStep = "2. Initialize dailyData";
         console.log(`WORKER: ${functionStep}...`);
         dailyData = Array.from({ length: 365 }, (_, i) => {
@@ -335,7 +406,7 @@ async function performSimulation(params) {
 
         let simulationError = null; // For critical errors during simulation loop
 
-        // --- 3. Run Optimizer / Heuristic (Populates dailyData.shipments/Details) ---
+        // --- 3. Run Optimizer / Heuristic (Populates dailyData.shipments/Details) --- (Unchanged)
         functionStep = "3. Run Optimizer/Heuristic";
         console.log(`WORKER: ${functionStep}...`);
         if (cities && cities.length > 0) {
@@ -371,7 +442,7 @@ async function performSimulation(params) {
         }
         console.log(`WORKER: ${functionStep} complete.`);
 
-        // --- 4. Run Simulation Loop with First-Week Delay ---
+        // --- 4. Run Simulation Loop with First-Week Delay --- (Unchanged)
         functionStep = "4. Simulation Loop";
         console.log(`WORKER: ${functionStep} starting...`);
         let accumulatedExtraHours = 0;
@@ -549,7 +620,7 @@ async function performSimulation(params) {
         else { console.log("WORKER: Finished 365-day sim loop successfully."); }
 
 
-        // --- 7. Offsetting Logic (Operates on dailyData) ---
+        // --- 7. Offsetting Logic (Operates on dailyData) --- (Unchanged)
         functionStep = "7. Offsetting Logic";
         console.log(`WORKER: ${functionStep} starting...`);
         // ... (Offsetting logic remains unchanged) ...
@@ -557,7 +628,7 @@ async function performSimulation(params) {
         console.log(`WORKER: ${functionStep} complete.`);
 
 
-        // --- 8. Return Results ---
+        // --- 8. Return Results --- (Unchanged)
         functionStep = "8. Return Results";
         console.log(`WORKER: ${functionStep}...`);
         const simEndTime = performance.now();
@@ -579,7 +650,7 @@ async function performSimulation(params) {
 }
 
 
-// --- Web Worker Event Listener ---
+// --- Web Worker Event Listener --- (Unchanged)
 self.onmessage = async (e) => {
     const { type, payload } = e.data;
     console.log("WORKER: Received message:", type);
@@ -608,7 +679,7 @@ self.onmessage = async (e) => {
     }
 };
 
-// --- Global Error Handler ---
+// --- Global Error Handler --- (Unchanged)
 self.onerror = function (event) {
     console.error("WORKER: Uncaught global error:", event.message, event);
     self.postMessage({ type: 'error', message: `Uncaught worker error: ${event.message}` });
