@@ -62,7 +62,7 @@
         </li>
         <li>
             <strong>Investment Factors:</strong> Many other variables must be accounted for to determine the long-term
-            value of the assembly line, these are self-contained within the investment tab.
+            value of the assembly line, these are self-contained within the investment and Location tabs.
         </li>
     </ul>
 </section>
@@ -105,7 +105,8 @@
         </li>
         <li>
             <strong>Location</strong> – A logistics and location planning tool to determine the optimal location in the
-            United States to minimize shipping costs between the new Factory and Existing Distribution Hubs.
+            United States to minimize shipping costs between the new Factory and Existing Distribution Hubs. Optimize
+            your Shipment allocations to balance meeting Demands and minimizing Inventory Holding Costs.
         </li>
     </ul>
 </section>
@@ -113,25 +114,36 @@
 <section class="overview-section">
     <h3>Key Principles & Terms</h3>
     <p>
-        These core manufacturing metrics are calculated in real-time to diagnose the health of your assembly line design:
+        These core manufacturing metrics are calculated in real-time to diagnose the health of your assembly line
+        design:
     </p>
     <ul>
         <li>
-            <strong data-tooltip="The required pace of production to meet customer demand. Calculated from Daily Demand and Operating Hours.">Takt Time</strong> – The "heartbeat" of the factory. It's the pace your line *must* maintain to meet
+            <strong
+                data-tooltip="The required pace of production to meet customer demand. Calculated from Daily Demand and Operating Hours.">Takt
+                Time</strong> – The "heartbeat" of the factory. It's the pace your line *must* maintain to meet
             customer demand, calculated from your Daily Demand and Operating Hours.
         </li>
         <li>
-            <strong data-tooltip="The actual time it takes for one unit to be completed at the slowest workstation. This determines your line's true output.">Cycle Time</strong> – The actual speed of your line, determining your total Throughput. It is
-            determined by the total labor time of the slowest workstation, which is the line's <strong data-tooltip="The single process or workstation that limits the overall output of the entire system.">bottleneck</strong>. To meet
+            <strong
+                data-tooltip="The actual time it takes for one unit to be completed at the slowest workstation. This determines your line's true output.">Cycle
+                Time</strong> – The actual speed of your line, determining your total Throughput. It is
+            determined by the total labor time of the slowest workstation, which is the line's <strong
+                data-tooltip="The single process or workstation that limits the overall output of the entire system.">bottleneck</strong>.
+            To meet
             demand, your Cycle Time must be less than or equal to Takt Time.
         </li>
         <li>
-            <strong data-tooltip="Unproductive time within a workstation where an operator is waiting for the next unit because their assigned tasks are finished.">Idle Time</strong> – Unproductive time within a workstation's cycle. It represents paid time where
+            <strong
+                data-tooltip="Unproductive time within a workstation where an operator is waiting for the next unit because their assigned tasks are finished.">Idle
+                Time</strong> – Unproductive time within a workstation's cycle. It represents paid time where
             an operator is waiting for the next unit because their assigned tasks are completed faster than the
             bottleneck station. This directly reduces the profitability of your line.
         </li>
         <li>
-            <strong data-tooltip="A percentage that quantifies the total inefficiency from an unequal workload distribution across all workstations.">Balance Loss</strong> – A percentage that quantifies the total inefficiency of the line. It
+            <strong
+                data-tooltip="A percentage that quantifies the total inefficiency from an unequal workload distribution across all workstations.">Balance
+                Loss</strong> – A percentage that quantifies the total inefficiency of the line. It
             aggregates the idle time across all workstations, measuring the waste from an imperfect workload balance. A
             lower score is better. Poor Balance causes Idle time and employee dissatistfaction
         </li>
@@ -150,13 +162,19 @@
             the beginning and end of their workstations, as well as to improve communication within the team, the use of
             U-Shaped workstations is preferrable in laying out the assembly line's configuration.
         </li>
+        <li>
+            <strong>WIP & Held Inventory</strong> – Holding Inventory in your factory ties up capital which could be
+            better invested, carries administrative costs like taxes and insurance, requires excess storage and
+            handling, as well as deterioration, shrinkage, and obsolescence risks.
+        </li>
     </ul>
 </section>
 
 <section class="overview-section">
     <h3>Optimization Tips</h3>
     <p>
-        A successful configuration achieves a smooth production flow by minimizing idle time and eliminating bottlenecks,
+        A successful configuration achieves a smooth production flow by minimizing idle time and eliminating
+        bottlenecks,
         all while strictly adhering to the required precedence constraints and meeting customer demand.
     </p>
     <div class="tips-list">
@@ -236,7 +254,8 @@
         <div class="step-item">
             <span class="step-number">5</span>
             <div class="step-content">
-                <strong>Understand Your Customers</strong> – Adjust your Pricing, Location, & Shipping Strategy to ensure 
+                <strong>Understand Your Customers</strong> – Adjust your Pricing, Location, & Shipping Strategy to
+                ensure
                 Profitability while meeting Demand
             </div>
         </div>
@@ -247,6 +266,8 @@
 
 <section class="overview-section overview-intro">
     <h3>Technical Documentation</h3>
-    <p>For a detailed breakdown of the mathematical formulas and algorithms powering this simulation, including calculations for Takt Time, financial metrics, and optimization models, please see the full technical documentation.</p>
+    <p>For a detailed breakdown of the mathematical formulas and algorithms powering this simulation, including
+        calculations for Takt Time, financial metrics, and optimization models, please see the full technical
+        documentation.</p>
     <a href="Pages/backend.html" class="tech-doc-link" target="_blank">View Backend Mechanics</a>
 </section>
