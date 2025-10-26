@@ -1376,8 +1376,7 @@ input:checked+.slider:before {
 }
 
 #location-panel .summary-panel {
-    position: absolute;
-    top: 15px;
+    top: 5px;
     right: 15px;
     width: 220px;
     background-color: rgba(255, 255, 255, 0.9);
