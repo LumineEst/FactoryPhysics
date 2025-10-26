@@ -1297,6 +1297,10 @@ input:checked+.slider:before {
     opacity: 0.3;
 }
 
+#location-panel .connection-line {
+    stroke: var(--secondary1);
+}
+
 #location-panel .arrowhead {
     fill: var(--secondary1);
 }
@@ -1307,7 +1311,10 @@ input:checked+.slider:before {
     gap: 15px;
     background-color: rgba(255, 255, 255, 0.9);
     padding: 10px;
-    border-radius: 8px;
+    width: 100%;
+    height: 100%;
+    flex-wrap: nowrap;
+    border-radius: 10px;
     box-shadow: var(--shadow);
     border: 1px solid var(--idle-color);
 }
@@ -1332,13 +1339,16 @@ input:checked+.slider:before {
 
 #location-panel .location-controls input[type="number"] {
     width: 80px;
-    /* Makes the number inputs smaller */
 }
 
 #location-panel .location-controls .unit-label {
     font-size: 0.85rem;
     color: #555;
     white-space: nowrap;
+}
+
+#location-panel .city-info-box {
+    display: none;
 }
 
 #location-panel .city-info-box div {
@@ -1379,14 +1389,14 @@ input:checked+.slider:before {
     width: 100%;
     height: 100%;
     background-color: rgba(255, 255, 255, 0.9);
-    padding: 3px 6px;
+    padding: 0px 10px;
     border-radius: 6px;
     box-shadow: var(--shadow);
     border: 1px solid var(--idle-color);
     font-size: 0.9rem;
     justify-content: space-between;
     display: flex;
-    gap: 1px;
+    gap: 5px;
     flex-direction: column;
 }
 
@@ -1402,13 +1412,13 @@ input:checked+.slider:before {
     width: 100%;
     border-radius: 6px;
     overflow: hidden;
-    margin-top: 10px;
+    margin-top: 0px;
     display: flex;
 }
 
 #location-panel .summary-panel .inv-button-group button {
     flex-grow: 1;
-    padding: 6px;
+    padding: 10px;
     font-weight: bold;
     border: 1px solid #ccc;
     background-color: #f0f0f0;
@@ -1416,6 +1426,7 @@ input:checked+.slider:before {
     cursor: pointer;
     transition: background-color 0.2s;
     font-size: 0.8rem;
+    align-self: center;
 }
 
 #location-panel .summary-panel .inv-button-group button.active {
@@ -1428,7 +1439,21 @@ input:checked+.slider:before {
     background-color: #e0e0e0;
 }
 
-#location-panel .location-controls select,
+#location-panel .location-controls select {
+    width: 100%;
+}
+
+#location-panel .location-controls .input-group:first-child {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 150px;
+}
+
+#location-panel .location-controls .input-group:not(:first-child)
+#location-panel .location-controls .loc-control-btn {
+    flex-shrink: 0;
+}
+
 #location-panel .location-controls input[type="number"] {
     padding: 6px 8px;
     font-size: 0.85rem;
@@ -1469,6 +1494,7 @@ input:checked+.slider:before {
     border-top: 1px solid var(--border-color, #444);
     background-color: var(--white);
     box-shadow: var(--shadow);
+    overflow: hidden;
 }
 
 .bottom-ribbon-container {
@@ -1503,7 +1529,6 @@ input:checked+.slider:before {
 
 .bottom-ribbon-header-title strong {
     color: var(--accent-color);
-    /* Uses --secondary1 */
     font-weight: bold;
 }
 
@@ -1514,7 +1539,7 @@ input:checked+.slider:before {
 
 .bottom-ribbon-content {
     flex-grow: 1;
-    display: flex;
+    display: none;
     flex-direction: row;
     justify-content: space-between;
     overflow: hidden;
@@ -1612,27 +1637,6 @@ input:checked+.slider:before {
     padding: 5px;
 }
 
-.ribbon-chart-area #holding-cost-summary {
-    font-size: 0.85em;
-    padding: 5px;
-    border: 1px dashed var(--idle-color);
-    margin-bottom: 5px;
-    background-color: #f8f9fa;
-    flex-shrink: 0;
-}
-
-.ribbon-chart-area #holding-cost-summary .summary-row {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 2px;
-}
-
-.ribbon-chart-area #holding-cost-summary .summary-row.total {
-    margin-top: 4px;
-    padding-top: 4px;
-    border-top: 1px solid var(--idle-color);
-}
-
 #holding-cost-svg-container {
     flex-grow: 1;
     min-height: 100px;
@@ -1640,7 +1644,6 @@ input:checked+.slider:before {
     height: 100%;
 }
 
-/* (Styles re-scoped from old #holding-cost-chart-svg) */
 #holding-cost-chart-svg {
     width: 100%;
     height: 100%;
@@ -1652,6 +1655,10 @@ input:checked+.slider:before {
     font-size: 10px;
     fill: var(--accent);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+#holding-cost-chart-svg .axis .tick text {
+    font-size: 12px;
 }
 
 #holding-cost-chart-svg .axis-label {
@@ -1670,15 +1677,10 @@ input:checked+.slider:before {
     opacity: 0.3;
 }
 
-#holding-cost-chart-svg .holding-cost-bar {
-    fill: var(--primary);
-    opacity: 0.7;
-}
-
 .ribbon-demand-panel {
     width: 220px;
     flex-shrink: 0;
-    padding: 5px;
+    padding: 10px;
     border-radius: 6px;
     box-shadow: var(--shadow);
     border: 1px solid var(--idle-color);
@@ -1688,11 +1690,12 @@ input:checked+.slider:before {
 }
 
 .ribbon-demand-panel h4 {
-    margin: 0 0 8px 0;
+    margin: 0 0 8px 12px;
     padding-bottom: 4px;
     border-bottom: 1px solid #ccc;
     font-size: 1rem;
     text-align: center;
+    color: var(--primary);
 }
 
 .ribbon-demand-panel .demand-row {
@@ -1756,14 +1759,11 @@ input:checked+.slider:before {
     background-color: #e0e0e0;
 }
 
-/* --- NEW: PPI Chart Modal --- */
 #ppi-chart-modal {
-    /* This is the foreignObject, it's positioned by x/y/transform */
     z-index: 1000;
 }
 
 #ppi-chart-modal .ppi-modal-content {
-    /* This is the inner div */
     width: 100%;
     height: 100%;
     background-color: var(--white);
@@ -1804,7 +1804,6 @@ input:checked+.slider:before {
 }
 
 #ppi-chart-svg {
-    /* Style for the SVG container */
     display: block;
     margin: 0 auto;
 }
@@ -1833,10 +1832,6 @@ input:checked+.slider:before {
     stroke-width: 2;
 }
 
-#ppi-chart-svg .ppi-dot {
-    fill: var(--primary);
-}
-
 #ppi-chart-svg .ppi-loading-text {
     font-size: 16px;
     fill: var(--accent);
@@ -1844,30 +1839,26 @@ input:checked+.slider:before {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
-/* FIX for "Black Box": Ensures the line has no fill and a visible stroke */
 #location-panel .ppi-line {
     fill: none;
     stroke: var(--primary);
     stroke-width: 2px;
 }
 
-/* Style for the focus circle on the chart */
+#location-panel .ppi-focus {
+    display: none;
+}
+
 #location-panel .ppi-focus-circle {
     fill: var(--secondary2);
     stroke: var(--white);
     stroke-width: 1.5px;
 }
 
-/* Transparent overlay for mouse events */
 #location-panel .ppi-overlay {
     fill: none;
     pointer-events: all;
     cursor: crosshair;
-}
-
-/* Tooltip specific to the PPI chart */
-#location-panel .ppi-tooltip {
-    position: absolute;
 }
 
 #location-panel .ppi-loading-text {
@@ -1876,153 +1867,59 @@ input:checked+.slider:before {
     text-anchor: middle;
 }
 
-#holding-cost-summary {
-    font-size: 0.9em;
-    padding: 5px 10px;
-    border: 1px dashed var(--idle-color);
-    margin-bottom: 10px;
-    background-color: #f8f9fa;
+.sim-loading-text {
+    color: var(--accent);
+    font-weight: bold;
+    margin: 0;
+    padding: 2px 0;
 }
 
-#holding-cost-summary .summary-row {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 3px;
+.sim-placeholder-text {
+    margin: 0;
+    padding: 2px 0;
 }
 
-#holding-cost-summary .summary-row.total {
-    margin-top: 5px;
-    padding-top: 5px;
-    border-top: 1px solid var(--idle-color);
+.sim-error-text {
+    color: var(--failure-color);
+    font-weight: bold;
 }
 
-#holding-cost-chart-svg {
-    display: block;
-    margin: 0 auto;
-    flex-grow: 1;
+.overlay {
+    fill: none;
+    pointer-events: all;
 }
 
-#holding-cost-chart-svg .axis text,
-#holding-cost-chart-svg .axis-label {
-    font-size: 10px;
-    fill: var(--accent);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-}
-
-#holding-cost-chart-svg .axis-label {
+.chart-error-message {
+    color: var(--failure-color);
+    font-weight: bold;
     font-size: 12px;
-    font-weight: bold;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    padding: 10px;
+    border: 2px solid var(--failure-color);
+    background-color: rgba(255, 200, 200, 0.95);
+    max-height: 100%;
+    overflow-y: auto;
 }
 
-#holding-cost-chart-svg .axis path,
-#holding-cost-chart-svg .axis line {
-    stroke: var(--accent);
-    stroke-width: 1px;
+#shipment-qty {
+    width: 56px;
 }
 
-#holding-cost-chart-svg .holding-cost-area {
-    fill: var(--secondary2);
-    opacity: 0.3;
+#shipment-freq {
+    width: 48px;
 }
 
-#holding-cost-chart-svg .holding-cost-bar {
-    fill: var(--primary);
-    opacity: 0.7;
-}
-
-/* Styles for the new chart switch in the input panel */
-.sim-chart-switch {
-    margin-top: 8px;
-    padding-left: 0;
-    /* Override .inv-button-group if needed */
-}
-
-.sim-chart-switch button {
-    width: 50px;
-    /* Smaller buttons */
-    padding: 4px;
-    font-size: 0.85em;
-    min-width: 0;
-}
-
-/* Styles for the new collapsible bar */
-.collapsible-info-bar {
-    /* This is a foreignObject, styling is on the child */
-    transition: height 0.3s ease-in-out, y 0.3s ease-in-out;
-    background-color: var(--background-panel, #2a2a2a);
-    border-radius: 4px;
-    border: 1px solid var(--border-color, #444);
-}
-
-.collapsible-info-content {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-}
-
-.collapsible-header {
-    padding: 8px 10px;
-    font-size: 0.9em;
-    font-weight: bold;
-    color: var(--accent, #eee);
-    background-color: var(--background-panel-header, #333);
-    cursor: pointer;
-    border-bottom: 1px solid var(--border-color, #444);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.collapsible-header:hover {
-    background-color: #3f3f3f;
-}
-
-.collapsible-header strong {
-    color: var(--primary, #00bfff);
-    font-weight: bold;
-}
-
-.collapsible-header span {
-    font-size: 0.8em;
-    margin-left: auto;
-}
-
-.collapsible-content {
-    padding: 5px;
-    flex-grow: 1;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-}
-
-.drag-indicator {
-    stroke: var(--failure-color, #FF00FF);
-    /* Or choose another distinct color */
-    stroke-width: 2px;
-    stroke-dasharray: 4, 4;
-    pointer-events: none;
-    /* Make sure it doesn't interfere with mouse events */
-}
-
-/* Optional: Add style for grab cursor during drag */
-.grabbing {
-    cursor: grabbing !important;
-}
-
-/* Style for the new Remove All button */
 #location-panel .location-controls .remove-all-btn {
     background-color: var(--secondary2);
-    /* Use secondary color */
     border-color: var(--secondary2);
 }
 
 #location-panel .location-controls .remove-all-btn:hover {
     background-color: var(--secondary1);
-    /* Optional: Change hover color */
     border-color: var(--secondary1);
 }
 
-/* Align text in Annual Demand and Summary Panel rows */
 #location-panel .ribbon-demand-panel .demand-row,
 #location-panel .summary-panel .summary-row {
     display: flex;
@@ -2032,31 +1929,42 @@ input:checked+.slider:before {
     padding: 1px 0;
 }
 
-/* Style for the Total Cost row in summary */
 #location-panel .summary-panel .summary-row.summary-total {
     font-weight: bold;
     border-top: 1px solid var(--border-color, #ccc);
-    margin-top: 2px;
-    padding-top: 2px;
+    margin-top: 1px;
+    padding-top: 1px;
 }
 
-/* Ensure spans within the rows behave correctly */
-#location-panel .ribbon-demand-panel .demand-row span:first-child,
 #location-panel .summary-panel .summary-row span:first-child {
     text-align: left;
     padding-right: 5px;
     color: var(--accent);
-    font-weight: normal;
+    font-weight: 500;
+}
+
+#location-panel .ribbon-demand-panel .summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1px;
+}
+
+#location-panel .ribbon-demand-panel .summary-row span:first-child {
+    text-align: left;
+    padding-right: 5px;
+    color: var(--accent);
+    font-weight: bold;
+}
+
+#location-panel .ribbon-demand-panel .demand-row span:first-child {
+    font-weight: bold;
 }
 
 #location-panel .ribbon-demand-panel .demand-row span:last-child,
 #location-panel .summary-panel .summary-row span:last-child {
     text-align: right;
     font-weight: bold;
-}
-
-#location-panel .demand-capacity-box .demand-row span:first-child {
-    font-weight: normal;
 }
 
 #location-panel .summary-panel .summary-row span:first-child {
