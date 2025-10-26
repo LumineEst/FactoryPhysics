@@ -43,7 +43,6 @@ try {
 
 // --- Constants ---
 const MAX_START_DAY_OPTIONS = 11;
-// const HOLDING_COST_PENALTY_FACTOR = 0.001; // Not used in this version (no cost penalty objective)
 
 // --- Async Solver Loader ---
 async function getSolverInstance() {
@@ -52,9 +51,13 @@ async function getSolverInstance() {
     }
     if (!highsInstancePromise) {
         console.log("WORKER: Initializing HiGHS WASM instance...");
-        const wasmPath = 'libs/'; // Path relative to this worker file where highs.wasm is
+        const wasmPath = 'libs/';
+        const memoryMB = 1024;
+        const initialMemory = memoryMB * 1024 * 1024;
+        console.log('WORKER: Requesting ${memoryMB}MB of memory for HIGHS...');
         highsInstancePromise = highsLoaderFunction({
-            locateFile: (filename) => wasmPath + filename
+            locateFile: (filename) => wasmPath + filename,
+            initialMemory: initialMemory
         }).then(instance => {
             console.log("WORKER: HiGHS WASM instance initialized.");
             if (!instance?.solve) throw new Error("HiGHS instance invalid or missing 'solve'.");
@@ -68,7 +71,7 @@ async function getSolverInstance() {
 }
 
 // --- Async MILP Helper Function (Stores Shipment Details) ---
-async function findOptimalShipmentSchedule(cities, dailyData) { // Removed optimizationMode param
+async function findOptimalShipmentSchedule(cities, dailyData) {
     console.log("WORKER: Entered findOptimalShipmentSchedule.");
     let solverInstance;
     try {
@@ -97,7 +100,7 @@ async function findOptimalShipmentSchedule(cities, dailyData) { // Removed optim
             const freq = Math.max(1, Math.round(city.freq));
             const k = Math.min(freq, MAX_START_DAY_OPTIONS);
             const possibleStartDays = [];
-            // Corrected Heuristic Calculation
+            // Heuristic Calculation for Infrequent shipments
             if (k === freq) { for (let d = 1; d <= freq; d++) possibleStartDays.push(d); }
             else { for (let i = 0; i < k; i++) possibleStartDays.push(Math.floor(i * freq / k) + 1); }
 
@@ -107,7 +110,6 @@ async function findOptimalShipmentSchedule(cities, dailyData) { // Removed optim
                 cityConstraintParts.push(`1 ${varName}`);
                 binaryVars.push(varName);
                 cityVarMap.set(varName, { cityIndex, cityQty: city.qty, startDay: d, freq });
-                // No objective penalty added here
             });
             if (cityConstraintParts.length > 0) lpString += ` ${constraintName}: ${cityConstraintParts.join(' + ')} = 1\n`;
             else console.warn(`WORKER: City ${cityIndex} generated no vars.`);
@@ -119,8 +121,13 @@ async function findOptimalShipmentSchedule(cities, dailyData) { // Removed optim
 
         // Daily load constraints
         for (let t = 0; t < 365; t++) {
-            const constraintName = `day_${t}_load`; let dayConstraintParts = [];
-            cityVarMap.forEach((v, varName) => { if (t >= v.startDay && (t - v.startDay) % v.freq === 0) dayConstraintParts.push(`${v.cityQty} ${varName}`); });
+            const constraintName = `day_${t}_load`;
+            let dayConstraintParts = [];
+            cityVarMap.forEach((v, varName) => {
+                const startDay_0idx = v.startDay - 1;
+                if (t >= v.startDay_0idx && (t - v.startDay_0idx) % v.freq === 0)
+                    dayConstraintParts.push(`${v.cityQty} ${varName}`);
+            });
             if (dayConstraintParts.length > 0) lpString += ` ${constraintName}: ${dayConstraintParts.join(' + ')} - 1 Z <= 0\n`;
         }
         lpString += "Bounds\nGeneral\n"; lpString += ` ${generalVars.join(' ')}\n`;
@@ -128,7 +135,7 @@ async function findOptimalShipmentSchedule(cities, dailyData) { // Removed optim
         lpString += "End\n";
         lpString = fullObjectiveString + lpString; // Prepend objective
         console.log("WORKER: LP string generation complete.");
-        // console.log("WORKER: LP String:\n", lpString); // Keep uncommented if debugging the string itself
+        console.log("WORKER: LP String:\n", lpString); // Keep uncommented if debugging the string itself
 
     } catch (genError) {
         console.error("WORKER: Error during LP String Generation:", genError);
@@ -138,7 +145,7 @@ async function findOptimalShipmentSchedule(cities, dailyData) { // Removed optim
     console.log("WORKER: Attempting to solve MILP with HiGHS instance...");
     try {
         const startTime = performance.now();
-        const result = await solverInstance.solve(lpString); // Await the solve call
+        const result = await solverInstance.solve(lpString);
         const endTime = performance.now();
         console.log(`WORKER: HiGHS Solver finished in ${(endTime - startTime).toFixed(2)} ms.`);
         console.log("WORKER: HiGHS Result Raw:", result);
@@ -163,15 +170,15 @@ async function findOptimalShipmentSchedule(cities, dailyData) { // Removed optim
         // Extract Z value directly as peakDemand
         let peakDemand = -1;
         const columnsData = result.Columns;
-        if (columnsData?.Z?.Primal !== undefined) peakLoadZ = columnsData.Z.Primal;
+        if (columnsData?.Z?.Primal !== undefined) peakDemand = columnsData.Z.Primal;
         else console.warn("WORKER: Could not extract Z value from result.Columns.");
-        console.log(`WORKER: PeakLoadVar(Z)=${peakLoadZ}`);
+        console.log(`WORKER: PeakDemand(Z)=${peakDemand}`);
 
         // Ensure dailyData exists before modification
         (dailyData || []).forEach(d => {
             if (d) {
-                d.shipments = 0; // Reset total
-                d.shipmentDetails = []; // Initialize details array
+                d.shipments = 0;
+                d.shipmentDetails = [];
             }
         });
         console.log("WORKER: Shipments reset in dailyData.");
@@ -205,12 +212,12 @@ async function findOptimalShipmentSchedule(cities, dailyData) { // Removed optim
             console.log(`WORKER: Applied ${assignmentsMade} assignments.`);
         } catch (assignmentError) {
             console.error("WORKER: Error during assignment:", assignmentError);
-            return { status: 'solver_assignment_error', peakDemand: peakLoadZ, dailyData: dailyData, message: `Assign error: ${assignmentError.message}` };
+            return { status: 'solver_assignment_error', peakDemand: peakDemand, dailyData: dailyData, message: `Assign error: ${assignmentError.message}` };
         }
         if (assignmentsMade < (cities?.length || 0)) console.warn(`WORKER: Assignments (${assignmentsMade}) < cities (${cities?.length || 0}).`);
 
         console.log("WORKER: findOptimalShipmentSchedule finished successfully.");
-        return { status: 'optimal', peakDemand: peakLoadZ, dailyData }; // Success return
+        return { status: 'optimal', peakDemand: peakDemand, dailyData };
 
     } catch (error) {
         console.error("WORKER: Error during HiGHS solve execution or result parsing:", error);
@@ -233,6 +240,8 @@ async function performSimulation(params) {
         if (!standardDailyProduction || standardDailyProduction <= 0) throw new Error("Std daily production must be > 0.");
         if (standardOpHours <= 0) throw new Error("Std operating hours must be > 0.");
         const productionPerStdHour = standardDailyProduction / standardOpHours;
+        const initialBuffer = standardDailyProduction * 7; // Buffer of 1-week stock before shipments start
+        console.log(`WORKER: Setting initial buffer to ${initialBuffer} units.`);
 
         // --- 2. Initialize Data Array ---
         dailyData = Array.from({ length: 365 }, (_, i) => { const year = new Date().getFullYear(); const date = new Date(Date.UTC(year, 0, i + 1)); const dayStr = date.toISOString().split('T')[0]; return { day: i, date: dayStr, isWorkingDay: workingDaysSet.has(dayStr), inventoryStart: 0, production: 0, opHours: 0, inventoryAvailable: 0, shipments: 0, shipmentDetails: [], actualShipments: 0, demandMet: true, inventoryEnd: 0, holdingCost: 0, exceptionCost: 0, isExceptionDay: false, isReductionDay: false, exceptionDetails: null }; });
@@ -253,7 +262,7 @@ async function performSimulation(params) {
         console.log(`WORKER: Starting 365-day sim loop...`);
         for (let day = 0; day < 365; day++) {
             if (!dailyData?.[day]) continue;
-            dailyData[day].inventoryStart = (day === 0 || !dailyData[day - 1]) ? 0 : dailyData[day - 1].inventoryEnd;
+            dailyData[day].inventoryStart = (day === 0) ? initialBuffer : (dailyData[day - 1]?.inventoryEnd ?? 0);
             dailyData[day].production = 0; dailyData[day].opHours = 0;
             if (dailyData[day].isWorkingDay && !dailyData[day].isReductionDay && !dailyData[day].isExceptionDay) { dailyData[day].production = standardDailyProduction; dailyData[day].opHours = standardOpHours; }
             dailyData[day].inventoryAvailable = dailyData[day].inventoryStart + dailyData[day].production;
@@ -296,9 +305,33 @@ async function performSimulation(params) {
         // --- 5. Offsetting Logic ---
         if (simulationError === null) {
             let hoursToOffset = accumulatedExtraHours;
+            const finalInventory = dailyData[364]?.inventoryEnd ?? 0;
+            const targetEndInventory = initialBuffer;
+            let productionRemoved = 0;
             if (hoursToOffset > 0.01) {
-                console.log(`WORKER: Offsetting ${hoursToOffset.toFixed(2)} accumulated hours.`); let daysReduced = 0;
-                for (let day = 364; day >= 0 && hoursToOffset > 0.01; day--) { if (!dailyData?.[day]) continue; if (dailyData[day].isWorkingDay && !dailyData[day].isExceptionDay && !dailyData[day].isReductionDay && Math.abs(dailyData[day].opHours - standardOpHours) < 0.01) { const reduction = standardOpHours; dailyData[day].isWorkingDay = false; dailyData[day].isReductionDay = true; dailyData[day].opHours = 0; dailyData[day].production = 0; dailyData[day].exceptionDetails = `Day cancelled (reduced ${reduction.toFixed(2)}h) to offset exceptions.`; hoursToOffset -= reduction; daysReduced++; } }
+                console.log(`WORKER: Offsetting ${hoursToOffset.toFixed(2)} accumulated hours.`);
+                console.log(`WORKER: Current Final Inventory: ${finalInventory.toFixed(9)}. Target: ${targetEndInventory.toFixed(0)}`);
+                let daysReduced = 0;
+                for (let day = 364; day >= 0 && hoursToOffset > 0.01; day--) {
+                    if (!dailyData?.[day]) continue;
+                    if (dailyData[day].isWorkingDay && !dailyData[day].isExceptionDay && !dailyData[day].isReductionDay && Math.abs(dailyData[day].opHours - standardOpHours) < 0.01) {
+                        const whatIfFinalInventory = finalInventory - productionRemoved - standardDailyProduction;
+                        if (whatIfFinalInventory >= targetEndInventory) {
+                            const reduction = standardOpHours;
+                            dailyData[day].isWorkingDay = false;
+                            dailyData[day].isReductionDay = true;
+                            dailyData[day].opHours = 0;
+                            dailyData[day].production = 0;
+                            dailyData[day].exceptionDetails = `Day cancelled (reduced ${reduction.toFixed(2)}h) to offset exceptions.`;
+                            hoursToOffset -= reduction;
+                            productionRemoved += standardDailyProduction; // Track the Removal of a Day
+                            daysReduced++;
+                        } else {
+                            console.log(`WORKER: Stopping Offset to maintain Buffer, Removing day ${day} would drop Inventory to ${whatIfFinalInventory.toFixed(0)}.`)
+                            break;
+                        }
+                    }
+                }
                 console.log(`WORKER: Reduced ${daysReduced} days. Remaining offset: ${hoursToOffset.toFixed(2)}`);
             }
             console.log("WORKER: Sim/offsetting completed successfully."); return { results: dailyData };
