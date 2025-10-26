@@ -1375,54 +1375,6 @@ input:checked+.slider:before {
     pointer-events: none;
 }
 
-#location-panel .demand-capacity-box {
-    width: 220px;
-    background-color: rgba(255, 255, 255, 0.9);
-    padding: 10px;
-    border-radius: 6px;
-    box-shadow: var(--shadow);
-    border: 1px solid var(--idle-color);
-    font-size: 0.9rem;
-}
-
-#location-panel .demand-capacity-box h4 {
-    margin: 0 0 8px 0;
-    padding-bottom: 4px;
-    border-bottom: 1px solid #ccc;
-    font-size: 1rem;
-    text-align: center;
-}
-
-#location-panel .demand-capacity-box .demand-row {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 4px;
-}
-
-#location-panel .demand-capacity-box .demand-row span:first-child {
-    font-weight: bold;
-}
-
-#location-panel .demand-capacity-box .demand-bar-container {
-    width: 100%;
-    height: 20px;
-    background-color: #e9ecef;
-    border-radius: 4px;
-    margin-top: 8px;
-    overflow: hidden;
-}
-
-#location-panel .demand-capacity-box .demand-bar {
-    height: 100%;
-    background-color: var(--primary);
-    width: 0%;
-    transition: width 0.5s ease-in-out;
-    text-align: center;
-    color: white;
-    font-weight: bold;
-    line-height: 20px;
-}
-
 #location-panel .summary-panel {
     position: absolute;
     top: 15px;
@@ -1511,18 +1463,93 @@ input:checked+.slider:before {
     border-radius: 4px;
 }
 
-#location-panel .user-input-box {
-    background-color: rgba(255, 255, 255, 0.9);
+/* --- 1. Main Ribbon Container --- */
+.bottom-ribbon-bar {
+    /* This is the foreignObject */
+    transition: height 0.3s ease-in-out, y 0.3s ease-in-out;
+    border-top: 1px solid var(--border-color, #444);
+    background-color: var(--white);
+    /* Uses page-bg */
+    box-shadow: var(--shadow);
+}
+
+.bottom-ribbon-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    color: var(--text-color);
+    background-color: var(--white);
+    /* Uses page-bg */
+}
+
+/* --- 2. Ribbon Header (Clickable) --- */
+.bottom-ribbon-header {
+    height: 30px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Center the title/arrow */
+    cursor: pointer;
+    background-color: var(--header-bg);
+    /* Uses --accent */
+    color: var(--white);
+    border-bottom: 1px solid var(--border-color, #444);
+    position: relative;
+    /* For centering */
+}
+
+.bottom-ribbon-header:hover {
+    background-color: #4a5a64;
+    /* Darker --accent */
+}
+
+.bottom-ribbon-header-title {
+    font-size: 0.9em;
+    font-weight: bold;
+}
+
+.bottom-ribbon-header-title strong {
+    color: var(--accent-color);
+    /* Uses --secondary1 */
+    font-weight: bold;
+}
+
+.bottom-ribbon-header-arrow {
+    font-size: 0.8em;
+    margin-left: 10px;
+}
+
+/* --- 3. Ribbon Content (Flex Row) --- */
+.bottom-ribbon-content {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    overflow: hidden;
+    padding: 10px;
+    gap: 10px;
+    background-color: var(--page-bg);
+}
+
+/* --- 4. Content Panel: Cost Inputs (Left) --- */
+/* (Styles copied from old .user-input-box) */
+.ribbon-cost-inputs {
+    width: 220px;
+    /* Fixed width */
+    flex-shrink: 0;
     padding: 10px;
     border-radius: 6px;
     box-shadow: var(--shadow);
     border: 1px solid var(--idle-color);
     font-size: 0.9rem;
-
+    height: 100%;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
 }
 
-/* Mimics .demand-capacity-box h4 */
-#location-panel .user-input-box h4 {
+.ribbon-cost-inputs h4 {
     margin: 0 0 8px 0;
     padding-bottom: 4px;
     border-bottom: 1px solid #ccc;
@@ -1530,8 +1557,7 @@ input:checked+.slider:before {
     text-align: center;
 }
 
-/* New row style for inputs, mimics .demand-row */
-#location-panel .user-input-row {
+.ribbon-cost-inputs .user-input-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -1539,19 +1565,16 @@ input:checked+.slider:before {
     gap: 8px;
 }
 
-/* Mimics .location-controls label */
-#location-panel .user-input-row label {
+.ribbon-cost-inputs .user-input-row label {
     flex-shrink: 1;
     white-space: nowrap;
     text-align: left;
     font-size: 0.8rem;
     font-weight: bold;
     color: var(--accent);
-    margin-right: 0px;
 }
 
-/* Mimics .location-controls input[type="number"] */
-#location-panel .user-input-row input[type="number"] {
+.ribbon-cost-inputs .user-input-row input[type="number"] {
     flex-grow: 1;
     min-width: 60px;
     width: auto;
@@ -1564,15 +1587,14 @@ input:checked+.slider:before {
     text-align: right;
 }
 
-/* Container for buttons */
-#location-panel .user-input-buttons {
+.ribbon-cost-inputs .user-input-buttons {
     display: flex;
     flex-direction: column;
     gap: 5px;
     margin-top: 10px;
 }
 
-#location-panel .user-input-box .loc-control-btn {
+.ribbon-cost-inputs .loc-control-btn {
     padding: 6px 12px;
     font-weight: bold;
     font-size: 0.85rem;
@@ -1585,11 +1607,177 @@ input:checked+.slider:before {
     width: 100%;
 }
 
-#location-panel .user-input-box .loc-control-btn:hover {
+.ribbon-cost-inputs .loc-control-btn:hover {
     background-color: var(--secondary1);
     border-color: var(--secondary1);
 }
 
+/* --- 5. Content Panel: Chart (Middle) --- */
+.ribbon-chart-area {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 200px;
+    border: 1px solid var(--idle-color);
+    border-radius: 6px;
+    box-shadow: var(--shadow);
+    padding: 5px;
+}
+
+/* (Styles re-scoped from old #holding-cost-summary) */
+.ribbon-chart-area #holding-cost-summary {
+    font-size: 0.85em;
+    padding: 5px;
+    border: 1px dashed var(--idle-color);
+    margin-bottom: 5px;
+    background-color: #f8f9fa;
+    flex-shrink: 0;
+}
+
+.ribbon-chart-area #holding-cost-summary .summary-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 2px;
+}
+
+.ribbon-chart-area #holding-cost-summary .summary-row.total {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--idle-color);
+}
+
+#holding-cost-svg-container {
+    flex-grow: 1;
+    /* Let SVG container fill remaining space */
+    min-height: 100px;
+    /* Ensure it has some height */
+    width: 100%;
+    height: 100%;
+}
+
+/* (Styles re-scoped from old #holding-cost-chart-svg) */
+#holding-cost-chart-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+#holding-cost-chart-svg .axis text,
+#holding-cost-chart-svg .axis-label {
+    font-size: 10px;
+    fill: var(--accent);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+#holding-cost-chart-svg .axis-label {
+    font-size: 12px;
+    font-weight: bold;
+}
+
+#holding-cost-chart-svg .axis path,
+#holding-cost-chart-svg .axis line {
+    stroke: var(--accent);
+    stroke-width: 1px;
+}
+
+#holding-cost-chart-svg .holding-cost-area {
+    fill: var(--secondary2);
+    opacity: 0.3;
+}
+
+#holding-cost-chart-svg .holding-cost-bar {
+    fill: var(--primary);
+    opacity: 0.7;
+}
+
+/* --- 6. Content Panel: Demand (Right) --- */
+/* (Styles copied from old .demand-capacity-box) */
+.ribbon-demand-panel {
+    width: 220px;
+    /* Fixed width */
+    flex-shrink: 0;
+    padding: 10px;
+    border-radius: 6px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--idle-color);
+    font-size: 0.9rem;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.ribbon-demand-panel h4 {
+    margin: 0 0 8px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #ccc;
+    font-size: 1rem;
+    text-align: center;
+}
+
+.ribbon-demand-panel .demand-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.ribbon-demand-panel .demand-row span:first-child {
+    font-weight: bold;
+}
+
+.ribbon-demand-panel .demand-bar-container {
+    width: 100%;
+    height: 20px;
+    background-color: #e9ecef;
+    border-radius: 4px;
+    margin-top: 8px;
+    overflow: hidden;
+}
+
+.ribbon-demand-panel .demand-bar {
+    height: 100%;
+    background-color: var(--primary);
+    width: 0%;
+    transition: width 0.5s ease-in-out;
+    text-align: center;
+    color: white;
+    font-weight: bold;
+    line-height: 20px;
+}
+
+/* --- 7. Chart Switch Styling --- */
+/* (Copies styles from .summary-panel .inv-button-group) */
+.ribbon-cost-inputs .inv-button-group {
+    display: flex;
+    width: 100%;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 5px;
+    /* A bit less margin than user-input-buttons */
+}
+
+.ribbon-cost-inputs .inv-button-group button {
+    flex-grow: 1;
+    width: 50%;
+    /* Make buttons equal width */
+    padding: 6px;
+    font-weight: bold;
+    border: 1px solid #ccc;
+    background-color: #f0f0f0;
+    color: #555;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-size: 0.8rem;
+}
+
+.ribbon-cost-inputs .inv-button-group button.active {
+    background-color: var(--secondary2);
+    color: white;
+    border-color: var(--secondary2);
+}
+
+.ribbon-cost-inputs .inv-button-group button:not(.active):hover {
+    background-color: #e0e0e0;
+}
 
 /* --- NEW: PPI Chart Modal --- */
 #ppi-chart-modal {
@@ -1711,46 +1899,6 @@ input:checked+.slider:before {
     text-anchor: middle;
 }
 
-/* Specific styles for the Holding Cost Modal content */
-#holding-cost-modal .holding-cost-modal-content {
-    width: 100%;
-    height: 100%;
-    background-color: var(--white);
-    border-radius: 8px;
-    box-shadow: var(--shadow);
-    border: 1px solid var(--idle-color);
-    padding: 15px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    position: relative;
-    display: flex;
-    flex-direction: column;
-}
-
-#holding-cost-modal h4 {
-    text-align: center;
-    margin-bottom: 10px;
-    color: var(--accent);
-    padding-bottom: 0;
-    border-bottom: none;
-}
-
-#holding-cost-modal .close-btn {
-    position: absolute;
-    top: 10px;
-    right: 15px;
-    background: none;
-    border: none;
-    font-size: 1.5rem;
-    font-weight: bold;
-    color: #aaa;
-    cursor: pointer;
-    line-height: 1;
-    padding: 0;
-}
-
-#holding-cost-modal .close-btn:hover {
-    color: var(--accent);
-}
 
 #holding-cost-summary {
     font-size: 0.9em;
@@ -1806,7 +1954,67 @@ input:checked+.slider:before {
     opacity: 0.7;
 }
 
-/* Tooltip specific to the Holding Cost chart */
-#holding-cost-modal .holding-cost-tooltip {
-    position: absolute;
+/* Styles for the new chart switch in the input panel */
+.sim-chart-switch {
+    margin-top: 8px;
+    padding-left: 0;
+    /* Override .inv-button-group if needed */
+}
+
+.sim-chart-switch button {
+    width: 50px;
+    /* Smaller buttons */
+    padding: 4px;
+    font-size: 0.85em;
+    min-width: 0;
+}
+
+/* Styles for the new collapsible bar */
+.collapsible-info-bar {
+    /* This is a foreignObject, styling is on the child */
+    transition: height 0.3s ease-in-out, y 0.3s ease-in-out;
+    background-color: var(--background-panel, #2a2a2a);
+    border-radius: 4px;
+    border: 1px solid var(--border-color, #444);
+}
+
+.collapsible-info-content {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.collapsible-header {
+    padding: 8px 10px;
+    font-size: 0.9em;
+    font-weight: bold;
+    color: var(--accent, #eee);
+    background-color: var(--background-panel-header, #333);
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color, #444);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.collapsible-header:hover {
+    background-color: #3f3f3f;
+}
+
+.collapsible-header strong {
+    color: var(--primary, #00bfff);
+    font-weight: bold;
+}
+
+.collapsible-header span {
+    font-size: 0.8em;
+    margin-left: auto;
+}
+
+.collapsible-content {
+    padding: 5px;
+    flex-grow: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
