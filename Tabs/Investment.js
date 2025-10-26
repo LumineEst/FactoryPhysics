@@ -564,14 +564,19 @@ const drawInvestmentPanel = (function () {
 
         container.append("div").attr("class", "inv-results-column").html(`<div id="inv-results-placeholder" style="display: none;"></div><div id="inv-results-display"><div class="inv-scorecard-container"></div><div class="inv-chart-container"></div></div>`);
 
-        const summaryCostEl = document.getElementById('summary-cost');
+        // --- MODIFICATION HERE ---
+        // Get the total logistics cost (Shipping + Holding + Exception) from the LocationTab summary panel.
+        const summaryCostEl = document.getElementById('summary-total-cost');
         if (summaryCostEl) {
             const costText = summaryCostEl.textContent;
             const parsedCost = parseFloat(costText.replace(/[$,]/g, '')) || 0;
-            if (parsedCost > 0) {
+            // Use the parsed cost if it's a valid number, otherwise keep the default.
+            // Note: If no cities are added, this will be $0, which is correct.
+            if (isFinite(parsedCost)) {
                 investmentState.freightExpense = parsedCost;
             }
         }
+        // --- END MODIFICATION ---
 
         Object.keys(investmentState).forEach(key => {
             if (key === 'workingDays' || key === 'currentYear' || key === 'isCalendarInitialized') return; // Skip
@@ -634,5 +639,4 @@ const drawInvestmentPanel = (function () {
         // Initial run
         setTimeout(() => updateProbabilisticValues('mean'), 0);
     };
-
 })();
