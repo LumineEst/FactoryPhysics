@@ -1,358 +1,600 @@
 // --- simulation.worker.js ---
 
-// Load solver script (assuming local libs/highs.js)
+// --- Globals & Solver Initialization ---
+
+// Flag and error storage for HiGHS script loading
 let highsScriptLoaded = false;
 let highsScriptError = null;
-let highsLoaderFunction = null;
-let highsInstancePromise = null;
+let highsLoaderFunction = null; // Stores the function to initialize HiGHS
+let highsInstancePromise = null; // Stores the promise resolving to the HiGHS instance
+
+// Attempt to load the HiGHS solver script
 try {
     console.log("WORKER: Attempting to import HiGHS script from 'libs/highs.js'...");
-    importScripts('libs/highs.js'); // Assuming highs.js is in a 'libs' folder relative to this worker
+    // Assumes highs.js is in a 'libs' folder relative to this worker
+    importScripts('libs/highs.js');
     console.log("WORKER: Script 'libs/highs.js' imported.");
-    // Check various ways the loader might be exposed
+
+    // Check various ways the HiGHS loader function might be exposed globally
     if (typeof Module === 'function') {
-        console.log("WORKER: Loader function found as global 'Module'.");
         highsLoaderFunction = Module;
         highsScriptLoaded = true;
+        console.log("WORKER: Loader found as global 'Module'.");
     } else if (typeof Module === 'object' && typeof Module.highs === 'function') {
-        console.log("WORKER: Loader function found as 'Module.highs'.");
         highsLoaderFunction = Module.highs;
         highsScriptLoaded = true;
+        console.log("WORKER: Loader found as 'Module.highs'.");
     } else if (typeof Module === 'object' && typeof Module.default === 'function') {
-        console.log("WORKER: Loader function found as 'Module.default'.");
         highsLoaderFunction = Module.default;
         highsScriptLoaded = true;
+        console.log("WORKER: Loader found as 'Module.default'.");
     } else if (typeof highs === 'function') {
-        console.log("WORKER: Loader function found as global 'highs'.");
         highsLoaderFunction = highs;
         highsScriptLoaded = true;
+        console.log("WORKER: Loader found as global 'highs'.");
     } else if (typeof self.highs === 'function') {
-        console.log("WORKER: Loader function found at 'self.highs'.");
         highsLoaderFunction = self.highs;
         highsScriptLoaded = true;
+        console.log("WORKER: Loader found at 'self.highs'.");
     } else {
-        highsScriptError = "Could not find HiGHS loader function (checked Module variations, highs, self.highs).";
+        highsScriptError = "Could not find HiGHS loader function.";
         console.error("WORKER:", highsScriptError);
-        try { console.log("WORKER: 'Module' object details:", Module); } catch { /* ignore */ }
     }
 } catch (error) {
     highsScriptError = `Failed to import script 'libs/highs.js': ${error.message}`;
     console.error("WORKER: CRITICAL -", highsScriptError, error);
 }
 
-
 // --- Constants ---
-const MAX_START_DAY_OPTIONS = 11;
+const MAX_START_DAY_OPTIONS = 11; // Max start days to consider per city in solver if freq is high
 
 // --- Async Solver Loader ---
+/**
+ * Asynchronously initializes and returns the HiGHS WebAssembly solver instance.
+ * Ensures only one instance is created.
+ * @returns {Promise<object>} A promise that resolves to the HiGHS solver instance.
+ */
 async function getSolverInstance() {
+    // Check if script loading failed or loader wasn't found
     if (!highsScriptLoaded || !highsLoaderFunction) {
-        throw new Error(highsScriptError || "HiGHS script did not load correctly or define loader.");
+        throw new Error(highsScriptError || "HiGHS script did not load or define loader.");
     }
+
+    // If the instance promise doesn't exist yet, create it
     if (!highsInstancePromise) {
         console.log("WORKER: Initializing HiGHS WASM instance...");
-        const wasmPath = 'libs/';
-        const memoryMB = 1024;
+        const wasmPath = 'libs/'; // Path relative to this worker where highs.wasm is
+        const memoryMB = 1024; // Request 1 GB memory
         const initialMemory = memoryMB * 1024 * 1024;
-        console.log('WORKER: Requesting ${memoryMB}MB of memory for HIGHS...');
+        console.log(`WORKER: Requesting ${memoryMB}MB of memory for HiGHS...`);
+
         highsInstancePromise = highsLoaderFunction({
-            locateFile: (filename) => wasmPath + filename,
-            initialMemory: initialMemory
-        }).then(instance => {
-            console.log("WORKER: HiGHS WASM instance initialized.");
-            if (!instance?.solve) throw new Error("HiGHS instance invalid or missing 'solve'.");
-            return instance;
-        }).catch(err => {
-            console.error("WORKER: Failed to initialize HiGHS WASM instance:", err);
-            highsInstancePromise = null; throw err;
-        });
+            locateFile: (filename) => wasmPath + filename, // Helps locate .wasm file
+            initialMemory: initialMemory // Request specific memory heap size
+        })
+            .then(instance => {
+                console.log("WORKER: HiGHS WASM instance initialized.");
+                if (!instance?.solve) { // Basic validation
+                    throw new Error("HiGHS instance invalid or missing 'solve' method.");
+                }
+                return instance;
+            })
+            .catch(err => {
+                console.error("WORKER: Failed to initialize HiGHS WASM instance:", err);
+                highsInstancePromise = null; // Reset promise on failure
+                throw err; // Re-throw error
+            });
     }
+    // Return the existing promise (or the newly created one)
     return highsInstancePromise;
 }
 
-// --- Async MILP Helper Function (Stores Shipment Details) ---
-async function findOptimalShipmentSchedule(cities, dailyData) {
+// --- Async MILP Helper Function ---
+/**
+ * Generates and solves a Mixed Integer Linear Program (MILP) to find an optimal
+ * shipment start day schedule for cities, minimizing the peak daily shipment load.
+ * Populates the `scheduleData` array with the resulting schedule.
+ * @param {Array<object>} cities - Array of city objects { name, qty, freq, chosenStartDay? }.
+ * @param {Array<object>} scheduleData - Array representing 365 days, to be populated with schedule.
+ * @returns {Promise<object>} A promise resolving to { status, peakDemand, dailyData: scheduleData } or an error status.
+ */
+async function findOptimalShipmentSchedule(cities, scheduleData) {
     console.log("WORKER: Entered findOptimalShipmentSchedule.");
     let solverInstance;
+
+    // Get the solver instance
     try {
-        console.log("WORKER: Attempting to get solver instance...");
         solverInstance = await getSolverInstance();
-        console.log("WORKER: Solver instance obtained.");
     } catch (error) {
-        console.error("WORKER: Solver failed to load or initialize in findOptimalShipmentSchedule", error);
-        const safeDailyData = dailyData || Array.from({ length: 365 }, () => ({ shipments: 0 }));
-        safeDailyData.forEach(d => { if (d) d.shipments = 0; });
-        if (Array.isArray(cities)) cities.forEach(c => { if (safeDailyData?.[1]) safeDailyData[1].shipments += c.qty; });
-        return { status: 'error_loading_solver', peakDemand: -1, dailyData: safeDailyData, message: `Solver init error: ${error.message}` };
+        console.error("WORKER: Solver failed load/init in findOptimalShipmentSchedule", error);
+        // Fallback: Provide a basic schedule if solver fails
+        const safeScheduleData = scheduleData || Array.from({ length: 365 }, () => ({ shipments: 0, shipmentDetails: [] }));
+        safeScheduleData.forEach(d => { if (d) { d.shipments = 0; d.shipmentDetails = []; } });
+        if (Array.isArray(cities)) {
+            cities.forEach(c => {
+                const freq = c.freq || 7;
+                const startDay = (c.chosenStartDay > 0 && c.chosenStartDay <= freq) ? c.chosenStartDay : 1;
+                const startDay_0idx = startDay - 1;
+                if (safeScheduleData?.[startDay_0idx]) {
+                    safeScheduleData[startDay_0idx].shipments += c.qty;
+                    safeScheduleData[startDay_0idx].shipmentDetails.push({ city: c.name, qty: c.qty, freq: freq, startDay: startDay });
+                }
+            });
+        }
+        // Return structure consistent with success/failure cases
+        return { status: 'error_loading_solver', peakDemand: -1, dailyData: safeScheduleData, message: `Solver init error: ${error.message}` };
     }
 
+    // --- LP String Generation ---
     let lpString = "";
     const cityVarMap = new Map();
     const binaryVars = [];
     const generalVars = ["Z"];
-    let objectiveParts = ["1 Z"]; // Simple objective: Minimize Z
+    let objectiveParts = ["1 Z"]; // Minimize Z
 
     try {
         console.log("WORKER: Starting LP string generation...");
-        lpString += "Subject To\n"; // Start constraints
+        lpString += "Minimize\n obj: " + objectiveParts.join(' + ') + "\n";
+        lpString += "Subject To\n";
 
+        // Constraints for each city: Choose one start day or use forced start day
         (cities || []).forEach((city, cityIndex) => {
-            const freq = Math.max(1, Math.round(city.freq));
-            const k = Math.min(freq, MAX_START_DAY_OPTIONS);
-            const possibleStartDays = [];
-            // Heuristic Calculation for Infrequent shipments
-            if (k === freq) { for (let d = 1; d <= freq; d++) possibleStartDays.push(d); }
-            else { for (let i = 0; i < k; i++) possibleStartDays.push(Math.floor(i * freq / k) + 1); }
-
-            const constraintName = `city_${cityIndex}_start`; let cityConstraintParts = [];
-            possibleStartDays.forEach((d) => {
-                const varName = `x_${cityIndex}_${d}`;
-                cityConstraintParts.push(`1 ${varName}`);
+            if (city.chosenStartDay > 0) { // User forced start day
+                const startDay = city.chosenStartDay;
+                const varName = `x_${cityIndex}_${startDay}`;
                 binaryVars.push(varName);
-                cityVarMap.set(varName, { cityIndex, cityQty: city.qty, startDay: d, freq });
-            });
-            if (cityConstraintParts.length > 0) lpString += ` ${constraintName}: ${cityConstraintParts.join(' + ')} = 1\n`;
-            else console.warn(`WORKER: City ${cityIndex} generated no vars.`);
+                cityVarMap.set(varName, { cityIndex, cityQty: city.qty, startDay: startDay, freq: city.freq, forced: true });
+                lpString += ` city_${cityIndex}_forced: 1 ${varName} = 1\n`;
+            } else { // Solver chooses start day
+                const freq = Math.max(1, Math.round(city.freq));
+                const k = Math.min(freq, MAX_START_DAY_OPTIONS);
+                const possibleStartDays = [];
+                if (k === freq) { for (let d = 1; d <= freq; d++) possibleStartDays.push(d); }
+                else { for (let i = 0; i < k; i++) possibleStartDays.push(Math.floor(i * freq / k) + 1); }
+
+                const constraintName = `city_${cityIndex}_start`;
+                let cityConstraintParts = [];
+                possibleStartDays.forEach((d) => {
+                    const varName = `x_${cityIndex}_${d}`;
+                    cityConstraintParts.push(`1 ${varName}`);
+                    binaryVars.push(varName);
+                    cityVarMap.set(varName, { cityIndex, cityQty: city.qty, startDay: d, freq, forced: false });
+                });
+                if (cityConstraintParts.length > 0) {
+                    lpString += ` ${constraintName}: ${cityConstraintParts.join(' + ')} = 1\n`;
+                } else {
+                    console.warn(`WORKER: City ${cityIndex} generated no solver variables.`);
+                }
+            }
         });
-        if (binaryVars.length === 0 && cities?.length > 0) console.warn("WORKER: No binary vars defined.");
 
-        // Construct full objective string (simple version)
-        let fullObjectiveString = "Minimize\n obj: " + objectiveParts.join(' + ') + "\n";
-
-        // Daily load constraints
-        for (let t = 0; t < 365; t++) {
+        // Constraints for each day: Daily load <= Z
+        for (let t = 0; t < 365; t++) { // t is 0-indexed day
             const constraintName = `day_${t}_load`;
             let dayConstraintParts = [];
             cityVarMap.forEach((v, varName) => {
                 const startDay_0idx = v.startDay - 1;
-                if (t >= v.startDay_0idx && (t - v.startDay_0idx) % v.freq === 0)
+                if (t >= startDay_0idx && (t - startDay_0idx) % v.freq === 0) {
                     dayConstraintParts.push(`${v.cityQty} ${varName}`);
+                }
             });
-            if (dayConstraintParts.length > 0) lpString += ` ${constraintName}: ${dayConstraintParts.join(' + ')} - 1 Z <= 0\n`;
+            if (dayConstraintParts.length > 0) {
+                lpString += ` ${constraintName}: ${dayConstraintParts.join(' + ')} - 1 Z <= 0\n`;
+            }
         }
-        lpString += "Bounds\nGeneral\n"; lpString += ` ${generalVars.join(' ')}\n`;
-        if (binaryVars.length > 0) { lpString += "Binary\n"; lpString += ` ${binaryVars.join(' ')}\n`; } else { lpString += "Binary\n"; }
+
+        // Variable Types
+        lpString += "Bounds\n";
+        lpString += "General\n";
+        lpString += ` ${generalVars.join(' ')}\n`;
+        lpString += "Binary\n";
+        lpString += ` ${binaryVars.join(' ')}\n`; // Ensure space even if empty? Check HiGHS docs.
         lpString += "End\n";
-        lpString = fullObjectiveString + lpString; // Prepend objective
+
         console.log("WORKER: LP string generation complete.");
-        console.log("WORKER: LP String:\n", lpString); // Keep uncommented if debugging the string itself
 
     } catch (genError) {
         console.error("WORKER: Error during LP String Generation:", genError);
-        return { status: 'error_lp_generation', peakDemand: -1, dailyData: dailyData, message: `LP Gen Error: ${genError.message}` };
+        return { status: 'error_lp_generation', peakDemand: -1, dailyData: scheduleData, message: `LP Gen Error: ${genError.message}` };
     }
 
-    console.log("WORKER: Attempting to solve MILP with HiGHS instance...");
+    // --- Solve the LP ---
+    console.log("WORKER: Attempting to solve MILP...");
     try {
-        const startTime = performance.now();
         const result = await solverInstance.solve(lpString);
-        const endTime = performance.now();
-        console.log(`WORKER: HiGHS Solver finished in ${(endTime - startTime).toFixed(2)} ms.`);
-        console.log("WORKER: HiGHS Result Raw:", result);
 
-        // --- Parse HiGHS Results (Use Capitalized properties + detailed check) ---
+        // --- Parse Results ---
         const rawStatus = result?.Status ?? 'Unknown';
-        console.log(`WORKER: Raw status: "${rawStatus}" (Type: ${typeof rawStatus})`);
         const statusString = typeof rawStatus === 'string' ? rawStatus.trim() : 'Unknown';
-        console.log(`WORKER: Trimmed status: "${statusString}"`);
-        const isOptimal = statusString === 'Optimal';
-        const isFeasible = statusString === 'Feasible';
-        const isOptimalOrFeasible = isOptimal || isFeasible;
-        console.log(`WORKER: Status check: Optimal? ${isOptimal}, Feasible? ${isFeasible}, Combined? ${isOptimalOrFeasible}`);
+        const isOptimalOrFeasible = statusString === 'Optimal' || statusString === 'Feasible';
 
         if (!isOptimalOrFeasible) {
             console.error(`WORKER: Non-optimal/feasible status '${statusString}'. Result:`, result);
             const simpleStatus = statusString.toLowerCase().replace(/[\s\(\)]+/g, '_') || 'unknown';
-            return { status: `solver_status_${simpleStatus}`, peakDemand: -1, dailyData: dailyData, message: `Solver status: ${statusString}` };
+            return { status: `solver_status_${simpleStatus}`, peakDemand: -1, dailyData: scheduleData, message: `Solver status: ${statusString}` };
         }
-
         console.log(`WORKER: Status '${statusString}' OK. Parsing results.`);
-        // Extract Z value directly as peakDemand
+
         let peakDemand = -1;
         const columnsData = result.Columns;
         if (columnsData?.Z?.Primal !== undefined) peakDemand = columnsData.Z.Primal;
-        else console.warn("WORKER: Could not extract Z value from result.Columns.");
-        console.log(`WORKER: PeakDemand(Z)=${peakDemand}`);
+        else console.warn("WORKER: Could not extract Z value.");
+        console.log(`WORKER: PeakLoadVar(Z)=${peakDemand}`);
 
-        // Ensure dailyData exists before modification
-        (dailyData || []).forEach(d => {
-            if (d) {
-                d.shipments = 0;
-                d.shipmentDetails = [];
-            }
-        });
-        console.log("WORKER: Shipments reset in dailyData.");
+        // Clear existing schedule data before applying results
+        (scheduleData || []).forEach(d => { if (d) { d.shipments = 0; d.shipmentDetails = []; } });
 
-        let solutionValues = {}; let columnCount = 0;
+        // Extract solution values for binary variables
+        let solutionValues = {};
         if (columnsData && typeof columnsData === 'object') {
-            console.log("WORKER: Processing result.Columns object.");
             for (const varName in columnsData) {
-                let varValue; if (Object.hasOwnProperty.call(columnsData, varName) && columnsData[varName]) { if (typeof columnsData[varName].Primal === 'number') varValue = columnsData[varName].Primal; else if (typeof columnsData[varName].Value === 'number') varValue = columnsData[varName].Value; else if (typeof columnsData[varName].value === 'number') varValue = columnsData[varName].value; } if (typeof varValue === 'number') { solutionValues[varName] = varValue; columnCount++; }
+                let v;
+                if (Object.hasOwnProperty.call(columnsData, varName) && columnsData[varName]) {
+                    v = columnsData[varName].Primal ?? columnsData[varName].Value ?? columnsData[varName].value;
+                }
+                if (typeof v === 'number') solutionValues[varName] = v;
             }
-            console.log(`WORKER: Extracted ${columnCount} var values.`);
-            if (columnCount === 0 && binaryVars.length > 0) { return { status: 'solver_result_error', peakDemand: -1, dailyData: dailyData, message: 'Columns obj empty.' }; }
-        } else { return { status: 'solver_result_error', peakDemand: -1, dailyData: dailyData, message: 'Columns obj missing/invalid.' }; }
+        } else {
+            return { status: 'solver_result_error', peakDemand: -1, dailyData: scheduleData, message: 'Solver result Columns object missing/invalid.' };
+        }
 
+        // --- Apply Schedule to scheduleData ---
         let assignmentsMade = 0;
         try {
-            console.log("WORKER: Applying assignments...");
             cityVarMap.forEach((v, varName) => {
-                if (solutionValues[varName] > 0.5) { // If this start day is selected
+                // If this variable was chosen (>0.5) OR it was forced by user
+                if (solutionValues[varName] > 0.5 || v.forced) {
                     assignmentsMade++;
-                    for (let t = v.startDay; t < 365; t += v.freq) {
-                        if (t >= 0 && t < dailyData.length && dailyData[t]) {
-                            // Add details and update total
-                            dailyData[t].shipments = (dailyData[t].shipments || 0) + v.cityQty;
+                    const chosenStartDay = v.startDay; // The chosen/forced 1-based start day
+                    // Apply shipments to all relevant days (using 0-based index t)
+                    for (let t = chosenStartDay - 1; t < 365; t += v.freq) {
+                        if (t >= 0 && t < scheduleData.length && scheduleData[t]) {
+                            scheduleData[t].shipments += v.cityQty;
                             const cityName = cities[v.cityIndex]?.name || `City ${v.cityIndex}`;
-                            dailyData[t].shipmentDetails.push({ city: cityName, qty: v.cityQty });
+                            scheduleData[t].shipmentDetails.push({ // Add details to schedule
+                                city: cityName,
+                                qty: v.cityQty,
+                                freq: v.freq,
+                                startDay: chosenStartDay // Store 1-based start day
+                            });
                         }
                     }
                 }
             });
-            console.log(`WORKER: Applied ${assignmentsMade} assignments.`);
         } catch (assignmentError) {
-            console.error("WORKER: Error during assignment:", assignmentError);
-            return { status: 'solver_assignment_error', peakDemand: peakDemand, dailyData: dailyData, message: `Assign error: ${assignmentError.message}` };
+            console.error("WORKER: Error during solver assignment:", assignmentError);
+            return { status: 'solver_assignment_error', peakDemand: peakDemand, dailyData: scheduleData, message: `Assign error: ${assignmentError.message}` };
         }
         if (assignmentsMade < (cities?.length || 0)) console.warn(`WORKER: Assignments (${assignmentsMade}) < cities (${cities?.length || 0}).`);
 
         console.log("WORKER: findOptimalShipmentSchedule finished successfully.");
-        return { status: 'optimal', peakDemand: peakDemand, dailyData };
+        // Return structure matches error cases
+        return { status: 'optimal', peakDemand: peakDemand, dailyData: scheduleData };
 
     } catch (error) {
         console.error("WORKER: Error during HiGHS solve execution or result parsing:", error);
-        return { status: 'solver_execution_error', peakDemand: -1, dailyData: dailyData, message: `Solve/Parse error: ${error.message}` };
+        return { status: 'solver_execution_error', peakDemand: -1, dailyData: scheduleData, message: `Solve/Parse error: ${error.message}` };
     }
 }
 
-
-// --- Async Main Simulation Function (Multi-day OT with overlap check) ---
+/**
+ * Runs the main day-by-day inventory simulation based on a pre-calculated schedule.
+ * Includes logic for handling shortfalls using overtime (OT) and offsetting OT hours.
+ * Implements a simple first-week delay for shipments if inventory is insufficient.
+ * @param {object} params - Simulation parameters including cities, schedule, costs, etc.
+ * @returns {Promise<object>} A promise resolving to { results } or { error, results }.
+ */
 async function performSimulation(params) {
-    console.log("WORKER: Simulation task started.");
-    let dailyData = null;
+    const simStartTime = performance.now();
+    console.log("WORKER: >>> performSimulation START (Reverted to Simple Delay + OT Logic) <<<");
+
+    let dailyData = null; // Holds the final state, including shifted shipments
+    let functionStep = "1. Deconstruct Params"; // Track current step
+
     try {
-        // --- 1. Deconstruct and validate params ---
-        const { cities, workingDaysSchedule, standardOpHours, numEmployees, laborCost, holdingCostRate, annualMfgOverhead, annualSgaExpenses, superCogsVal, ultraCogsVal, mcInputVal, buildRatios, standardDailyProduction } = params; // No optimizationMode needed here
-        const workingDaysSet = new Set(workingDaysSchedule); const numWorkingDays = workingDaysSchedule.length;
-        const dailyHoldingRate = holdingCostRate / 365.0; const dailyMfgOverhead = numWorkingDays > 0 ? annualMfgOverhead / numWorkingDays : 0;
+        // --- 1. Deconstruct params ---
+        console.log(`WORKER: ${functionStep}...`);
+        const {
+            cities, workingDaysSchedule, standardOpHours, numEmployees, laborCost,
+            holdingCostRate, annualMfgOverhead, annualSgaExpenses,
+            superCogsVal, ultraCogsVal, mcInputVal, buildRatios, standardDailyProduction
+        } = params;
+        const workingDaysSet = new Set(workingDaysSchedule);
+        const numWorkingDays = workingDaysSchedule.length;
+        const dailyHoldingRate = holdingCostRate / 365.0;
+        const dailyMfgOverhead = numWorkingDays > 0 ? annualMfgOverhead / numWorkingDays : 0;
         const dailySgaExpenses = numWorkingDays > 0 ? annualSgaExpenses / numWorkingDays : 0;
         const avgCogs = (superCogsVal * buildRatios.super) + (ultraCogsVal * buildRatios.ultra) + (mcInputVal * buildRatios.mega);
         if (!standardDailyProduction || standardDailyProduction <= 0) throw new Error("Std daily production must be > 0.");
         if (standardOpHours <= 0) throw new Error("Std operating hours must be > 0.");
         const productionPerStdHour = standardDailyProduction / standardOpHours;
-        const initialBuffer = standardDailyProduction * 7; // Buffer of 1-week stock before shipments start
-        console.log(`WORKER: Setting initial buffer to ${initialBuffer} units.`);
+        console.log(`WORKER: ${functionStep} complete.`);
 
-        // --- 2. Initialize Data Array ---
-        dailyData = Array.from({ length: 365 }, (_, i) => { const year = new Date().getFullYear(); const date = new Date(Date.UTC(year, 0, i + 1)); const dayStr = date.toISOString().split('T')[0]; return { day: i, date: dayStr, isWorkingDay: workingDaysSet.has(dayStr), inventoryStart: 0, production: 0, opHours: 0, inventoryAvailable: 0, shipments: 0, shipmentDetails: [], actualShipments: 0, demandMet: true, inventoryEnd: 0, holdingCost: 0, exceptionCost: 0, isExceptionDay: false, isReductionDay: false, exceptionDetails: null }; });
-        let simulationError = null;
+        // --- 2. Initialize Data Array (Single array approach) ---
+        functionStep = "2. Initialize dailyData";
+        console.log(`WORKER: ${functionStep}...`);
+        dailyData = Array.from({ length: 365 }, (_, i) => {
+            const year = new Date().getFullYear();
+            const date = new Date(Date.UTC(year, 0, i + 1));
+            const dayStr = date.toISOString().split('T')[0];
+            return {
+                day: i, date: dayStr, isWorkingDay: workingDaysSet.has(dayStr),
+                inventoryStart: 0, production: 0, opHours: 0, inventoryAvailable: 0,
+                shipments: 0,       // Populated by solver/heuristic
+                shipmentDetails: [], // Populated by solver/heuristic
+                actualShipments: 0, // Calculated during simulation
+                actualShipmentDetails: [], // **Crucial**: Initialize as empty array
+                demandMet: true,    // Flag for simulation outcome
+                inventoryEnd: 0,
+                holdingCost: 0, exceptionCost: 0, isExceptionDay: false, isReductionDay: false, exceptionDetails: null,
+                shipmentDeferred: false // Flag for delayed shipments
+            };
+        });
+        console.log(`WORKER: ${functionStep} complete.`);
 
-        // --- 3. Run Optimizer (No mode passed) ---
+        let simulationError = null; // For critical errors during simulation loop
+
+        // --- 3. Run Optimizer / Heuristic (Populates dailyData.shipments/Details) ---
+        functionStep = "3. Run Optimizer/Heuristic";
+        console.log(`WORKER: ${functionStep}...`);
         if (cities && cities.length > 0) {
-            console.log("WORKER: Calling optimizer...");
-            const optimizationResult = await findOptimalShipmentSchedule(cities, dailyData); // Call without mode
-            if (!optimizationResult || optimizationResult.status !== 'optimal') { throw new Error(`Schedule optimization failed. Status: ${optimizationResult?.status || 'unknown'}. ${optimizationResult?.message || ''}`); }
-            dailyData = optimizationResult.dailyData; // Get data with shipmentDetails populated
-            console.log(`WORKER: Optimal schedule applied. Solver reported peak var (Z): ${optimizationResult.peakDemand?.toFixed(0) ?? 'N/A'}.`);
-        } else { console.log("WORKER: No cities, skipping schedule opt."); dailyData.forEach(d => { if (d) { d.shipments = 0; d.shipmentDetails = []; } }); }
+            console.log("WORKER: Calling findOptimalShipmentSchedule...");
+            const optStartTime = performance.now();
+            // Pass dailyData to be populated by the solver
+            const optimizationResult = await findOptimalShipmentSchedule(cities, dailyData);
+            const optEndTime = performance.now();
+            console.log(`WORKER: findOptimalShipmentSchedule finished in ${(optEndTime - optStartTime).toFixed(0)} ms with status: ${optimizationResult?.status}`);
 
+            if (!optimizationResult || optimizationResult.status !== 'optimal') {
+                console.warn(`WORKER: Optimizer failed (${optimizationResult?.status}), using heuristic schedule.`);
+                dailyData.forEach(d => { d.shipments = 0; d.shipmentDetails = []; }); // Clear just in case
+                cities.forEach(city => { // Apply heuristic schedule
+                    const freq = city.freq || 7;
+                    let startDay = (city.chosenStartDay > 0 && city.chosenStartDay <= freq) ? city.chosenStartDay : 1;
+                    const startDay_0idx = startDay - 1;
+                    for (let t = startDay_0idx; t < 365; t += freq) {
+                        if (dailyData[t]) {
+                            dailyData[t].shipments += city.qty;
+                            dailyData[t].shipmentDetails.push({ city: city.name, qty: city.qty, freq: freq, startDay: startDay });
+                        }
+                    }
+                });
+                console.log("WORKER: Heuristic schedule applied.");
+            } else {
+                console.log(`WORKER: Optimal schedule applied. Peak var (Z): ${optimizationResult.peakDemand?.toFixed(0) ?? 'N/A'}.`);
+                // dailyData is already populated by reference
+            }
+        } else {
+            console.log("WORKER: No cities, ensuring schedule is empty.");
+            dailyData.forEach(d => { if (d) { d.shipments = 0; d.shipmentDetails = []; } });
+        }
+        console.log(`WORKER: ${functionStep} complete.`);
+
+        // --- 4. Run Simulation Loop with First-Week Delay ---
+        functionStep = "4. Simulation Loop";
+        console.log(`WORKER: ${functionStep} starting...`);
         let accumulatedExtraHours = 0;
+        const loopStartTime = performance.now();
 
-        // --- 4. Run Simulation Loop (Multi-day OT with overlap check) ---
-        console.log(`WORKER: Starting 365-day sim loop...`);
         for (let day = 0; day < 365; day++) {
-            if (!dailyData?.[day]) continue;
-            dailyData[day].inventoryStart = (day === 0) ? initialBuffer : (dailyData[day - 1]?.inventoryEnd ?? 0);
-            dailyData[day].production = 0; dailyData[day].opHours = 0;
-            if (dailyData[day].isWorkingDay && !dailyData[day].isReductionDay && !dailyData[day].isExceptionDay) { dailyData[day].production = standardDailyProduction; dailyData[day].opHours = standardOpHours; }
-            dailyData[day].inventoryAvailable = dailyData[day].inventoryStart + dailyData[day].production;
-            const shipmentsNeededToday = dailyData[day].shipments || 0;
+            if (!dailyData?.[day]) continue; // Skip if data for day is missing
 
-            // --- Shortfall Handling (Multi-day OT with overlap check) ---
-            if (dailyData[day].inventoryAvailable < shipmentsNeededToday) {
-                let remainingShortfall = shipmentsNeededToday - dailyData[day].inventoryAvailable;
-                dailyData[day].demandMet = false; let exceptionDaysUsed = [];
-                console.log(`WORKER: Day ${day} - Shortfall ${remainingShortfall.toFixed(0)}u. Looking back...`);
+            // A. Inventory & Production
+            dailyData[day].inventoryStart = (day === 0) ? 0 : (dailyData[day - 1]?.inventoryEnd ?? 0); // NO BUFFER
+            dailyData[day].production = 0;
+            dailyData[day].opHours = 0;
+            if (dailyData[day].isWorkingDay && !dailyData[day].isReductionDay && !dailyData[day].isExceptionDay) {
+                dailyData[day].production = standardDailyProduction;
+                dailyData[day].opHours = standardOpHours;
+            }
+            // *** Production added BEFORE shipment check ***
+            dailyData[day].inventoryAvailable = dailyData[day].inventoryStart + dailyData[day].production;
+
+            // B. Check Scheduled Shipments for Today
+            let shipmentsScheduledToday = dailyData[day].shipments || 0;
+            let detailsScheduledToday = dailyData[day].shipmentDetails || [];
+            dailyData[day].actualShipments = 0; // Reset actual for today
+            dailyData[day].actualShipmentDetails = []; // Reset actual details for today
+
+            // C. Delay Logic (First Week Only, if needed)
+            let wasDeferred = false;
+            if (day < 7 && shipmentsScheduledToday > 0 && dailyData[day].inventoryAvailable < shipmentsScheduledToday) {
+                let foundSpot = false;
+                const maxDelayTargetDay = Math.min(364, day + 7); // Simplified delay window
+                // console.log(`WORKER: Day ${day} - Shortfall ${shipmentsScheduledToday - dailyData[day].inventoryAvailable}. Trying delay up to day ${maxDelayTargetDay}.`);
+
+                for (let targetDay = day + 1; targetDay <= maxDelayTargetDay; targetDay++) {
+                    // Check if target day exists and is a working day
+                    if (dailyData[targetDay] && dailyData[targetDay].isWorkingDay) {
+                        console.log(`WORKER: --> Deferring Day ${day} shipment (${shipmentsScheduledToday} units) to Day ${targetDay}.`);
+                        // Move the scheduled shipment quantity and details
+                        dailyData[targetDay].shipments = (dailyData[targetDay].shipments || 0) + shipmentsScheduledToday;
+                        dailyData[targetDay].shipmentDetails = (dailyData[targetDay].shipmentDetails || []).concat(detailsScheduledToday);
+
+                        // Clear from original day and mark
+                        dailyData[day].shipments = 0;
+                        dailyData[day].shipmentDetails = [];
+                        dailyData[day].shipmentDeferred = true;
+                        dailyData[day].exceptionDetails = `Shipment deferred to day ${targetDay}.`;
+
+                        foundSpot = true;
+                        wasDeferred = true; // Mark that deferral happened for this day
+                        break; // Stop searching once moved
+                    }
+                }
+                if (!foundSpot) {
+                    console.warn(`WORKER: Day ${day} - Could not find spot to delay. Treating as shortfall.`);
+                    // Shipment remains scheduled for today, shortfall logic will run
+                }
+            } // End delay check
+
+            // D. Determine Shipments Actually Needed Today (after potential deferral)
+            const finalShipmentsNeededToday = dailyData[day].shipments || 0;
+            const finalDetailsNeededToday = dailyData[day].shipmentDetails || [];
+
+
+            // E. Shortfall Handling (If needed for shipments STILL scheduled today)
+            if (finalShipmentsNeededToday > 0 && dailyData[day].inventoryAvailable < finalShipmentsNeededToday) {
+                let remainingShortfall = finalShipmentsNeededToday - dailyData[day].inventoryAvailable;
+                dailyData[day].demandMet = false; // Mark demand potentially unmet
+                let exceptionDaysUsed = [];
+                console.log(`WORKER: Day ${day} - Shortfall ${remainingShortfall.toFixed(0)}u (after delay check). Looking back for OT...`);
+
+                // --- OT LOOKBACK LOGIC (Operates on dailyData) ---
                 for (let p = day - 1; p >= 0 && remainingShortfall > 0.01; p--) {
                     if (!dailyData[p]) continue;
                     if (dailyData[p].isWorkingDay && !dailyData[p].isReductionDay) {
-                        // ** Break on overlap **
-                        if (dailyData[p].isExceptionDay) { console.log(`WORKER: Day ${p} already exception. Stopping OT search.`); break; }
-
-                        const prevDayRecordedHours = dailyData[p].opHours; const maxExceptionHours = Math.min(24, Math.max(12, standardOpHours * 1.5)); const potentialExtraHours = maxExceptionHours - prevDayRecordedHours;
+                        if (dailyData[p].isExceptionDay) { break; } // Stop if already an exception day
+                        const prevDayRecordedHours = dailyData[p].opHours;
+                        const maxExceptionHours = Math.min(24, Math.max(12, standardOpHours * 1.5));
+                        const potentialExtraHours = maxExceptionHours - prevDayRecordedHours;
                         if (potentialExtraHours > 0.01) {
                             const maxExtraProduction = Math.floor(potentialExtraHours * productionPerStdHour);
                             if (maxExtraProduction <= 0) continue;
-                            const productionToAdd = Math.min(remainingShortfall, maxExtraProduction); const hoursToAdd = productionToAdd / productionPerStdHour; const actualHoursToAdd = Math.min(hoursToAdd, potentialExtraHours); const actualProductionToAdd = Math.floor(actualHoursToAdd * productionPerStdHour);
+                            const productionToAdd = Math.min(remainingShortfall, maxExtraProduction);
+                            const hoursToAdd = productionToAdd / productionPerStdHour;
+                            const actualHoursToAdd = Math.min(hoursToAdd, potentialExtraHours);
+                            const actualProductionToAdd = Math.floor(actualHoursToAdd * productionPerStdHour);
                             if (actualProductionToAdd <= 0) continue;
-                            console.log(`WORKER: Day ${p}: Adding ${actualHoursToAdd.toFixed(2)}h for ${actualProductionToAdd}u (need ${remainingShortfall.toFixed(0)}).`);
-                            const finalPrevDayOpHours = prevDayRecordedHours + actualHoursToAdd; const finalPrevDayProduction = dailyData[p].production + actualProductionToAdd;
-                            dailyData[p].production = finalPrevDayProduction; dailyData[p].opHours = finalPrevDayOpHours; dailyData[p].isExceptionDay = true;
-                            const overtimePremiumCost = actualHoursToAdd * numEmployees * laborCost * 0.5; const overheadScaleFactor = finalPrevDayOpHours / standardOpHours; const prevOverheadScale = (prevDayRecordedHours / standardOpHours); const overheadIncrease = Math.max(0, (dailyMfgOverhead * (overheadScaleFactor > 1 ? overheadScaleFactor : 1)) - (dailyMfgOverhead * (prevOverheadScale > 1 ? prevOverheadScale : 1))) + Math.max(0, (dailySgaExpenses * (overheadScaleFactor > 1 ? overheadScaleFactor : 1)) - (dailySgaExpenses * (prevOverheadScale > 1 ? prevOverheadScale : 1)));
-                            dailyData[p].exceptionCost = (dailyData[p].exceptionCost || 0) + overtimePremiumCost + overheadIncrease; accumulatedExtraHours += actualHoursToAdd; const detailMsg = `Added ${actualHoursToAdd.toFixed(2)}h (Total: ${finalPrevDayOpHours.toFixed(2)}) for day ${day}. Cost: \$${(overtimePremiumCost + overheadIncrease).toFixed(0)}`; dailyData[p].exceptionDetails = dailyData[p].exceptionDetails ? `${dailyData[p].exceptionDetails}; ${detailMsg}` : detailMsg;
-                            dailyData[day].inventoryAvailable += actualProductionToAdd; remainingShortfall -= actualProductionToAdd; exceptionDaysUsed.push(p);
-                            if (remainingShortfall <= 0.01) { dailyData[day].demandMet = true; console.log(`WORKER: Day ${day} - Shortfall met using: ${exceptionDaysUsed.join(', ')}.`); break; }
-                        } // else: no potential hours
-                    } // else: not suitable day
-                } // --- End backward loop ---
-                if (!dailyData[day].demandMet) { simulationError = `Impossible: Cannot meet ${remainingShortfall.toFixed(0)}u shortfall on day ${day}. Insufficient prior capacity.`; console.error("WORKER:", simulationError); break; }
-                else { dailyData[day].exceptionDetails = `Met shortfall via OT on day(s) ${exceptionDaysUsed.join(', ')}.`; }
-            } // --- End Shortfall Handling ---
-            dailyData[day].actualShipments = dailyData[day].demandMet ? shipmentsNeededToday : Math.max(0, dailyData[day].inventoryAvailable); dailyData[day].inventoryEnd = dailyData[day].inventoryAvailable - dailyData[day].actualShipments; dailyData[day].holdingCost = Math.max(0, dailyData[day].inventoryEnd) * avgCogs * dailyHoldingRate;
-        } // --- End daily loop ---
-        if (simulationError) console.error("WORKER: Sim loop ended early."); else console.log("WORKER: Finished 365-day sim loop.");
-
-        // --- 5. Offsetting Logic ---
-        if (simulationError === null) {
-            let hoursToOffset = accumulatedExtraHours;
-            const finalInventory = dailyData[364]?.inventoryEnd ?? 0;
-            const targetEndInventory = initialBuffer;
-            let productionRemoved = 0;
-            if (hoursToOffset > 0.01) {
-                console.log(`WORKER: Offsetting ${hoursToOffset.toFixed(2)} accumulated hours.`);
-                console.log(`WORKER: Current Final Inventory: ${finalInventory.toFixed(9)}. Target: ${targetEndInventory.toFixed(0)}`);
-                let daysReduced = 0;
-                for (let day = 364; day >= 0 && hoursToOffset > 0.01; day--) {
-                    if (!dailyData?.[day]) continue;
-                    if (dailyData[day].isWorkingDay && !dailyData[day].isExceptionDay && !dailyData[day].isReductionDay && Math.abs(dailyData[day].opHours - standardOpHours) < 0.01) {
-                        const whatIfFinalInventory = finalInventory - productionRemoved - standardDailyProduction;
-                        if (whatIfFinalInventory >= targetEndInventory) {
-                            const reduction = standardOpHours;
-                            dailyData[day].isWorkingDay = false;
-                            dailyData[day].isReductionDay = true;
-                            dailyData[day].opHours = 0;
-                            dailyData[day].production = 0;
-                            dailyData[day].exceptionDetails = `Day cancelled (reduced ${reduction.toFixed(2)}h) to offset exceptions.`;
-                            hoursToOffset -= reduction;
-                            productionRemoved += standardDailyProduction; // Track the Removal of a Day
-                            daysReduced++;
-                        } else {
-                            console.log(`WORKER: Stopping Offset to maintain Buffer, Removing day ${day} would drop Inventory to ${whatIfFinalInventory.toFixed(0)}.`)
-                            break;
+                            // Apply OT changes to the previous day 'p'
+                            const finalPrevDayOpHours = prevDayRecordedHours + actualHoursToAdd;
+                            const finalPrevDayProduction = dailyData[p].production + actualProductionToAdd;
+                            dailyData[p].production = finalPrevDayProduction;
+                            dailyData[p].opHours = finalPrevDayOpHours;
+                            dailyData[p].isExceptionDay = true;
+                            // Calculate costs
+                            const overtimePremiumCost = actualHoursToAdd * numEmployees * laborCost * 0.5;
+                            const overheadScaleFactor = finalPrevDayOpHours / standardOpHours;
+                            const prevOverheadScale = (prevDayRecordedHours / standardOpHours);
+                            const overheadIncrease = Math.max(0, (dailyMfgOverhead * (overheadScaleFactor > 1 ? overheadScaleFactor : 1)) - (dailyMfgOverhead * (prevOverheadScale > 1 ? prevOverheadScale : 1))) + Math.max(0, (dailySgaExpenses * (overheadScaleFactor > 1 ? overheadScaleFactor : 1)) - (dailySgaExpenses * (prevOverheadScale > 1 ? prevOverheadScale : 1)));
+                            dailyData[p].exceptionCost = (dailyData[p].exceptionCost || 0) + overtimePremiumCost + overheadIncrease;
+                            accumulatedExtraHours += actualHoursToAdd;
+                            const detailMsg = `Added ${actualHoursToAdd.toFixed(2)}h (Total: ${finalPrevDayOpHours.toFixed(2)}) for day ${day}. Cost: \$${(overtimePremiumCost + overheadIncrease).toFixed(0)}`;
+                            dailyData[p].exceptionDetails = dailyData[p].exceptionDetails ? `${dailyData[p].exceptionDetails}; ${detailMsg}` : detailMsg;
+                            // Increase current day's availability
+                            dailyData[day].inventoryAvailable += actualProductionToAdd;
+                            remainingShortfall -= actualProductionToAdd;
+                            exceptionDaysUsed.push(p);
+                            if (remainingShortfall <= 0.01) {
+                                dailyData[day].demandMet = true; // Demand met with OT
+                                break; // Exit OT loop
+                            }
                         }
                     }
+                } // --- END OT LOGIC ---
+
+                // Check if demand was ultimately met
+                if (!dailyData[day].demandMet) {
+                    simulationError = `CRITICAL: Cannot meet scheduled ${finalShipmentsNeededToday.toFixed(0)}u on day ${day}. Short by ${remainingShortfall.toFixed(0)}u.`;
+                    console.error("WORKER:", simulationError);
+                    dailyData[day].exceptionDetails = (dailyData[day].exceptionDetails ? dailyData[day].exceptionDetails + "; " : "") + simulationError;
+                    dailyData[day].isExceptionDay = true;
+                    // Let simulation continue to record failure state
+                } else {
+                    dailyData[day].exceptionDetails = (dailyData[day].exceptionDetails ? dailyData[day].exceptionDetails + "; " : "") + `Met shortfall via OT on day(s) ${exceptionDaysUsed.join(', ')}.`;
                 }
-                console.log(`WORKER: Reduced ${daysReduced} days. Remaining offset: ${hoursToOffset.toFixed(2)}`);
+            } // End Shortfall Handling
+
+            // F. Fulfill Actual Shipments & Update Inventory
+            // actualShipments = MIN(inventory available AFTER OT, shipments STILL scheduled today)
+            dailyData[day].actualShipments = Math.min(dailyData[day].inventoryAvailable, finalShipmentsNeededToday);
+            dailyData[day].inventoryEnd = dailyData[day].inventoryAvailable - dailyData[day].actualShipments;
+
+            // Populate actualShipmentDetails based on what was ACTUALLY shipped today
+            let remainingToFulfill = dailyData[day].actualShipments;
+            dailyData[day].actualShipmentDetails = []; // Reset for the day
+            // Iterate through the details STILL scheduled for today
+            for (const detail of finalDetailsNeededToday) {
+                if (remainingToFulfill <= 0) break;
+                const qtyToShip = Math.min(detail.qty, remainingToFulfill);
+                if (qtyToShip > 0) {
+                    dailyData[day].actualShipmentDetails.push({
+                        city: detail.city,
+                        qty: qtyToShip, // Use actual shipped quantity
+                        freq: detail.freq,
+                        startDay: detail.startDay
+                    });
+                    remainingToFulfill -= qtyToShip;
+                }
             }
-            console.log("WORKER: Sim/offsetting completed successfully."); return { results: dailyData };
-        } else { console.log("WORKER: Sim loop failed, offsetting skipped."); return { error: simulationError, results: dailyData }; }
-    } catch (error) { console.error("WORKER: Uncaught error during performSimulation:", error); return { error: error.message || "Unknown sim error.", results: dailyData || null }; }
+            if (remainingToFulfill < -0.01) { console.warn(`WORKER: Day ${day} - Negative remaining fulfillment: ${remainingToFulfill.toFixed(2)}`); }
+
+
+            // G. Calculate Holding Cost
+            dailyData[day].holdingCost = Math.max(0, dailyData[day].inventoryEnd) * avgCogs * dailyHoldingRate;
+
+        } // --- End daily loop ---
+
+        const loopEndTime = performance.now();
+        console.log(`WORKER: ${functionStep} finished in ${(loopEndTime - loopStartTime).toFixed(0)} ms.`);
+
+        if (simulationError) { console.error("WORKER: Sim loop finished with CRITICAL error."); }
+        else { console.log("WORKER: Finished 365-day sim loop successfully."); }
+
+
+        // --- 7. Offsetting Logic (Operates on dailyData) ---
+        functionStep = "7. Offsetting Logic";
+        console.log(`WORKER: ${functionStep} starting...`);
+        // ... (Offsetting logic remains unchanged) ...
+        let hoursToOffset = accumulatedExtraHours; const finalInventory = dailyData[364]?.inventoryEnd ?? 0; const targetEndInventory = 0; let productionRemoved = 0; if (hoursToOffset > 0.01) { console.log(`WORKER: Offsetting ${hoursToOffset.toFixed(2)} hrs...`); let daysReduced = 0; for (let day = 364; day >= 0 && hoursToOffset > 0.01; day--) { if (!dailyData?.[day]) continue; if (dailyData[day].isWorkingDay && !dailyData[day].isExceptionDay && !dailyData[day].isReductionDay && Math.abs(dailyData[day].opHours - standardOpHours) < 0.01) { const whatIfFinalInventory = finalInventory - productionRemoved - standardDailyProduction; if (whatIfFinalInventory >= targetEndInventory) { const reduction = standardOpHours; dailyData[day].isWorkingDay = false; dailyData[day].isReductionDay = true; dailyData[day].opHours = 0; dailyData[day].production = 0; dailyData[day].exceptionDetails = `Day cancelled (reduced ${reduction.toFixed(2)}h) to offset exceptions.`; hoursToOffset -= reduction; productionRemoved += standardDailyProduction; daysReduced++; } else { console.log(`WORKER: Stopping offset...`); break; } } } console.log(`WORKER: Reduced ${daysReduced} days. Remaining offset: ${hoursToOffset.toFixed(2)}`); }
+        console.log(`WORKER: ${functionStep} complete.`);
+
+
+        // --- 8. Return Results ---
+        functionStep = "8. Return Results";
+        console.log(`WORKER: ${functionStep}...`);
+        const simEndTime = performance.now();
+        console.log(`WORKER: <<< performSimulation END (${simulationError ? 'WITH ERROR' : 'SUCCESS'}) - Total Time: ${(simEndTime - simStartTime).toFixed(0)} ms >>>`);
+
+        // Return the final dailyData array which includes simulation results
+        if (simulationError) {
+            return { error: simulationError, results: dailyData };
+        } else {
+            return { results: dailyData };
+        }
+
+    } catch (error) {
+        console.error(`WORKER: Uncaught error during performSimulation (Step: ${functionStep}):`, error);
+        const errorEndTime = performance.now();
+        console.log(`WORKER: <<< performSimulation END (UNCAUGHT ERROR) - Total Time: ${(errorEndTime - simStartTime).toFixed(0)} ms >>>`);
+        return { error: `Worker crashed at Step ${functionStep}: ${error.message || "Unknown sim error."}`, results: scheduleData || null };
+    }
 }
+
 
 // --- Web Worker Event Listener ---
 self.onmessage = async (e) => {
-    const { type, payload } = e.data; // Payload doesn't include optimizationMode in this version
-    console.log("WORKER: Received message:", type /*, "payload:", payload */);
+    const { type, payload } = e.data;
+    console.log("WORKER: Received message:", type);
     if (type === 'start') {
         try {
-            const output = await performSimulation(payload); // Pass payload directly
-            if (output.error) { console.log("WORKER: Sim finished with error, posting 'error'."); self.postMessage({ type: 'error', message: output.error, results: output.results }); }
-            else { console.log("WORKER: Sim finished successfully, posting 'complete'."); self.postMessage({ type: 'complete', results: output.results }); }
-        } catch (e) { console.error("WORKER: Unhandled exception in onmessage:", e); self.postMessage({ type: 'error', message: `Unhandled worker exception: ${e.message || e.toString()}` }); }
-    } else { console.warn("WORKER: Unknown message type:", type); }
+            console.log("WORKER: Calling performSimulation...");
+            const output = await performSimulation(payload);
+            console.log("WORKER: performSimulation finished. Output has error:", !!output.error, "Output has results:", !!output.results);
+
+            if (output.error && output.results === null) { // Conflict check failure
+                console.log("WORKER: Posting 'error' back (Conflict Check Failure).");
+                self.postMessage({ type: 'error', message: output.error, results: null });
+            } else if (output.error) { // Simulation loop failure or uncaught
+                console.log("WORKER: Posting 'error' back (Simulation Loop/Uncaught Failure).");
+                self.postMessage({ type: 'error', message: output.error, results: output.results }); // Send partial/full results with error
+            } else { // Success
+                console.log("WORKER: Posting 'complete' back.");
+                self.postMessage({ type: 'complete', results: output.results });
+            }
+        } catch (e) {
+            console.error("WORKER: Unhandled exception processing 'start' message:", e);
+            self.postMessage({ type: 'error', message: `Unhandled worker exception: ${e.message || e.toString()}` });
+        }
+    } else {
+        console.warn("WORKER: Unknown message type received:", type);
+    }
 };
 
 // --- Global Error Handler ---
-self.onerror = function (event) { console.error("WORKER: Uncaught global error:", event.message, event); self.postMessage({ type: 'error', message: `Uncaught worker error: ${event.message}` }); };
+self.onerror = function (event) {
+    console.error("WORKER: Uncaught global error:", event.message, event);
+    self.postMessage({ type: 'error', message: `Uncaught worker error: ${event.message}` });
+};
 
 console.log("WORKER: simulation.worker.js evaluated and ready.");
