@@ -423,7 +423,6 @@ function updateUI(options = {}) {
     setupDragAndDrop();
 
     // Run precedence check *unless* we're being called by updateWorkstationOrder
-    // which has *just* done this.
     if (!options.skipPrecedence) {
         invalidPrecedenceNodes = validatePrecedence();
     }
@@ -485,14 +484,12 @@ function updateUI(options = {}) {
     }
 
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-
-    // We *update* precedence, we don't *redraw* it.
     if (activeTab === 'precedence') {
         if (!options.skipPrecedence) {
             PrecedenceTab.update(invalidPrecedenceNodes);
         }
     }
-    // Handle all OTHER tabs by redrawing them
+
     else if (activeTab === 'layout' || activeTab === 'schedule' || activeTab === 'efficiency' || activeTab === 'profit' || activeTab === 'location') {
         stopAllSimulations();
         if (activeTab === 'layout') LayoutTab.draw();
@@ -501,8 +498,6 @@ function updateUI(options = {}) {
         if (activeTab === 'profit') ProfitTab.draw();
         if (activeTab === 'location') LocationTab.draw();
     }
-    // *** END KEY FIX ***
-
     setWorkstationListHeight();
 }
 
@@ -622,7 +617,6 @@ function setupEventListeners() {
     });
 }
 
-// Focus clears visual contents but keeps committed value until commit
 // Commit on Enter, Escape (revert), Blur (with special empty handling)
 function attachCommitBehavior(inputs, onCommit) {
     const timers = new WeakMap();
@@ -657,7 +651,6 @@ function attachCommitBehavior(inputs, onCommit) {
         });
 
         // On pointerdown, capture whether the down occurred in the right-side "spinner" region.
-        // This is an approximation (32px from the right) to detect clicks on native step buttons so we can avoid clearing.
         input.addEventListener('pointerdown', (ev) => {
             const rect = input.getBoundingClientRect();
             const inSpinnerArea = (ev.clientX >= rect.right - 32);
@@ -681,7 +674,6 @@ function attachCommitBehavior(inputs, onCommit) {
             const hoveredLongAgo = input._hovering && (now - lastPointerEnterTime) > 300;
             const clickedOnSpinner = pointerDownRecent && pd.inSpinnerArea;
 
-            // Decision logic:
             // - If user clicked on the approximate spinner area, DO NOT clear (allow spinner to work)
             // - If the user hovered over the input for >300ms before focusing, treat as "hover intent" -> DO NOT clear
             // - Otherwise (keyboard focus or quick click to type), CLEAR for typing experience
@@ -902,7 +894,6 @@ function setupUIEventListeners() {
     });
 
     // --- Position the Switch Next to the "Operational Inputs" Title ---
-    // Note: This robustly finds the title above the 'dailyDemand' input.
     const demandInputContainer = dailyDemandInput.closest('.input-group, .form-group, div');
     if (demandInputContainer) {
         const operationalTitle = demandInputContainer.previousElementSibling;
@@ -1594,7 +1585,7 @@ async function calculateOptimalProfitData() {
 
     const key = getFinancialInputsKey() + '-demand50plus';
     if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
-        ProfitTab.draw(); // Show loading state
+        ProfitTab.draw();
     }
 
     setTimeout(() => {
