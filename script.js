@@ -1833,4 +1833,4 @@ async function drawOverviewPanel() {
 }
 
 // Run the application
-main();
+document.addEventListener('DOMContentLoaded', main());
