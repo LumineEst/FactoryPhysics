@@ -1105,6 +1105,243 @@
             \[\text{LTL Rate} = \frac{(\text{PPI} \times 0.19454) \cdot q \cdot d}{(q^{1/7}
             \cdot d^{15/29}) - 3.5}\]
         </p>
+        <h4>Holding Cost Calculation</h4>
+        <p>
+            The <strong
+                data-tooltip="Costs associated with storing inventory, including capital, storage, service, and risk costs.">
+                inventory holding cost
+            </strong> rate (%) displayed in the Location Tab is an estimated value derived from four
+            primary components, as calculated by the <code>calculateHoldingCostBreakdown</code> function:
+        </p>
+        <ul>
+            <li>
+                <strong>Capital Cost (Opportunity Cost):</strong> This represents the return that could
+                have been earned if the capital tied up in inventory were invested elsewhere. It's directly set by the
+                <strong
+                    data-tooltip="Minimum Acceptable Rate of Return: The hurdle rate or required return an investor expects for undertaking the risk of an investment.">MARR</strong>
+                value from the Investment tab.
+                \[ \text{Capital Cost} = \text{MARR} \]
+            </li>
+            <li>
+                <strong>Service Costs:</strong> Includes insurance, taxes, and handling. This component
+                is calculated based on the number of working days per year (affecting insurance/handling needs) and the
+                corporate tax rate.
+                \[ \text{Service Cost} = \text{5%} + (\text{5%} \times \frac{\text{Working Days}}{365}) + (10
+                \times {\text{Tax Rate%}}) \]
+            </li>
+            <li>
+                <strong>Storage Space Costs:</strong> Represents the cost of the physical space
+                (warehouse rent, utilities). This cost is dynamically estimated based on the proximity to customers. It
+                assumes that locations closer to dense customer areas (shorter minimum shipping distance) likely have
+                higher real estate costs. A linear scale is used, ranging from 10% for locations very close (50 miles)
+                to 4% for more remote locations (500+ miles).
+                \[ \text{Storage Cost} = \text{Scale}(\min(\text{Distances to Cities})) \quad
+                \text{[Scale: 50mi → 10%, 500mi → 4%]} \]
+            </li>
+            <li>
+                <strong>Inventory Risk Costs:</strong> Covers obsolescence, damage, theft, and
+                perishability. This is estimated based on the average shipment frequency to customers. More frequent
+                shipments imply faster inventory turnover, reducing these risks. A power scale is used, ranging from 5%
+                for very frequent shipments (e.g., weekly) up to 15% for less frequent shipments (e.g., bi-monthly).
+                \[ \text{Risk Cost} = \text{Scale}(\text{Average}(\text{Shipment Frequencies})) \quad
+                \text{[Scale: 7 days → 5%, 60 days → 15%]} \]
+            </li>
+        </ul>
+        <p>The total estimated holding cost rate is the sum of these four components. This rate is then used in
+            the daily inventory simulation.</p>
+
+        <h4>Shipping Strategy & Simulation (<code>simulation.worker.js</code>)</h4>
+        <p>
+            The core logic for scheduling shipments and simulating daily inventory levels resides in a
+            separate <strong
+                data-tooltip="A script running in the background, separate from the main browser thread, to perform computationally intensive tasks without freezing the user interface.">Web
+                Worker</strong> (<code>simulation.worker.js</code>). This prevents complex calculations from blocking
+            the user interface. The process involves two main functions: <code>findOptimalShipmentSchedule</code> and
+            <code>performSimulation</code>.
+        </p>
+
+                <h4>Shipment Scheduling (<code>findOptimalShipmentSchedule</code> & MILP with Heuristic)</h4>
+        <p>
+            Before the daily simulation runs, an optimal shipment schedule is determined using <strong
+                data-tooltip="Mixed Integer Linear Programming: A mathematical optimization technique used to find the best outcome (e.g., minimum cost, maximum profit) in a model where some variables must be integers (often binary 0/1).">Mixed
+                Integer Linear Programming (MILP)</strong> combined with a heuristic for efficiency. MILP is a powerful
+            technique for solving problems with constraints where some decisions are discrete (like choosing which day
+            to start shipping).
+        </p>
+        <p>
+            The goal remains to **minimize the peak daily shipment volume (`Z`)** across the entire year,
+            subject to meeting the required shipment frequency for each city. This levels the workload on the warehouse
+            and transportation system. The model setup is modified by a heuristic for selecting candidate start days:
+        </p>
+        <ul>
+            <li>
+                <strong>Variables:</strong>
+                <ul>
+                    <li><code>Z</code>: A continuous variable representing the maximum number of
+                        units shipped on any single day (the value to be minimized).</li>
+                    <li><code>x<sub>city, startDay</sub></code>: A binary (0 or 1) variable for each
+                        city and a *selected subset* of potential starting days. It's 1 if the city's schedule *starts*
+                        on that day, and 0 otherwise.</li>
+                </ul>
+            </li>
+            <li>
+                <strong>Heuristic for Candidate Start Day Selection:</strong>
+                <ul>
+                    <li>
+                        <strong>Low Frequency (≤ 11 days):</strong> For cities with a shipment
+                        frequency at or below the <code>HIGH_FREQUENCY_THRESHOLD</code> (11 days), the solver considers
+                        *all* possible start days from 1 up to the frequency.
+                    </li>
+                    <li>
+                        <strong>High Frequency (> 11 days):</strong> For cities with longer
+                        frequencies, a heuristic is used to select a smaller, smarter set of candidate start days to
+                        reduce computational load:
+                        <ol>
+                            <li>Generate 11 initial candidates evenly spaced throughout the
+                                frequency cycle (e.g., `floor(i * freq / 11) + 1`).</li>
+                            <li>Score each candidate using
+                                <code>scoreCandidateStartDay</code>. This score reflects:
+                                <ul>
+                                    <li>Potential **clashes**: Sums the quantity of
+                                        shipments from *other* cities that would occur on the same days, assuming a
+                                        default start day for those other cities.</li>
+                                    <li>**Day-of-Week (DOW) distribution**:
+                                        Calculates the variance in how often shipments fall on each day of the week
+                                        (0-6). Lower variance (more even spread) is better.</li>
+                                    <li>The final score combines the clash score and
+                                        a weighted DOW variance (scaled by the city's shipment quantity). Lower scores
+                                        indicate days that are less likely to clash and distribute shipments more evenly
+                                        through the week.</li>
+                                </ul>
+                            </li>
+                            <li>Select the top <code>HEURISTIC_CANDIDATE_COUNT</code>
+                                (currently 7) candidates with the *lowest* scores. These are the only start days
+                                considered by the MILP solver for this high-frequency city.</li>
+                        </ol>
+                        This heuristic aims to "fill in the gaps" by preferring start days that
+                        avoid common clash days (especially with high-volume or weekly shipments) and spread the load
+                        across the week.
+                    </li>
+                </ul>
+            </li>
+            <li>
+                <strong>Constraints:</strong>
+                <ol>
+                    <li>
+                        <strong>Start Day Selection:</strong> Each city must choose exactly one
+                        starting day from its *allowed candidate options*.
+                        \[ \sum_{\text{candidate startDay}} x_{\text{city, startDay}} = 1 \quad
+                        (\forall \text{ city}) \]
+                    </li>
+                    <li>
+                        <strong>Daily Load Limit:</strong> For every day `t`, the total quantity
+                        of units scheduled (based on the chosen start days and frequencies) must not exceed `Z`.
+                        \[ \sum_{\text{city}}
+                        \sum_{\substack{\text{chosen startDay } t}} (\text{Quantity}_{\text{city}} \times x_{\text{city, startDay}}) \le Z \quad (\forall \text{ day } t) \]
+                    </li>
+                </ol>
+            </li>
+        </ul>
+        <p>
+            This refined MILP model is formulated as a string and solved using the <strong
+                data-tooltip="High Performance Optimization Software: An open-source solver for linear programming (LP), mixed-integer programming (MIP), and quadratic programming (QP) problems.">HiGHS</strong>
+            solver via WebAssembly. The heuristic significantly reduces the number of binary variables for
+            high-frequency cities, making optimization feasible within the browser while still aiming for a well-staggered, 
+            low-peak schedule. If the solver fails, a simple heuristic (starting each city on day 1) is
+            used as a fallback.
+        </p>
+
+        <h4>Daily Inventory Simulation (<code>performSimulation</code>)</h4>
+        <p>
+            This function simulates the inventory flow day-by-day for a full year (365 days), incorporating
+            production, scheduled shipments, holding costs, and exception handling:
+        </p>
+        <ol>
+            <li>
+                <strong>Initialization:</strong> Creates an array representing 365 days, marking working
+                days based on the user's calendar selection. Sets initial inventory to zero (no starting buffer).
+                Calculates daily holding rate (`holdingCostRate / 365`) and average COGS per unit.
+            </li>
+            <li>
+                <strong>Daily Loop (Day 0 to 364):</strong>
+                <ul>
+                    <li>
+                        <strong>Inventory Start:</strong> Carry over the previous day's ending
+                        inventory.
+                    </li>
+                    <li>
+                        <strong>Production:</strong> If it's a working day (and not flagged as
+                        an exception/reduction day), add the `standardDailyProduction` and record `standardOpHours`.
+                        Inventory available becomes `inventoryStart + production`.
+                    </li>
+                    <li>
+                        <strong>Check Shipments:</strong> Look up the total units scheduled
+                        (`shipments`) for the current day based on the MILP output.
+                    </li>
+                    <li>
+                        <strong>First-Week Deferral:</strong> If within the first 7 days,
+                        inventory is insufficient for a scheduled shipment, the simulation attempts to defer the
+                        *entire* shipment to the next available *working day* within the next 7 days. If successful, the
+                        original day is marked, and the shipment is moved in the schedule data.
+                    </li>
+                    <li>
+                        <strong>Shortfall Detection (Exceptions):</strong> If, after potential
+                        deferral, the `inventoryAvailable` is still less than the `shipments` scheduled for *today*, a
+                        shortfall occurs.
+                        <ul>
+                            <li>The simulation flags the day (`demandMet = false`).</li>
+                            <li><strong>Overtime Lookback:</strong> It then iterates
+                                *backwards* from the previous day, searching for *working days* that haven't already
+                                been used for exceptions or planned reductions.</li>
+                            <li>For each suitable past day found, it calculates the maximum
+                                possible *additional* production achievable by increasing operating hours up to a limit
+                                (e.g., 1.5x standard hours, capped at 24h).</li>
+                            <li>It adds the necessary extra production (up to the max
+                                possible for that day) to cover the shortfall, increasing that past day's `production`
+                                and `opHours`.</li>
+                            <li>The past day is marked as an `isExceptionDay`, and the
+                                `exceptionCost` is calculated, including both the overtime premium (0.5x labor rate) and
+                                the *incremental* scaled overhead cost due to the longer hours. These extra hours are
+                                tracked (`accumulatedExtraHours`).</li>
+                            <li>This continues until the shortfall is covered or it runs out
+                                of past days to modify.</li>
+                            <li>If the shortfall *cannot* be covered by looking back, a
+                                critical "Demand Conflict" error is generated for the UI, but the simulation continues
+                                to record the failure state.</li>
+                        </ul>
+                    </li>
+                    <li>
+                        <strong>Fulfill Shipments:</strong> The `actualShipments` for the day
+                        are set to the minimum of (`inventoryAvailable` *after* any OT adjustments) and the `shipments`
+                        scheduled for today. `actualShipmentDetails` are populated proportionally based on what was
+                        scheduled vs. what could actually ship.
+                    </li>
+                    <li>
+                        <strong>Inventory End:</strong> Calculated as `inventoryAvailable -
+                        actualShipments`.
+                    </li>
+                    <li>
+                        <strong>Holding Cost:</strong> Calculated for the day based on the
+                        `inventoryEnd`, the average `COGS`, and the `dailyHoldingRate`.
+                        \[ \text{Holding Cost}_{\text{day}} = \max(0, \text{Inventory End}_{\text{day}}) \times \text{Average COGS} \times \text{Daily Holding Rate} \]
+                    </li>
+                </ul>
+            </li>
+            <li>
+                <strong>Offsetting Logic:</strong> After the 365-day loop, if any
+                `accumulatedExtraHours` were used for overtime, the simulation attempts to offset these by canceling
+                *future* standard working days. It iterates *backwards* from the end of the year. If canceling a
+                standard day (setting production/hours to 0) doesn't cause the simulated final inventory to drop below a
+                target (currently 0), the day is canceled, marked as `isReductionDay`, and its standard hours are
+                subtracted from the `hoursToOffset`. This continues until all OT hours are offset or no more days can be
+                safely canceled.
+            </li>
+            <li>
+                <strong>Results:</strong> The function returns the completed 365-day data array,
+                including inventory levels, actual shipments, holding costs, exception costs, and flags for each day. If
+                a critical demand conflict occurred, an error message is also returned.
+            </li>
+        </ol>
     </div>
 </body>
 
