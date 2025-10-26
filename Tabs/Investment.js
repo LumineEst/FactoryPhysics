@@ -526,7 +526,7 @@ const drawInvestmentPanel = (function () {
                     'inv-workingDays': 'The Number of Production Days in a Year.',
                     'inv-mfgOverhead': 'Annual Fixed Manufacturing Expenses not tied to Production (Rent, Utilties).',
                     'inv-sgaExpenses': 'Annual Fixed Selling, General, and Administrative Expenses (Salaries, Marketing).',
-                    'inv-freightExpense': 'Annual Variable Cost of Shipping Finished Goods.',
+                    'inv-freightExpense': 'Annual Variable Cost of Shipping and Storing Finished Goods.',
                     'inv-costPerFootStraight': 'The Capital Cost for each Linear Foot of the Straight Conveyor Belt.',
                     'inv-costPerBend': 'The Capital Cost for each 90-Degree Bend in the Conveyor System.',
                     'inv-installationCost': 'The Fixed Cost to Install the New or Modified Assembly Line.',
