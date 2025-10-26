@@ -1,3 +1,4 @@
+
 // --- simulation.worker.js ---
 
 // --- Globals & Solver Initialization ---
@@ -485,9 +486,25 @@ async function performSimulation(params) {
 
                 // Check if demand was ultimately met
                 if (!dailyData[day].demandMet) {
-                    simulationError = `CRITICAL: Cannot meet scheduled ${finalShipmentsNeededToday.toFixed(0)}u on day ${day}. Short by ${remainingShortfall.toFixed(0)}u.`;
-                    console.error("WORKER:", simulationError);
-                    dailyData[day].exceptionDetails = (dailyData[day].exceptionDetails ? dailyData[day].exceptionDetails + "; " : "") + simulationError;
+                    // --- MODIFICATION: Generate detailed conflict error message ---
+                    let conflictDetails = [];
+                    // finalDetailsNeededToday holds the shipments that were *scheduled* for this day
+                    if (finalDetailsNeededToday && finalDetailsNeededToday.length > 0) {
+                        finalDetailsNeededToday.forEach(detail => {
+                            conflictDetails.push(`- City: ${detail.city} (Qty: ${detail.qty}, Freq: ${detail.freq}, Start: ${detail.startDay})`);
+                        });
+                    } else {
+                        conflictDetails.push("- No specific city details found for this day's failed shipment.");
+                    }
+
+                    simulationError = `Demand Conflict: Day ${day + 1}\n` +
+                        `Cannot meet scheduled ${finalShipmentsNeededToday.toFixed(0)}u. Short by ${remainingShortfall.toFixed(0)}u.\n\n` +
+                        `Conflicting Shipments:\n` +
+                        `${conflictDetails.join('\n')}`;
+                    // --- END MODIFICATION ---
+
+                    console.error("WORKER:", simulationError); // Log the new detailed error
+                    dailyData[day].exceptionDetails = (dailyData[day].exceptionDetails ? dailyData[day].exceptionDetails + "; " : "") + `CRITICAL SHORTFALL: ${remainingShortfall.toFixed(0)}u`; // Keep exception detail simple
                     dailyData[day].isExceptionDay = true;
                     // Let simulation continue to record failure state
                 } else {
