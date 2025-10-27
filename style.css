@@ -1276,7 +1276,7 @@ input:checked+.slider:before {
 
 #location-panel .state-boundary {
     fill: var(--accent);
-    stroke: #ffffff;
+    stroke: var(--white);
     stroke-width: 1px;
 }
 
@@ -1302,6 +1302,10 @@ input:checked+.slider:before {
 }
 
 #location-panel .arrowhead {
+    fill: var(--secondary1);
+}
+
+#location-panel .arrowhead path{
     fill: var(--secondary1);
 }
 
