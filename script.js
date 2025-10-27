@@ -191,6 +191,12 @@ async function main() {
     document.querySelectorAll("input[type='range']").forEach(input => {
         enableMiddleDragNumberInput(input, 1, 1);
     });
+    // Wire right-sidebar tooltips for operational and financial controls
+    try {
+        wireRightSidebarTooltips();
+    } catch (err) {
+        console.error('Failed to attach right-sidebar tooltips:', err);
+    }
 }
 
 /**
@@ -312,6 +318,81 @@ function parseElementValue(element) {
 }
 
 /**
+ * Updates the right-sidebar Financial Metrics (NPV, IRR, Payback) using the
+ * same animateValue helper and formatting used elsewhere. Accepts an object
+ * with numeric values: { npv, irr, payback } where irr is decimal (e.g. 0.12)
+ * and payback is in years (fractional).
+ */
+function updateFinancialSidebar({ npv, irr, payback } = {}) {
+    try {
+        const npvEl = document.getElementById('npvMetric');
+        const irrEl = document.getElementById('irrMetric');
+        const paybackEl = document.getElementById('paybackMetric');
+
+        const npvVal = isFinite(npv) ? npv : 0;
+        const irrIsValid = !isNaN(irr) && isFinite(irr);
+        const irrPercent = irrIsValid ? (irr * 100) : NaN;
+        const paybackIsFinite = isFinite(payback);
+        const paybackDays = paybackIsFinite ? Math.ceil(payback * 365.2425) : NaN;
+
+        const getStartNumber = (el) => {
+            if (!el) return 0;
+            if (typeof parseElementValue === 'function') return parseElementValue(el) || 0;
+            const txt = (el.textContent || '').replace(/[$,]|\s|Days|Day|%/gi, '');
+            return parseFloat(txt) || 0;
+        };
+
+        const startNpv = getStartNumber(npvEl);
+        const startIrr = getStartNumber(irrEl);
+        const startPayback = getStartNumber(paybackEl);
+
+        const hasAnimator = (typeof animateValue === 'function');
+
+        // NPV: animate when possible, otherwise set immediately
+        if (npvEl) {
+            if (hasAnimator && isFinite(npvVal) && startNpv !== npvVal) {
+                animateValue(npvEl, startNpv, npvVal, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }));
+            } else {
+                npvEl.textContent = npvVal.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+            }
+        }
+
+        // IRR: show percent when valid, otherwise 'No Return'
+        if (irrEl) {
+            if (irrIsValid) {
+                if (hasAnimator && startIrr !== irrPercent) {
+                    animateValue(irrEl, startIrr, irrPercent, 800, val => `${val.toFixed(1)}%`);
+                } else {
+                    irrEl.textContent = `${(irr * 100).toFixed(1)}%`;
+                }
+            } else {
+                // Immediately set 'No Return' when irr is invalid
+                irrEl.textContent = 'No Return';
+            }
+        }
+
+        // Payback: show days when finite, otherwise 'Net Loss'
+        if (paybackEl) {
+            if (paybackIsFinite) {
+                if (hasAnimator && startPayback !== paybackDays) {
+                    animateValue(paybackEl, startPayback, paybackDays, 800, val => `${Math.round(val)} Days`);
+                } else {
+                    paybackEl.textContent = `${paybackDays} Days`;
+                }
+            } else {
+                // Immediately set 'Net Loss' when payback is infinite/not finite
+                paybackEl.textContent = 'Net Loss';
+            }
+        }
+    } catch (err) {
+        console.error('updateFinancialSidebar failed:', err);
+    }
+}
+
+// Expose helper globally for tabs to call
+if (typeof window !== 'undefined') window.updateFinancialSidebar = updateFinancialSidebar;
+
+/**
 * Enhances a number or range input to allow value changes via
 * middle-mouse-button drag, mouse wheel scroll, and Ctrl+Click to reset.
 * @param {HTMLInputElement} input - The input element to enhance.
@@ -320,72 +401,114 @@ function parseElementValue(element) {
 */
 function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
     let isDragging = false;
-    let startY, startValue;
-    const defaultValues = {
-        'dailyDemand': 180,
-        'opHours': 15.0,
-        'numEmployees': 8,
-        'laborCost': 25.0,
-        'superSell': 400,
-        'superCogs': 375,
-        'ultraSell': 650,
-        'ultraCogs': 590,
-        'megaSell': 1000,
-        'megaCogs': 960
-    };
+    let startY = 0;
+    let startValue = 0;
+
     const getConstraints = () => {
         const min = input.hasAttribute('min') ? parseFloat(input.min) : -Infinity;
         const max = input.hasAttribute('max') ? parseFloat(input.max) : Infinity;
-        const stepValue = parseFloat(input.step) || 1;
+        const stepValue = input.id === 'opHours' ? 0.25 : (parseFloat(input.step) || 1);
         return { min, max, step: stepValue };
     };
-    input.addEventListener("mousedown", (e) => {
-        if (e.button === 1) {
+
+    // Count decimals reliably (handles normal decimals and small exponent forms)
+    const countDecimals = (n) => {
+        if (!isFinite(n)) return 0;
+        const s = String(n);
+        if (s.indexOf('e-') > -1) {
+            const match = s.match(/e-(\d+)$/);
+            return match ? parseInt(match[1], 10) : 0;
+        }
+        const parts = s.split('.');
+        return parts[1] ? parts[1].length : 0;
+    };
+
+    const formatValue = (val, stepVal) => {
+        if (!isFinite(val)) return '';
+        const decimals = Math.max(0, countDecimals(stepVal));
+        // Return exact multiple-of-step style formatting (no nearest rounding to unrelated multiples)
+        return Number(val).toFixed(decimals);
+    };
+
+    // Robust numeric parser for displayed input values (handles currency formatting, commas)
+    const parseDisplayedNumber = (v) => {
+        if (v === null || v === undefined) return 0;
+        if (typeof v === 'number' && Number.isFinite(v)) return v;
+        let s = String(v).trim();
+        if (s === '') return 0;
+        // Remove currency symbols, commas, spaces, and parentheses
+        s = s.replace(/\(([^)]+)\)/, '-$1'); // convert (123) to -123
+        s = s.replace(/[^0-9eE+\-\.]/g, '');
+        const n = parseFloat(s);
+        return Number.isFinite(n) ? n : 0;
+    };
+
+    // Use pointerdown for better compatibility inside foreignObject / SVG wrappers
+    input.addEventListener("pointerdown", (e) => {
+        if (e.pointerType === 'mouse' && e.button === 1) {
             e.preventDefault();
             e.stopPropagation();
             isDragging = true;
             startY = e.clientY;
-            startValue = parseFloat(input.value) || 0;
-            const onMouseMove = (ev) => {
+            // Parse displayed value robustly (handles currency/text inputs)
+            startValue = parseDisplayedNumber(input.value || input.dataset.committedValue || 0);
+            try { console.debug && console.debug('pointerdown startValue=', startValue, 'id=', input.id); } catch (err) {}
+
+            const onPointerMove = (ev) => {
                 if (!isDragging) return;
                 const deltaY = startY - ev.clientY;
                 const constraints = getConstraints();
-                let newVal = startValue + deltaY * sensitivity * step;
+                // Compute integer steps moved from the start position so value changes by exact multiples of step
+                const deltaSteps = Math.round(deltaY * sensitivity);
+                let newVal = startValue + (deltaSteps * constraints.step);
                 newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
-                if (input.type === 'range' || constraints.step === 1) {
-                    input.value = Math.round(newVal).toString();
-                } else if (constraints.step < 1) {
-                    const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
-                    input.value = newVal.toFixed(decimals);
-                } else {
-                    input.value = newVal.toFixed(2);
+                // Preserve comma-formatting for currency inputs
+                try {
+                    try { console.debug && console.debug('pointermove deltaSteps=', deltaSteps, 'newValRaw=', newVal); } catch (err) {}
+                    if (input && input.dataset && input.dataset.type === 'currency') {
+                        const decimals = Math.max(0, countDecimals(constraints.step));
+                        input.value = Number(newVal).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+                    } else {
+                        input.value = formatValue(newVal, constraints.step);
+                    }
+                    try { console.debug && console.debug('pointermove applied value=', input.value, 'id=', input.id); } catch (err) {}
+                } catch (e) {
+                    input.value = formatValue(newVal, constraints.step);
                 }
                 input.dispatchEvent(new Event("input", { bubbles: true }));
             };
-            const onMouseUp = () => {
+
+            const onPointerUp = () => {
                 isDragging = false;
-                document.removeEventListener("mousemove", onMouseMove);
-                document.removeEventListener("mouseup", onMouseUp);
+                document.removeEventListener("pointermove", onPointerMove);
+                document.removeEventListener("pointerup", onPointerUp);
             };
-            document.addEventListener("mousemove", onMouseMove);
-            document.addEventListener("mouseup", onMouseUp);
+
+            document.addEventListener("pointermove", onPointerMove);
+            document.addEventListener("pointerup", onPointerUp);
         }
     });
+
     input.addEventListener("wheel", (e) => {
         if (document.activeElement === input) {
             e.preventDefault();
             const constraints = getConstraints();
             const direction = e.deltaY > 0 ? -1 : 1;
-            let currentValue = parseFloat(input.value) || 0;
+            let currentValue = parseDisplayedNumber(input.value || input.dataset.committedValue || 0);
+            try { console.debug && console.debug('wheel currentValue=', currentValue, 'id=', input.id, 'deltaY=', e.deltaY); } catch (err) {}
+            // change by exactly one step per wheel event
             let newVal = currentValue + (direction * constraints.step);
             newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
-            if (input.type === 'range' || constraints.step === 1) {
-                input.value = Math.round(newVal).toString();
-            } else if (constraints.step < 1) {
-                const decimals = Math.max(0, -Math.floor(Math.log10(constraints.step)));
-                input.value = newVal.toFixed(decimals);
-            } else {
-                input.value = newVal.toFixed(2);
+            try {
+                if (input && input.dataset && input.dataset.type === 'currency') {
+                    const decimals = Math.max(0, countDecimals(constraints.step));
+                    input.value = Number(newVal).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+                } else {
+                    input.value = formatValue(newVal, constraints.step);
+                }
+                try { console.debug && console.debug('wheel applied value=', input.value, 'id=', input.id); } catch (err) {}
+            } catch (err) {
+                input.value = formatValue(newVal, constraints.step);
             }
             input.dispatchEvent(new Event("input", { bubbles: true }));
         }
@@ -527,6 +650,12 @@ function renderWorkstationSidebar(numEmployees) {
 
     const accentColor = getComputedStyle(root).getPropertyValue('--accent').trim();
 
+    // Use the project's standardized D3 tooltip (shared single instance)
+    const tooltip = createTooltip('workstation-tooltip');
+    // Ensure tooltip is non-interactive and above everything so delegation works across stacking contexts
+    tooltip.style('pointer-events', 'none').style('z-index', 9999);
+
+    // Build DOM structure as before but DO NOT attach per-row listeners.
     sortedStationIds.forEach((stationId, stationIndex) => {
         const elementsInStation = config[stationId];
         const elementColorScale = generateElementColorScale(stationIndex, numWorkstations, elementsInStation.length);
@@ -535,18 +664,20 @@ function renderWorkstationSidebar(numEmployees) {
 
         const title = document.createElement('div');
         title.className = 'workstation-title';
-        title.textContent = `Workstation ${stationId}`;
+        // Compute station physical length in feet (each unit of elementTime == 15 ft)
+        const stationTotalElementTime = elementsInStation.reduce((s, tId) => s + (state.taskData.get(tId)?.elementTime || 0), 0);
+        const stationLengthFt = stationTotalElementTime * 15;
+        title.textContent = `Workstation ${stationId} — ${stationLengthFt.toFixed(1)} ft`;
         workstationDiv.appendChild(title);
 
         const elementsContainer = document.createElement('div');
         elementsContainer.className = 'workstation-elements';
         elementsInStation.forEach((taskId, elementIndex) => {
-            const task = state.taskData.get(taskId);
+                const task = state.taskData.get(taskId);
             if (task) {
                 const elementColor = elementColorScale(elementIndex);
                 const elementRow = document.createElement('div');
                 elementRow.className = 'element-row';
-                elementRow.title = `Element ${taskId}: ${task.description}`;
                 elementRow.dataset.taskId = taskId;
 
                 const barWrapper = document.createElement('div');
@@ -581,6 +712,9 @@ function renderWorkstationSidebar(numEmployees) {
                 elementTimeBar.appendChild(laborTimeBar);
                 barWrapper.appendChild(elementTimeBar);
                 elementRow.appendChild(barWrapper);
+                // also expose the parent workstation id and length on the row for tooltip use
+                elementRow.dataset.workstationId = stationId;
+                elementRow.dataset.workstationLengthFt = stationLengthFt.toFixed(1);
                 elementsContainer.appendChild(elementRow);
             }
         });
@@ -588,6 +722,71 @@ function renderWorkstationSidebar(numEmployees) {
         workstationList.appendChild(workstationDiv);
     });
 
+    // Delegated tooltip handling so listeners survive tab switches and DOM rebuilds.
+    // Only attach once.
+    if (!workstationList._hasTooltipDelegation) {
+        let activeRow = null;
+
+        const buildTooltipHtmlForTask = (task, opts = {}) => {
+            if (!task) return '';
+            const desc = task.description ? `<div class="tt-desc">${task.description}</div>` : '';
+            const et = isFinite(task.elementTime) ? task.elementTime.toFixed(2) : '—';
+            const lt = isFinite(task.laborTime) ? task.laborTime.toFixed(2) : '—';
+            // Element physical length in feet (each elementTime unit maps to 15 ft)
+            const elLenFt = isFinite(task.elementTime) ? (task.elementTime * 15).toFixed(1) : null;
+            const elLenRow = elLenFt != null ? `<div class="tooltip-row"><span class="tooltip-key">Element Length</span><span>${elLenFt} ft</span></div>` : '';
+            const wsId = opts.wsId || task._workstationId || '';
+            const wsLen = opts.wsLen != null ? opts.wsLen : (task._workstationLengthFt != null ? task._workstationLengthFt : null);
+            const wsRow = wsLen != null ? `<div class="tooltip-row"><span class="tooltip-key">Workstation Length</span><span>${wsLen} ft</span></div>` : '';
+            const wsIdRow = wsId ? `<div class="tooltip-row"><span class="tooltip-key">Workstation</span><span>${wsId}</span></div>` : '';
+            return `<div class="tt-title">Element ${task._id || ''}</div>${desc}${wsIdRow}${wsRow}${elLenRow}<div class="tt-stats">Element: ${et} min &nbsp;|&nbsp; Labor: ${lt} min</div>`;
+        };
+
+        // pointerover: show tooltip when entering an .element-row
+        workstationList.addEventListener('pointerover', (e) => {
+            const row = e.target.closest?.('.element-row');
+            if (!row || !workstationList.contains(row)) return;
+            activeRow = row;
+            const taskId = parseInt(row.dataset.taskId);
+            const task = state.taskData.get(taskId);
+            // Provide a small guard: if task missing, don't show
+            if (!task) return;
+            // keep task id handy in tooltip (used in build)
+            task._id = taskId;
+            // attach workstation metadata from the DOM (if available)
+            task._workstationId = row.dataset.workstationId || '';
+            task._workstationLengthFt = row.dataset.workstationLengthFt != null ? row.dataset.workstationLengthFt : null;
+            tooltip.html(buildTooltipHtmlForTask(task, { wsId: task._workstationId, wsLen: task._workstationLengthFt }))
+                .style('opacity', 1)
+                .style('left', `${e.pageX + 12}px`)
+                .style('top', `${e.pageY + 12}px`);
+        });
+
+        // pointermove: update position while over the active row
+        workstationList.addEventListener('pointermove', (e) => {
+            if (!activeRow) return;
+            // Ensure the pointer is still inside the activeRow; otherwise ignore
+            const rowUnderPointer = e.target.closest?.('.element-row');
+            if (rowUnderPointer !== activeRow) return;
+            tooltip.style('left', `${e.pageX + 12}px`)
+                .style('top', `${e.pageY + 12}px`);
+        });
+
+        // pointerout: hide tooltip when leaving the .element-row
+        workstationList.addEventListener('pointerout', (e) => {
+            const fromRow = e.target.closest?.('.element-row');
+            const toEl = e.relatedTarget;
+            // If we left a row and are not moving into a descendant of that same row, hide
+            if (fromRow && (!toEl || !fromRow.contains(toEl))) {
+                activeRow = null;
+                tooltip.style('opacity', 0);
+            }
+        });
+
+        workstationList._hasTooltipDelegation = true;
+    }
+
+    // Adjust top padding to visually align with svg container
     const firstTitle = workstationList.querySelector('.workstation-title');
     const svgContainer = document.getElementById('svg-container');
     if (firstTitle && svgContainer) {
@@ -671,13 +870,11 @@ function attachCommitBehavior(inputs, onCommit) {
             const now = Date.now();
             const pd = lastPointerDown.get(input);
             const pointerDownRecent = pd && (now - pd.time < 300);
-            const hoveredLongAgo = input._hovering && (now - lastPointerEnterTime) > 300;
             const clickedOnSpinner = pointerDownRecent && pd.inSpinnerArea;
 
-            // - If user clicked on the approximate spinner area, DO NOT clear (allow spinner to work)
-            // - If the user hovered over the input for >300ms before focusing, treat as "hover intent" -> DO NOT clear
-            // - Otherwise (keyboard focus or quick click to type), CLEAR for typing experience
-            const shouldClearForTyping = !(clickedOnSpinner || hoveredLongAgo);
+            // If user clicked on the approximate spinner area, do not clear (allow spinner to work).
+            // Otherwise clear on focus to provide an immediate typing/clearing experience.
+            const shouldClearForTyping = !clickedOnSpinner;
 
             if (shouldClearForTyping) {
                 // Clear for typing and mark awaitingInput so blur logic knows
@@ -798,6 +995,24 @@ function attachCommitBehavior(inputs, onCommit) {
         'megaSell': 1000,
         'megaCogs': 960
     };
+    // Economic parameters defaults (inv- prefixed inputs)
+    Object.assign(defaultValues, {
+        'inv-analysisPeriod': 5,
+        'inv-marr': 12.0,
+        'inv-taxRate': 25.0,
+        'inv-mfgOverhead': 250000,
+        'inv-sgaExpenses': 350000,
+        'inv-freightExpense': 300000,
+        'inv-costPerFootStraight': 225,
+        'inv-costPerBend': 450,
+        'inv-installationCost': 10000,
+        'inv-salvageValue': 10000,
+        'inv-std': 6804,
+        'inv-cv': 15.0,
+        'inv-ciLevel': 95,
+        'inv-p90Demand': 58696,
+        'inv-p10Demand': 32024
+    });
 
     inputs.forEach(input => {
         if (!input) return;
@@ -828,13 +1043,35 @@ function commitInput(input, onCommit) {
         input.value = input.dataset.committedValue ?? '';
         return;
     }
-    const n = Number(raw);
+    // Parse displayed value robustly: handle commas, currency symbols, parentheses for negatives
+    let cleaned = raw.replace(/\(([^)]+)\)/, '-$1');
+    cleaned = cleaned.replace(/[^0-9eE+\-\.]/g, '');
+    const n = parseFloat(cleaned);
     if (!Number.isFinite(n)) {
         input.value = input.dataset.committedValue ?? '';
         return;
     }
     const clamped = clampByField(input.id, n);
-    input.value = String(clamped);
+
+    // If this is a currency-styled input, format with commas/decimals for display
+    try {
+        if (input && input.dataset && input.dataset.type === 'currency') {
+            // Try to preserve decimals based on step attribute when present
+            const stepVal = input.id === 'opHours' ? 0.25 : (parseFloat(input.step) || 1);
+            const decimals = Math.max(0, (function (s) {
+                if (!isFinite(s)) return 0;
+                const str = String(s);
+                if (str.indexOf('e-') > -1) { const m = str.match(/e-(\d+)$/); return m ? parseInt(m[1], 10) : 0; }
+                const parts = str.split('.'); return parts[1] ? parts[1].length : 0;
+            })(stepVal));
+            input.value = Number(clamped).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+        } else {
+            input.value = String(clamped);
+        }
+    } catch (err) {
+        input.value = String(clamped);
+    }
+
     input.dataset.committedValue = input.value;
     if (typeof onCommit === 'function') onCommit(input.id, clamped);
 }
@@ -1078,13 +1315,101 @@ function setupDragAndDrop() {
 * @returns {d3.Selection} The D3 selection for the tooltip div.
 */
 function createTooltip(className) {
-    let tooltip = d3.select("body > .d3-tooltip");
+    // Use a specific class selector to avoid conflicts between different tooltips.
+    const selector = `body > .d3-tooltip.${className}`;
+    let tooltip = d3.select(selector);
+
     if (tooltip.empty()) {
         tooltip = d3.select("body").append("div")
             .attr("class", `d3-tooltip ${className || ''}`)
             .style("opacity", 0).style("position", "absolute");
     }
     return tooltip;
+}
+
+// Adds simple tooltip definitions and wires hover handlers for three
+// financial controls in the right sidebar: labor cost, the selling
+// price heading, and the material cost heading. Selling/material
+// headings are header spans inside `.fin-grid`, so we handle those
+// specially when there is no label[for=..].
+function wireRightSidebarTooltips() {
+    const tooltips = {
+        // Operational Inputs
+        'dailyDemand': 'Number of units which can be sold, or which producing more than needed is a liability. Production should match your demand.',
+        'opHours': 'Number of hours the assembly line is running per day.',
+        'numEmployees': 'Total number of employees working. Corresponds to the number of workstations.',
+        // Financial Inputs
+        'laborCost': 'Hourly labor cost per employee.',
+        'sellPriceHeading': 'Selling price per unit (used to compute total revenue).',
+        'materialCostHeading': 'Material / COGS per unit (used to compute cost of goods sold).',
+        // Key Metrics
+        'wip': 'Work in Progress. Number of incomplete products currently being worked on.',
+        'throughput': 'Number of models built within a given time-period, usually an hour.',
+        'conveyorSpeed': 'Conveyor belt speed in feet per minute.',
+        'productSpacing': 'Distance between consecutive products on the line, in feet.',
+        // Efficiency Metrics
+        'avgEfficiency': 'Average percentage of time in which the assembly line/workstation are working on a model.',
+        'totalIdleTime': 'Total amount of time workstations are idle / not working, in hours.',
+        'balanceDelay': 'Percentage of time in which the individual(s) in a workstation/line are idle / not working.',
+        'idleTimeCv': 'Coefficient of variation of idle times across stations (%).',
+        // Financial Metrics
+        'grossProfit': 'Value of goods sold minus COGS. Represents the value a given product provides for the company, to sustain operations.',
+        'profitMargin': 'Percentage of profit compared to total goods sold. Can be either net or gross.',
+        'npvMetric': 'Used to determine the profitability of an investment by comparing the present value of future cash inflows to the initial investment.',
+        'irrMetric': 'Represents the annual rate of return an investment is expected to yield. Is the discount rate that makes the NPV of all cash flows from the investment equal to zero.',
+        'paybackMetric': 'Length of time it takes for an investment to generate enough cash flow to recover its initial cost.'
+    };
+
+    const tooltip = createTooltip('right-sidebar-tooltip');
+    const sidebar = document.getElementById('right-sidebar');
+    if (!sidebar) return;
+    const containerElement = sidebar;
+
+    // locate the fin-grid header spans (sell price and material cost)
+    const finGrid = containerElement.querySelector('.fin-grid');
+    const finSpans = finGrid ? Array.from(finGrid.querySelectorAll('span')) : [];
+
+    // helper: given a strong#id in an output-grid, return the preceding label span
+    const findLabelSpanForStrong = (strongId) => {
+        const strongEl = containerElement.querySelector(`#${strongId}`);
+        if (!strongEl) return null;
+        const prev = strongEl.previousElementSibling;
+        if (prev && prev.tagName && prev.tagName.toLowerCase() === 'span') return prev;
+        return null;
+    };
+
+    for (const [id, text] of Object.entries(tooltips)) {
+        let target = null;
+
+        // First try: label[for="id"] (works for standard input labels)
+        target = containerElement.querySelector(`label[for="${id}"]`);
+
+        // Special-case: fin-grid header spans
+        if (!target) {
+            if (id === 'sellPriceHeading' && finSpans.length >= 2) target = finSpans[1];
+            if (id === 'materialCostHeading' && finSpans.length >= 3) target = finSpans[2];
+        }
+
+        // For metric values, attach to the left-hand label span next to the strong#id
+        if (!target) {
+            target = findLabelSpanForStrong(id);
+        }
+
+        if (target) {
+            target.addEventListener('mouseover', function (event) {
+                tooltip.transition().duration(200).style('opacity', 1);
+                tooltip.html(`<div class="tooltip-row">${text}</div>`)
+                    .style('left', (event.pageX + 15) + 'px')
+                    .style('top', (event.pageY - 28) + 'px');
+            });
+            target.addEventListener('mousemove', function (event) {
+                tooltip.style('left', (event.pageX + 15) + 'px').style('top', (event.pageY - 28) + 'px');
+            });
+            target.addEventListener('mouseout', function () {
+                tooltip.transition().duration(500).style('opacity', 0);
+            });
+        }
+    }
 }
 
 /**
