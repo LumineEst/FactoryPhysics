@@ -17,7 +17,7 @@ const drawInvestmentPanel = (function () {
         salvageValue: 10000,
         runExpansionCase: false,
         // Probabilistic demand parameters
-        std: 6750,
+        std: 6804,
         cv: 15.0,
         ciLevel: 95,
         p90Demand: 0,
@@ -462,6 +462,25 @@ const drawInvestmentPanel = (function () {
             const FmtdPayback = isFinite(scenarioResult.metrics.payback) ? `${Math.ceil(scenarioResult.metrics.payback * 365.2425)} Days` : "Net Loss";
             tooltip.html(`<div class="tooltip-header">${d.name}</div><div class="tooltip-row"><span>NPV:</span> <strong>${scenarioResult.metrics.npv.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</strong></div><div class="tooltip-row"><span>IRR:</span> <strong>${FmtdIRR}</strong></div><div class="tooltip-row"><span>Payback:</span> <strong>${FmtdPayback}</strong></div><hr><div class="tooltip-row"><span>Config:</span> <strong>${scenarioResult.requiredConfig.name}</strong></div><div class="tooltip-row"><span>Annual Demand:</span> <strong>${scenarioResult.annualUnitDemand.toFixed(0).toLocaleString('en-US')} Units</strong></div>`);
         }).on("mousemove", (event) => tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px")).on("mouseout", () => tooltip.transition().duration(500).style("opacity", 0));
+
+        // Centralized update: use script.js helper to update right-sidebar financial metrics
+        try {
+            if (typeof updateFinancialSidebar === 'function') {
+                updateFinancialSidebar({ npv: p50Result.metrics.npv, irr: p50Result.metrics.irr, payback: p50Result.metrics.payback });
+            } else if (typeof window !== 'undefined' && typeof window.updateFinancialSidebar === 'function') {
+                window.updateFinancialSidebar({ npv: p50Result.metrics.npv, irr: p50Result.metrics.irr, payback: p50Result.metrics.payback });
+            } else {
+                // Fallback: immediate DOM set if helper not present
+                const npvEl = document.getElementById('npvMetric');
+                const irrEl = document.getElementById('irrMetric');
+                const paybackEl = document.getElementById('paybackMetric');
+                if (npvEl) npvEl.textContent = isFinite(p50Result.metrics.npv) ? p50Result.metrics.npv.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }) : '$0';
+                if (irrEl) irrEl.textContent = !isNaN(p50Result.metrics.irr) ? `${(p50Result.metrics.irr * 100).toFixed(1)}%` : 'No Return';
+                if (paybackEl) paybackEl.textContent = isFinite(p50Result.metrics.payback) ? `${Math.ceil(p50Result.metrics.payback * 365.2425)} Days` : 'Net Loss';
+            }
+        } catch (err) {
+            console.error('Failed to call updateFinancialSidebar:', err);
+        }
     }
 
     return async function draw() {
@@ -515,27 +534,34 @@ const drawInvestmentPanel = (function () {
                     });
                 }
             } else {
-                console.error("Could not find #inv-workingDays input or label.");
+                // Do not throw an error if the working days input or label is intentionally missing.
+                // Log a warning with contextual info for debugging instead of an error.
+                const missingInput = container.select("#inv-workingDays").empty();
+                const missingLabel = container.select(`label[for="inv-workingDays"]`).empty();
+                console.warn(`inv-workingDays: input missing=${missingInput}, label missing=${missingLabel}`);
             }
 
             setTimeout(() => {
                 const tooltips = {
-                    'inv-analysisPeriod': 'The Number of Years over which the Investment\'s Cash Flows are projected.',
-                    'inv-marr': 'The Minimum Acceptable Rate of Return (MARR) for an Investment to be worth it.',
-                    'inv-taxRate': 'The Corporate Tax Rate applied to Earnings before Tax.',
-                    'inv-workingDays': 'The Number of Production Days in a Year.',
-                    'inv-mfgOverhead': 'Annual Fixed Manufacturing Expenses not tied to Production (Rent, Utilties).',
-                    'inv-sgaExpenses': 'Annual Fixed Selling, General, and Administrative Expenses (Salaries, Marketing).',
-                    'inv-freightExpense': 'Annual Variable Cost of Shipping and Storing Finished Goods.',
-                    'inv-costPerFootStraight': 'The Capital Cost for each Linear Foot of the Straight Conveyor Belt.',
-                    'inv-costPerBend': 'The Capital Cost for each 90-Degree Bend in the Conveyor System.',
-                    'inv-installationCost': 'The Fixed Cost to Install the New or Modified Assembly Line.',
-                    'inv-salvageValue': 'The Estimated Resale Value of Equipment at the end of Analysis Period.',
-                    'inv-std': 'Standard Deviation: The Expected Volatility of Annual Demand around the Expected Value.',
-                    'inv-cv': 'Coefficient of Variation: The Ratio of Standard Deviation to the Mean, to Normalize Volatility across Means.',
-                    'inv-ciLevel': 'Confidence Interval: The Probability that True Annual Demand falls within the Calculated Range to the Right.',
-                    'inv-p10Demand': 'P10 Demand: The Conservative Forecast; there is a 10% Chance of Demand being at least this Low',
-                    'inv-p90Demand': 'P90 Demand: The Optimistic Forecast; there is a 10% Chance of Demand being at least this High.'
+                    'inv-analysisPeriod': 'Number of years over which the investment\'s cash flows are projected.',
+                    'inv-marr': 'Minimum Acceptable Rate of Return (MARR) for an investment to be worth it.',
+                    'inv-taxRate': 'Corporate tax rate applied to earnings before tax.',
+                    'inv-workingDays': 'Number of production days in a year.',
+                    'inv-mfgOverhead': 'Annual fixed manufacturing expenses not tied to production (rent, utilties).',
+                    'inv-sgaExpenses': 'Annual fixed selling, general, and administrative expenses (salaries, marketing).',
+                    'inv-freightExpense': 'Annual variable cost of shipping and storing finished goods.',
+                    'inv-costPerFootStraight': 'Capital cost for each linear foot of the straight conveyor belt.',
+                    'inv-costPerBend': 'Capital cost for each 90-degree bend in the conveyor system.',
+                    'inv-installationCost': 'Fixed cost to install the new or modified assembly line.',
+                    'inv-salvageValue': 'Estimated resale value of equipment at the end of analysis period.',
+                    'inv-std': 'Standard Deviation: Expected volatility of annual demand around the expected value.',
+                    'inv-cv': 'Coefficient of Variation: Ratio of STD to the mean, to normalize volatility across means.',
+                    'inv-ciLevel': 'Confidence Interval: Probability that true annual demand falls within the calculated range to the right.',
+                    'inv-p10Demand': 'P10 Demand: Conservative Forecast; there is a 10% Chance of demand being at least this low',
+                    'inv-p90Demand': 'P90 Demand: Optimistic Forecast; there is a 10% Chance of demand being at least this high.',
+                    'inv-npvmetric': 'Used to determine the profitability of an investment by comparing the present value of future cash inflows to the initial investment.',
+                    'inv-irrmetric': 'Represents the annual rate of return an investment is expected to yield. Is the discount rate that makes the NPV of all cash flows from the investment equal to zero.',
+                    'inv-paybackmetric': 'Length of time it takes for an investment to generate enough cash flow to recover its initial cost.'
                 };
 
                 const tooltip = createTooltip("inv-tooltip");
@@ -584,7 +610,7 @@ const drawInvestmentPanel = (function () {
             if (el) el.value = investmentState[key];
         });
 
-        const fieldsToFormat = ['inv-mfgOverhead', 'inv-sgaExpenses', 'inv-freightExpense', 'inv-installationCost', 'inv-salvageValue'];
+    const fieldsToFormat = ['inv-mfgOverhead', 'inv-sgaExpenses', 'inv-freightExpense', 'inv-installationCost', 'inv-salvageValue', 'inv-std'];
         fieldsToFormat.forEach(id => {
             const input = document.getElementById(id);
             if (input) {
@@ -613,6 +639,44 @@ const drawInvestmentPanel = (function () {
                 }
             }
         });
+
+            // Attach the same commit/auto-commit and middle-drag behaviors used by the right-sidebar
+            // so that Economic Parameters inputs behave identically to right-sidebar textboxes.
+            try {
+                const invInputs = Array.from(container.node().querySelectorAll("input[data-type='currency'], input[type='number'], select")).filter(el => el && el.id !== 'inv-workingDays');
+                    if (invInputs.length) {
+                    // Wire commit behavior: update investmentState and trigger analysis
+                    attachCommitBehavior(invInputs, (id, value) => {
+                        const key = id.replace('inv-', '');
+                        // Debug: log commits for currency fields which were reverting
+                        try { console.debug && console.debug('INV COMMIT ->', id, value, 'key=', key); } catch(e){}
+                        if (key in investmentState) {
+                            investmentState[key] = value;
+                            try { console.debug && console.debug('investmentState updated:', key, investmentState[key]); } catch(e){}
+                        }
+                        if (['std', 'cv', 'p90Demand', 'p10Demand', 'ciLevel'].includes(key)) {
+                            updateProbabilisticValues(key.replace('Demand', ''));
+                        } else {
+                            clearTimeout(analysisDebounceTimer);
+                            analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
+                        }
+                    });
+
+                    // Enable middle-drag / wheel interactions for numeric and currency inputs
+                    invInputs.forEach(inp => {
+                        if (inp.tagName.toLowerCase() === 'input') {
+                            const isNumber = inp.type === 'number' || inp.type === 'range';
+                            const isCurrency = inp.dataset && inp.dataset.type === 'currency';
+                            const looksNumericText = inp.type === 'text' && /^-?\d[\d,\.]*$/.test((inp.value || '').toString().trim());
+                            if (isNumber || isCurrency || looksNumericText) {
+                                try { enableMiddleDragNumberInput(inp, 1, 1); } catch (e) { /* noop */ }
+                            }
+                        }
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to attach investment input behaviors:', err);
+            }
 
         const controlsArea = inputColumn.append("div").attr("class", "inv-analysis-controls");
         controlsArea.html(`<div class="inv-button-group"><button id="inv-baseCaseBtn">Base Case</button><button id="inv-expansionCaseBtn">Expansion Case</button></div>`);
