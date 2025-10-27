@@ -670,7 +670,7 @@ const EfficiencyTab = (function () {
             .attr("height", d => barChartInnerHeight - yBar(d.dailyIdleTime));
 
         // EXIT removed bars: fade out then remove
-        exitSelection.transition().duration(300).style("opacity", 0).remove();
+        exitSelection.remove();
 
         // --- SUMMARY LABELS ---
         // Center Group: Overall Efficiency Title and Total Idle Time value.
