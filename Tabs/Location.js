@@ -940,6 +940,16 @@ const LocationTab = (() => {
                 return { ...d, unselected: unselectedQty, selected: selectedQty, actualShipments: Number(d.actualShipments) || 0 };
             });
 
+            g.selectAll(".exception-bg-bar")
+                .data(chartData.filter(d => d.isExceptionDay || d.isReductionDay), d => d.dateObj) // Filter and key
+                .join("rect")
+                .attr("class", "exception-bg-bar")
+                .attr("x", d => x(d.dateObj) - bandwidth / 2) // Use same x and width as bars
+                .attr("y", 0) // Top of the chart area
+                .attr("width", bandwidth)
+                .attr("height", height) // Full height of the chart area
+                .attr("fill", "var(--failure-color)")
+                .style("opacity", 0.5); // Faint background effect
             const stackKeys = ["unselected", "selected"];
             const stack = d3.stack().keys(stackKeys);
             const stackedData = stack(chartData);
@@ -963,10 +973,7 @@ const LocationTab = (() => {
                 })
                 .attr("width", bandwidth)
                 .attr("fill", function (d) {
-                    // Highlight exception days in red
-                    return (d.data.isExceptionDay || d.data.isReductionDay)
-                        ? "var(--failure-color)"
-                        : color(d3.select(this.parentNode).datum().key);
+                    return color(d3.select(this.parentNode).datum().key);
                 })
                 .style("cursor", "default");
 
@@ -1193,7 +1200,7 @@ const LocationTab = (() => {
 
             mapInitialized = true;
             updateDynamicMapElements(); // Fit map to size
-            runOptimization();          // Run initial optimization
+            runOptimization();
         }).catch(error => {
             console.error("Error loading map topology:", error);
             mapInitialized = false;
@@ -1623,7 +1630,7 @@ const LocationTab = (() => {
                 }
 
                 // Calculate annual demand based on working days from the forecast
-                const annualDemand = (qty / freq) * (totalDemandCapacity?.workingDays?.length || 250);
+                const annualDemand = (qty / freq) * 365.2425;
 
                 cityData.set(name, {
                     name,
