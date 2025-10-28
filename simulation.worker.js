@@ -40,11 +40,6 @@ try {
     console.error("WORKER: CRITICAL -", highsScriptError, error);
 }
 
-// --- Constants ---
-const HIGH_FREQUENCY_THRESHOLD = 11; // Frequencies above this use the heuristic
-const HEURISTIC_CANDIDATE_COUNT = 7; // Number of best candidates to pass to MILP for high freq
-const SCORE_DOW_WEIGHT = 0.1; // Weight for day-of-week variance in heuristic score
-
 // --- Async Solver Loader ---
 /**
  * Asynchronously initializes and returns the HiGHS WebAssembly solver instance.
@@ -85,58 +80,6 @@ async function getSolverInstance() {
     // Return the existing promise (or the newly created one)
     return highsInstancePromise;
 }
-
-// --- Heuristic Scoring Helper ---
-/**
- * Calculates a score for a potential start day based on potential clashes and day-of-week distribution.
- * Lower scores are better (fewer clashes, more even distribution).
- * @param {number} startDay - The candidate start day (1-based).
- * @param {number} frequency - The frequency of the city being scored.
- * @param {number} quantity - The quantity shipped by the city being scored.
- * @param {Array<object>} allCities - The full list of cities for clash checking.
- * @param {number} cityIndexToScore - The index of the city being scored in allCities.
- * @returns {number} The calculated score.
- */
-function scoreCandidateStartDay(startDay, frequency, quantity, allCities, cityIndexToScore) {
-    let clashScore = 0;
-    const dowCounts = [0, 0, 0, 0, 0, 0, 0]; // Counts for Sunday (0) to Saturday (6)
-
-    for (let k = 0; ; k++) {
-        const shipDay_0idx = (startDay - 1) + k * frequency;
-        if (shipDay_0idx >= 365) break;
-
-        // --- Day of Week Calculation ---
-        const dayOfWeek = shipDay_0idx % 7; // Simple modulo for relative day of week
-        dowCounts[dayOfWeek]++;
-
-        // --- Clash Calculation ---
-        // Check against all *other* cities, assuming they start on day 1 (or forced day)
-        for (let otherCityIdx = 0; otherCityIdx < allCities.length; otherCityIdx++) {
-            if (otherCityIdx === cityIndexToScore) continue; // Don't check against self
-
-            const otherCity = allCities[otherCityIdx];
-            const otherFreq = Math.max(1, Math.round(otherCity.freq));
-            const otherStart_0idx = (otherCity.chosenStartDay > 0 ? otherCity.chosenStartDay : 1) - 1;
-
-            if (shipDay_0idx >= otherStart_0idx && (shipDay_0idx - otherStart_0idx) % otherFreq === 0) {
-                clashScore += otherCity.qty; // Add the quantity of the clashing shipment
-            }
-        }
-    }
-
-    // --- Calculate Day-of-Week Variance ---
-    const totalShipments = dowCounts.reduce((a, b) => a + b, 0);
-    const meanDowCount = totalShipments / 7;
-    const dowVariance = dowCounts.reduce((sumSqDiff, count) => sumSqDiff + Math.pow(count - meanDowCount, 2), 0) / 7;
-
-    // --- Combine Scores ---
-    // Lower clash score is better, lower variance is better.
-    // Weighting can be adjusted.
-    const totalScore = clashScore + (dowVariance * quantity * SCORE_DOW_WEIGHT); // Scale variance by quantity
-
-    return totalScore;
-}
-
 
 // --- Async MILP Helper Function ---
 /**
@@ -197,31 +140,10 @@ async function findOptimalShipmentSchedule(cities, scheduleData) {
             } else { // Solver chooses start day
                 const freq = Math.max(1, Math.round(city.freq));
                 let possibleStartDays = [];
-
-                if (freq <= HIGH_FREQUENCY_THRESHOLD) {
-                    // Low frequency: consider all possible start days
-                    for (let d = 1; d <= freq; d++) possibleStartDays.push(d);
-                    console.log(`WORKER: City ${cityIndex} (freq ${freq}): Using all ${possibleStartDays.length} start days.`);
-                } else {
-                    // High frequency: Use the heuristic
-                    console.log(`WORKER: City ${cityIndex} (freq ${freq}): Applying heuristic...`);
-                    const initialCandidates = [];
-                    // 1. Generate evenly spaced candidates
-                    for (let i = 0; i < HIGH_FREQUENCY_THRESHOLD; i++) {
-                        initialCandidates.push(Math.floor(i * freq / HIGH_FREQUENCY_THRESHOLD) + 1);
-                    }
-
-                    // 2. Score candidates
-                    const scoredCandidates = initialCandidates.map(startDay => ({
-                        startDay: startDay,
-                        score: scoreCandidateStartDay(startDay, freq, city.qty, cities, cityIndex)
-                    }));
-
-                    // 3. Select best N candidates
-                    scoredCandidates.sort((a, b) => a.score - b.score); // Sort by score ascending (lower is better)
-                    possibleStartDays = scoredCandidates.slice(0, HEURISTIC_CANDIDATE_COUNT).map(c => c.startDay);
-                    console.log(`WORKER: City ${cityIndex} selected candidates: [${possibleStartDays.join(', ')}] (Scores: ${scoredCandidates.slice(0, HEURISTIC_CANDIDATE_COUNT).map(c => c.score.toFixed(1)).join(', ')})`);
-                }
+                for (let d = 1; d <= freq; d++) possibleStartDays.push(d);
+                console.log(`WORKER: City ${cityIndex} (freq ${freq}): Using all ${possibleStartDays.length} start days.`);
+                possibleStartDays = [...new Set(possibleStartDays)];
+                console.log(`WORKER: City ${cityIndex} selected candidates: [${possibleStartDays.join(', ')}] (Evenly spaced)`);
 
                 // Add constraints and variables for the chosen possible start days
                 const constraintName = `city_${cityIndex}_start`;
