@@ -26,7 +26,7 @@ const LocationTab = (() => {
     let path = null; // D3 geo path generator
     let radiusScale = null; // D3 scale for city marker radius
     let continentalStatesFeatures = null; // GeoJSON features for US states
-    let resizeObserver = null; // ResizeObserver for responsive SVG
+    // Removed resizeObserver, handled globally now
 
     // --- Simulation State ---
     let simulationWorker = null; // Web Worker for running simulations
@@ -60,6 +60,7 @@ const LocationTab = (() => {
             this.svgWidth = width || 0;
             this.svgHeight = height || 0;
             this.isRibbonOpen = isRibbonOpen;
+            console.log(`LayoutManager Updated: W=${this.svgWidth.toFixed(0)}, H=${this.svgHeight.toFixed(0)}, Ribbon=${this.isRibbonOpen}`); // Debug
         },
 
         /**
@@ -311,7 +312,7 @@ const LocationTab = (() => {
         console.log(`Toggling ribbon. New state: ${isBottomRibbonOpen ? 'Open' : 'Closed'}`);
 
         // Update map elements (resizes the map)
-        updateDynamicMapElements();
+        updateDynamicMapElements(); // Calls layoutManager.update internally
 
         // Update UI elements
         d3.select(".bottom-ribbon-header-arrow")
@@ -606,6 +607,7 @@ const LocationTab = (() => {
         const g = svg.append("g")
             .attr("transform", `translate(${margin.left},${margin.top})`);
 
+        // Use global tooltip
         const tooltip = createTooltip("ppi-tooltip");
 
         const errorText = g.append("text")
@@ -722,7 +724,9 @@ const LocationTab = (() => {
 
                 focus.attr("transform", `translate(${x(d.date)},${y(d.value)})`);
                 tooltip.html(`<strong>${formatDate(d.date)}</strong><div class="tooltip-row"><span>Price Index:</span> <span>${d.value.toFixed(2)}</span></div>`);
-                positionTooltip(event, tooltip);
+                // Use standard tooltip positioning
+                tooltip.style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px");
             }
 
         } catch (error) {
@@ -742,6 +746,7 @@ const LocationTab = (() => {
         const metricsPlaceholder = d3.select("#metrics-placeholder-in-demand");
         metricsPlaceholder.html(""); // Clear old metrics
 
+        // Use global tooltip
         const tooltip = createTooltip("holding-cost-tooltip");
 
         const svgNode = svg.node();
@@ -908,7 +913,9 @@ const LocationTab = (() => {
                 if (!d) return;
 
                 tooltip.html(`<strong>${d.date} (Day ${d.day + 1})</strong><div class="tooltip-row"><span>Inventory:</span> <span>${formatInt(d.inventoryEnd)}</span></div>`);
-                positionTooltip(event, tooltip);
+                // Use standard tooltip positioning
+                tooltip.style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px");
             }
 
         } else {
@@ -1029,7 +1036,9 @@ const LocationTab = (() => {
                     `<div class="tooltip-row"><span>Total Shipped:</span> <span>${formatInt(d.actualShipments || 0)}</span></div>` +
                     `${detailsHtml}`
                 );
-                positionTooltip(event, tooltip);
+                // Use standard tooltip positioning
+                tooltip.style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px");
             }
         }
 
@@ -1091,47 +1100,7 @@ const LocationTab = (() => {
             .text(d3.utcFormat("%b"));
     }
 
-    /**
-     * Positions a D3 tooltip relative to the mouse event, keeping it on screen.
-     */
-    function positionTooltip(event, tooltipElement) {
-        const tooltipNode = tooltipElement.node();
-        if (!tooltipNode) return;
-
-        const pageX = event.pageX;
-        const pageY = event.pageY;
-        const { width: tooltipWidth, height: tooltipHeight } = tooltipNode.getBoundingClientRect();
-        const xOffset = 15;
-        const yOffset = -15; // Show above cursor
-
-        let left = pageX + xOffset;
-        let top = pageY + yOffset - tooltipHeight; // Start above cursor
-
-        // Get window boundaries
-        const winWidth = window.innerWidth;
-        const winHeight = window.innerHeight;
-        const scrollX = window.scrollX;
-        const scrollY = window.scrollY;
-
-        // Adjust if off-screen
-        if (left + tooltipWidth > scrollX + winWidth) {
-            left = pageX - xOffset - tooltipWidth; // Flip to left
-        }
-        if (left < scrollX) {
-            left = scrollX + 5; // Clamp to left edge
-        }
-        if (top < scrollY) {
-            top = pageY + Math.abs(yOffset) + 5; // Flip to below
-        }
-        if (top + tooltipHeight > scrollY + winHeight) {
-            top = scrollY + winHeight - tooltipHeight - 5; // Clamp to bottom
-        }
-
-        tooltipElement
-            .style("left", `${left}px`)
-            .style("top", `${top}px`);
-    }
-
+    // REMOVED local positionTooltip function - use global pattern
 
     // -------------------------------------------------------------------------
     // Map Initialization & Update Functions
@@ -1226,7 +1195,7 @@ const LocationTab = (() => {
 
         console.log(`updateDynamicMapElements: Using dimensions W: ${width.toFixed(0)}, H: ${height.toFixed(0)}`);
         const svg = d3.select("#location-panel");
-        layoutManager.update(width, height, isBottomRibbonOpen);
+        layoutManager.update(width, height, isBottomRibbonOpen); // Update layout manager
 
         // --- 1. Update UI Panel Positions ---
         svg.select(".bottom-ribbon-bar")
@@ -1277,6 +1246,12 @@ const LocationTab = (() => {
                 updateCityMarkers();
                 updateOptimalFactoryMarker();
                 updateConnectionLines();
+
+                // Redraw simulation chart if ribbon is open
+                if (isBottomRibbonOpen) {
+                    drawHoldingCostChart();
+                }
+
             } else {
                 console.warn("updateDynamicMapElements skipped map update: mapBounds have zero dimensions.");
             }
@@ -1313,13 +1288,13 @@ const LocationTab = (() => {
             return;
         }
 
-        layoutManager.update(width, height, isBottomRibbonOpen);
+        layoutManager.update(width, height, isBottomRibbonOpen); // Update layout manager FIRST
 
         // --- 1. Initialize Map (if first time) ---
         if (!mapInitialized) {
             svg.selectAll("*").remove(); // Clear any previous state
             d3.select("body").selectAll(".d3-tooltip").remove(); // Clear old tooltips
-            initializeMap(svg, width, height);
+            initializeMap(svg, width, height); // Pass dimensions
         }
 
         // --- 2. Initialize Simulation Worker (if first time) ---
@@ -1550,8 +1525,9 @@ const LocationTab = (() => {
                 d3.select(this).attr("data-user-modified", "true"); // Mark as user-set
             });
 
+        // Use global tooltip
         const breakdownTooltip = createTooltip('holding-cost-breakdown-tooltip');
-        holdingLabel.on("mouseover mousemove", (event) => {
+        holdingLabel.on("mouseover", (event) => {
             const input = d3.select("#loc-holding-cost-input");
             const breakdown = {
                 c: input.attr("data-breakdown-capital") || 0,
@@ -1563,9 +1539,13 @@ const LocationTab = (() => {
             breakdownTooltip.style("opacity", 1).html(
                 `Est. Breakdown:<br>Capital: ${breakdown.c}%<br>Storage: ${breakdown.s}%<br>Administative: ${breakdown.v}%<br>Risk: ${breakdown.r}%<hr>Total: ${breakdown.t}%`
             );
-            positionTooltip(event, breakdownTooltip);
         })
+            .on("mousemove", (event) => breakdownTooltip
+                .style("left", (event.pageX + 15) + "px")
+                .style("top", (event.pageY - 28) + "px")
+            )
             .on("mouseout", () => breakdownTooltip.style("opacity", 0));
+
 
         const ppiGroup = costInputDiv.append("div").attr("class", "user-input-row");
         ppiGroup.append("label").attr("for", "loc-ppi-input").text("Producer Price Index");
@@ -1657,11 +1637,13 @@ const LocationTab = (() => {
         updateDemandCapacityBox();
         updateSummaryPanel();
 
+        // Update map elements only if initialized (prevents errors on first load)
         if (mapInitialized) {
             updateDynamicMapElements();
-            runOptimization();
+            runOptimization(); // Rerun opt after potentially getting dimensions
         }
 
+        // Redraw simulation chart if ribbon is open
         if (isBottomRibbonOpen) {
             setTimeout(drawHoldingCostChart, 50); // Draw chart just after UI renders
         }
@@ -1817,19 +1799,7 @@ const LocationTab = (() => {
         d3.select("#summary-avg-cost").text(formatCurrencySmall(avgCostPerUnit));
     }
 
-    /**
-     * Creates or retrieves a D3 tooltip element.
-     * @param {string} className - Unique class for the tooltip.
-     * @returns {d3.Selection} The tooltip selection.
-     */
-    function createTooltip(className) {
-        let tooltip = d3.select(`body > .d3-tooltip.${className}`);
-        if (tooltip.empty()) {
-            tooltip = d3.select('body').append('div')
-                .attr('class', `d3-tooltip ${className}`);
-        }
-        return tooltip;
-    }
+    // REMOVED local createTooltip function - uses global one
 
     /**
      * Updates the optimal factory marker (the star) on the map.
@@ -1838,6 +1808,7 @@ const LocationTab = (() => {
         if (!projection || !mapInitialized) return;
 
         const container = d3.select(".optimal-factory-container");
+        // Use global tooltip
         const tooltip = createTooltip('factory-tooltip');
         const data = optimalFactoryLocation ? [optimalFactoryLocation] : [];
 
@@ -1862,7 +1833,10 @@ const LocationTab = (() => {
                 const lon = d[0].toFixed(3);
                 tooltip.style("opacity", 1).html(`Optimal Location:<br>${lat}°N, ${Math.abs(lon)}°W`);
             })
-            .on("mousemove", (event) => positionTooltip(event, tooltip))
+            .on("mousemove", (event) => tooltip // Use standard positioning
+                .style("left", (event.pageX + 15) + "px")
+                .style("top", (event.pageY - 28) + "px")
+            )
             .on("mouseout", () => tooltip.style("opacity", 0))
             .transition().duration(500)
             .attr("transform", d => `translate(${projection(d)})`)
@@ -1875,6 +1849,7 @@ const LocationTab = (() => {
     function updateCityMarkers() {
         if (!projection || !mapInitialized || !radiusScale) return;
 
+        // Use global tooltip
         const tooltip = createTooltip('city-calc-tooltip');
         const infoBox = d3.select(".city-info-box");
 
@@ -1902,7 +1877,9 @@ const LocationTab = (() => {
                 if (!details || !optimalFactoryLocation) {
                     tooltip.style("opacity", 1)
                         .html(`<strong>${d.name}</strong><br>Calculating...`);
-                    positionTooltip(event, tooltip);
+                    // Use standard positioning
+                    tooltip.style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
                     return;
                 }
 
@@ -1942,7 +1919,10 @@ const LocationTab = (() => {
                     `<div class="tooltip-row"><span>Avg Cost/Unit:</span> <span>${avgCostPerUnit.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span></div>`
                 );
             })
-            .on("mousemove", (event) => positionTooltip(event, tooltip))
+            .on("mousemove", (event) => tooltip // Use standard positioning
+                .style("left", (event.pageX + 15) + "px")
+                .style("top", (event.pageY - 28) + "px")
+            )
             .on("mouseout", () => tooltip.style("opacity", 0))
             .on("click", (event, d) => {
                 // --- CLICK HANDLER (INFO BOX) ---
@@ -2253,38 +2233,17 @@ const LocationTab = (() => {
     }
 
     /**
-     * Sets up the ResizeObserver to make the map responsive.
+     * Resize function called by the global resize handler.
      */
-    const setupListeners = () => {
-        if (resizeObserver) {
-            console.log("Disconnecting existing ResizeObserver.");
-            resizeObserver.disconnect();
-        }
-
-        const svgContainerNode = d3.select("#svg-container").node();
-        if (svgContainerNode) {
-            console.log("Attempting to attach ResizeObserver to #svg-container...");
-            resizeObserver = new ResizeObserver(entries => {
-                console.log("ResizeObserver Fired!");
-                // Only update if this tab is active and map is ready
-                if (document.querySelector('.tab-btn.active')?.dataset.tab === 'location' && mapInitialized) {
-                    console.log("ResizeObserver calling updateDynamicMapElements.");
-                    updateDynamicMapElements();
-                } else {
-                    console.log("ResizeObserver: Conditions not met (Tab active? Map init?).");
-                }
-            });
-            resizeObserver.observe(svgContainerNode);
-            console.log("ResizeObserver attached to #svg-container.");
-        } else {
-            console.error("CRITICAL: Could not find #svg-container for ResizeObserver.");
-        }
+    const resize = () => {
+        console.log("LocationTab.resize() called.");
+        updateDynamicMapElements();
     };
 
-    // Delay setup to ensure DOM is fully loaded
-    setTimeout(setupListeners, 1500);
+    // Return the public interface
     return {
-        draw: draw
+        draw: draw,
+        resize: resize // Expose the resize function
     };
 
 })();
