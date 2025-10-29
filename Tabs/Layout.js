@@ -1,4 +1,8 @@
 const LayoutTab = (function () {
+
+    // Define module-level variables if needed for state between draws/resizes
+    // Example: let layoutTooltip = null; (Handled by createTooltip now)
+
     /**
      * @tab Layout
      * Draws the animated U-shaped factory layout visualization.
@@ -6,67 +10,57 @@ const LayoutTab = (function () {
      */
     function draw() {
         // --- Setup & Validation ---
-
-        // Halt any simulations f tabs that might be running.
         stopAllSimulations();
         const numEmployees = parseInt(numEmployeesInput.value, 10);
-
-        // Select the SVG container for the visualization and clear any existing content.
         const svg = d3.select("#layout-panel");
-        svg.selectAll("*").remove();
+        svg.selectAll("*").remove(); // Clear previous drawing
+
+        // Use the shared tooltip creation function
         const layoutTooltip = createTooltip('layout-element-tooltip');
 
-        // Get the specific workstation configuration for the given number of employees.
         const config = state.configData[numEmployees];
 
-        // If no configuration data exists, display a message and exit.
+        // Get container dimensions *inside* draw/resize
+        const { clientWidth: containerWidth, clientHeight: containerHeight } = document.getElementById('svg-container');
+
         if (!config || Object.keys(config).length === 0) {
-            svg
-                .append("text")
-                .attr("x", "50%")
-                .attr("y", "50%")
-                .attr("text-anchor", "middle")
-                .attr("fill", getComputedStyle(root).getPropertyValue('--accent'))
+            svg.append("text")
+                .attr("class", "layout-no-data-text") // Use CSS class
+                .attr("x", containerWidth / 2) // Use current dimensions
+                .attr("y", containerHeight / 2) // Use current dimensions
                 .text("No configuration data for this number of workstations.");
             return;
         }
 
-        // Check if any workstation's calculated length is too short, which makes the layout invalid.
         let isLayoutValid = true;
         for (const stationId in config) {
+            // ... (rest of validation logic remains the same) ...
             const elements = config[stationId];
             if (!elements || elements.length === 0) continue;
-            // Calculate the total physical length of the station in feet.
             const totalElementTime = elements.reduce(
                 (sum, elId) => sum + (state.taskData.get(elId)?.elementTime || 0),
                 0
             );
-            const stationLengthFt = totalElementTime * 15; // Convert element time to feet.
-            // A station must be at least 13 feet long to be valid.
+            const stationLengthFt = totalElementTime * 15;
             if (stationLengthFt > 0 && stationLengthFt < 13) {
                 isLayoutValid = false;
                 break;
             }
         }
 
-        // If the layout is invalid, display an error message and exit.
         if (!isLayoutValid) {
-            demandStatusEl.textContent = "Invalid Spacing"; // Update status display.
+            demandStatusEl.textContent = "Invalid Spacing";
             demandStatusEl.className = "status failure";
-            svg
-                .append("text")
-                .attr("x", "50%")
-                .attr("y", "50%")
-                .attr("text-anchor", "middle")
-                .attr("fill", getComputedStyle(root).getPropertyValue('--failure-color'))
+            svg.append("text")
+                .attr("class", "layout-invalid-text") // Use CSS class
+                .attr("x", containerWidth / 2) // Use current dimensions
+                .attr("y", containerHeight / 2) // Use current dimensions
                 .text("Error: A workstation's length is less than 13 feet.");
             return;
         }
 
         // --- Initial Calculations ---
-
-        // Gather operational and financial inputs to calculate performance metrics.
-        const opInputs = {
+        const opInputs = { /* ... remains the same ... */
             dailyDemand: parseInt(dailyDemandInput.value, 10),
             opHours: parseFloat(opHoursInput.value),
             numEmployees: parseInt(numEmployeesInput.value, 10)
@@ -75,17 +69,14 @@ const LayoutTab = (function () {
         const results = calculateMetrics(opInputs, finInputs);
 
         // --- LAYOUT CONFIGURATION ---
-
-        // Define the page layout using an 80/20 split for the visualization and the control panel.
-        const { clientWidth: containerWidth, clientHeight: containerHeight } = document.getElementById('svg-container');
+        // Recalculate layout based on current dimensions
         const leftPanelWidth = containerWidth * 0.79;
         const rightPanelWidth = containerWidth * 0.2;
         const rightPanelX = leftPanelWidth;
         const uiPadding = containerWidth * 0.01;
 
         // --- Path and Point Generation ---
-
-        // This section calculates the coordinates for each segment of the U-shaped assembly line.
+        // ... (Path generation logic remains exactly the same) ...
         const isEven = numEmployees % 2 === 0;
         const numLeft = isEven ? numEmployees / 2 : Math.floor(numEmployees / 2);
         const middleWsId = isEven ? null : numLeft + 1;
@@ -94,21 +85,18 @@ const LayoutTab = (function () {
         const allPoints = [];
         const workstationBorders = [];
 
-        // Loop through each workstation to define its geometry.
         for (let i = 1; i <= numEmployees; i++) {
             const wsId = i;
             const elements = config[wsId];
             if (!elements || elements.length === 0) continue;
 
-            // Calculate total length of the workstation path.
             const totalElementTime = elements.reduce(
                 (sum, elId) => sum + (state.taskData.get(elId)?.elementTime || 0),
                 0
             );
             const totalLengthFt = totalElementTime * 15;
-            let p; // 'p' will hold the array of points for the current workstation path.
+            let p;
 
-            // Handle the unique geometry of the middle station in an odd-numbered layout.
             if (wsId === middleWsId) {
                 const startPt = { x: 0, y: numLeft * 10 };
                 const endPt = { x: 10, y: numLeft * 10 };
@@ -127,13 +115,11 @@ const LayoutTab = (function () {
                 let out_dy;
 
                 if (wsId <= numLeft) {
-                    // Left side of the 'U'
                     startPt = { x: 0, y: (wsId - 1) * 10 };
                     endPt = { x: 0, y: wsId * 10 };
                     out_dx = -1;
                     out_dy = 0;
                 } else {
-                    // Right side of the 'U'
                     const mirroredIndex = (isEven ? numLeft : numLeft + 1) - (wsId - numLeft - 1);
                     startPt = { x: 10, y: mirroredIndex * 10 };
                     endPt = { x: 10, y: (mirroredIndex - 1) * 10 };
@@ -141,7 +127,6 @@ const LayoutTab = (function () {
                     out_dy = 0;
                 }
 
-                // Handle the special connection point for even-numbered layouts.
                 if (isEven && (wsId === numLeft || wsId === numLeft + 1)) {
                     const leg_to_center = 5;
                     const leg_from_main = 2;
@@ -157,7 +142,7 @@ const LayoutTab = (function () {
                             { x: startPt.x, y: startPt.y + leg_from_main + mouth_ft },
                             { x: startPt.x + leg_to_center, y: startPt.y + leg_from_main + mouth_ft }
                         ];
-                        connectionPoint = p[p.length - 1]; // Store the connection point for the next station.
+                        connectionPoint = p[p.length - 1];
                     } else {
                         startPt = connectionPoint;
                         endPt = { x: 10, y: (numLeft - 1) * 10 };
@@ -171,7 +156,6 @@ const LayoutTab = (function () {
                         ];
                     }
                 } else {
-                    // Standard U-shaped workstation path.
                     const leg1_ft = 2;
                     const leg2_ft = 2;
                     const mouth_ft = 6;
@@ -189,9 +173,8 @@ const LayoutTab = (function () {
                 }
             }
 
-            allPoints.push(...p); // Add generated points to the master list for scaling.
+            allPoints.push(...p);
 
-            // Create a border path string for this workstation.
             if (p && p.length > 1) {
                 let borderPathString = "M " + p[0].x + " " + p[0].y;
                 for (let j = 1; j < p.length; j++) {
@@ -200,7 +183,6 @@ const LayoutTab = (function () {
                 workstationBorders.push({ wsID: i, path: borderPathString });
             }
 
-            // Generate sub-paths for each individual element within the workstation.
             const elementColorScale = generateElementColorScale(i - 1, numEmployees, elements.length);
             let currentPathPosFt = 0;
             elements.forEach((elId, index) => {
@@ -209,429 +191,372 @@ const LayoutTab = (function () {
                     wsId: i,
                     elId: elId,
                     path: generateSubPath(p, currentPathPosFt, (task?.elementTime || 0) * 15),
-                    color: elementColorScale(index),
-                    lineCap: 'round'
+                    color: elementColorScale(index), // Dynamic color
+                    lineCap: 'round' // Keep dynamic linecap if needed, else move to CSS
                 });
                 currentPathPosFt += (task?.elementTime || 0) * 15;
             });
         }
 
-        if (allPoints.length === 0) return; // Exit if no points were generated.
+
+        if (allPoints.length === 0) return;
 
         // --- Scaling and Translation ---
-
-        // Calculate the bounding box of the entire assembly line path.
+        // ... (Scaling logic remains the same, using current container dimensions) ...
         const minX_ft = d3.min(allPoints, d => d.x);
         const maxX_ft = d3.max(allPoints, d => d.x);
         const minY_ft = d3.min(allPoints, d => d.y);
         const maxY_ft = d3.max(allPoints, d => d.y);
 
-        if ((maxX_ft - minX_ft) <= 0 || (maxY_ft - minY_ft) <= 0) return; // Exit if path has no area.
+        if ((maxX_ft - minX_ft) <= 0 || (maxY_ft - minY_ft) <= 0) return;
 
-        // Determine the scale factor to fit the path within the available SVG panel space.
         const lineBBox = { width: maxX_ft - minX_ft, height: maxY_ft - minY_ft };
         const availableLineWidth = leftPanelWidth - (uiPadding * 2);
         const availableLineHeight = containerHeight - (uiPadding * 2.5);
         const scale = Math.min(availableLineWidth / lineBBox.width, availableLineHeight / lineBBox.height);
 
-        // Calculate translation needed to center the scaled path.
         const scaledLineWidth = lineBBox.width * scale;
         const leftPadding = (leftPanelWidth - scaledLineWidth) / 1.5;
         const translateX = (leftPadding - (minX_ft * scale));
         const translateY = uiPadding - (minY_ft * scale);
+
+        // Create the main group with dynamic transform
         const g = svg.append("g")
             .attr("transform", `translate(${translateX}, ${translateY}) scale(${scale})`)
-            .attr("fill", "none"); // Create the main group for the layout.
+            .attr("fill", "none"); // Set fill none here
 
         // --- UI Element Positioning ---
-
+        // Recalculate UI positions based on current dimensions
         const clockY = containerHeight * 0.09;
-        const clockX = rightPanelX + (rightPanelWidth / 2) - (containerWidth * 0.02);
+        // ***** UPDATED clockX for centering *****
+        const clockBaseX = rightPanelX + (rightPanelWidth / 2) - (containerWidth * 0.02); // Original center base
+        const clockShiftX = containerWidth * 0.01; // Shift right by 1% width
+        const clockX = clockBaseX + clockShiftX; // Final X for clock & slider
         const clockRadius = Math.min(rightPanelWidth * 0.5, containerHeight * 0.15 * 0.5);
+
         const speedoY = containerHeight * 0.35;
-        const speedoX = clockX + (containerWidth * 0.02);
+        const speedoX = clockX; // Speedo depends on the final clockX
         const speedoRadius = Math.min(rightPanelWidth * 0.5, containerHeight * 0.15 * 0.5);
 
         // --- Clock ---
-
-        // Draw the clock face and hands.
         const clockGroup = svg.append("g")
-            .attr("transform", `translate(${clockX + (containerWidth * 0.01)}, ${clockY})`); // Position the clock group.
+            .attr("transform", `translate(${clockX}, ${clockY})`); // Use final clockX
 
-        // Clock face
         clockGroup.append("circle")
-            .attr("r", clockRadius)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--accent'))
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--idle-color'))
-            .attr("stroke-width", 2);
+            .attr("class", "layout-clock-face") // Use CSS class
+            .attr("r", clockRadius);
 
-        // Clock ticks
         for (let i = 0; i < 12; i++) {
             const angle = (i / 12) * 2 * Math.PI;
-            const tickLength = i % 3 === 0 ? 8 : 4;
+            const tickLength = i % 3 === 0 ? 8 : 4; // Dynamic length
             clockGroup.append("line")
+                .attr("class", "layout-clock-tick") // Use CSS class
                 .attr("x1", Math.sin(angle) * (clockRadius - tickLength))
                 .attr("y1", -Math.cos(angle) * (clockRadius - tickLength))
                 .attr("x2", Math.sin(angle) * clockRadius)
                 .attr("y2", -Math.cos(angle) * clockRadius)
-                .attr("stroke", getComputedStyle(root).getPropertyValue('--idle-color'))
-                .attr("stroke-width", i % 3 === 0 ? 2 : 1);
+                .attr("stroke-width", i % 3 === 0 ? 2 : 1); // Dynamic width
         }
 
-        // Hour hand
         clockGroup.append("line")
             .attr("id", "sim-clock-hour-hand")
-            .attr("y2", -clockRadius * 0.5)
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--secondary1'))
-            .attr("stroke-width", 4)
-            .attr("stroke-linecap", "round");
+            .attr("class", "layout-clock-hand layout-clock-hour-hand") // Use CSS classes
+            .attr("y2", -clockRadius * 0.5); // Dynamic length
 
-        // Minute hand
         clockGroup.append("line")
             .attr("id", "sim-clock-minute-hand")
-            .attr("y2", -clockRadius * 0.8)
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--secondary1'))
-            .attr("stroke-width", 2)
-            .attr("stroke-linecap", "round");
+            .attr("class", "layout-clock-hand layout-clock-minute-hand") // Use CSS classes
+            .attr("y2", -clockRadius * 0.8); // Dynamic length
 
-        // Center pin
         clockGroup.append("circle")
-            .attr("r", 4)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--idle-color'));
+            .attr("class", "layout-clock-center-pin") // Use CSS class
+            .attr("r", 4);
 
         // --- Speed Slider ---
-
         const sliderTopPadding = uiPadding * 1.1;
         const sliderHeight = (clockRadius * 2) - sliderTopPadding;
         const sliderGroup = svg.append("g")
+            // ***** UPDATED slider transform to use final clockX *****
             .attr("transform", `translate(${clockX + clockRadius + (containerWidth * 0.025)}, ${sliderTopPadding})`);
 
-        // Vertical scale: bottom is slower, top is faster
         const speedScale = d3.scaleLinear()
             .domain([0.1, 8.0])
             .range([sliderHeight, 0])
             .clamp(true);
 
-        // Slider track
         sliderGroup.append("line")
-            .attr("class", "track")
+            .attr("class", "layout-speed-slider-track") // Use CSS class
             .attr("y1", 0)
-            .attr("y2", sliderHeight)
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim())
-            .attr("stroke-width", 4)
-            .attr("stroke-linecap", "round");
+            .attr("y2", sliderHeight);
 
-        // Slider handle
         sliderGroup.append("circle")
             .attr("id", "d3-layout-slider-handle")
-            .attr("class", "handle")
-            .attr("r", 8)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--secondary1').trim())
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--white').trim())
-            .attr("stroke-width", 2)
-            .attr("cy", speedScale(animationState.speedMultiplier));
+            .attr("class", "layout-speed-slider-handle") // Use CSS class
+            .attr("r", 8) // Fixed radius
+            .attr("cy", speedScale(animationState.speedMultiplier)); // Dynamic position
 
-        // Larger invisible area for easier interaction
         const interactionArea = sliderGroup.append("rect")
+            .attr("class", "layout-speed-slider-interaction") // Use CSS class
             .attr("y", 0)
             .attr("height", sliderHeight)
-            .attr("x", -10)
-            .attr("width", 20)
-            .style("fill", "transparent")
-            .style("cursor", "grab")
-            .style("touch-action", "none");
+            .attr("x", -10) // Interaction area width/pos
+            .attr("width", 20);
 
-        // Helper to update speed based on pointer position.
-        const setFromPointer = (event) => {
+        const setFromPointer = (event) => { /* ... remains the same ... */
             const getLocalY = (evt) => (evt && evt.sourceEvent && typeof evt.y === 'number')
                 ? evt.y
                 : d3.pointer(evt && evt.sourceEvent ? evt.sourceEvent : evt, sliderGroup.node())[1];
             const localY = Math.max(0, Math.min(sliderHeight, getLocalY(event)));
             const newValue = speedScale.invert(localY);
             animationState.speedMultiplier = newValue;
-            sliderGroup.select(".handle")
+            sliderGroup.select(".layout-speed-slider-handle") // Use class selector
                 .attr("cy", speedScale(newValue));
         };
 
-        // Speed slider event listeners (drag, click, wheel).
         interactionArea
-            .on("mousedown", function () {
-                d3.select(this).style("cursor", "grabbing");
-            })
-            .on("mouseup", function () {
-                d3.select(this).style("cursor", "grab");
-            })
-            .on("click", (event) => {
-                const localY = Math.max(0, Math.min(sliderHeight, d3.pointer(event, sliderGroup.node())[1]));
-                animationState.speedMultiplier = speedScale.invert(localY);
-                sliderGroup.select(".handle")
-                    .attr("cy", speedScale(animationState.speedMultiplier));
-            })
-            .call(d3.drag().on("drag", (event) => {
-                const localY = Math.max(0, Math.min(sliderHeight, event.y));
-                animationState.speedMultiplier = speedScale.invert(localY);
-                sliderGroup.select(".handle")
-                    .attr("cy", speedScale(animationState.speedMultiplier));
-            }));
+            .on("mousedown", function () { d3.select(this).style("cursor", "grabbing"); })
+            .on("mouseup", function () { d3.select(this).style("cursor", "grab"); })
+            .on("click", setFromPointer) // Simplified click
+            .call(d3.drag().on("drag", setFromPointer)); // Simplified drag
 
-        // Add wheel support for fine-tuning speed.
-        interactionArea.on("wheel", function (event) {
+        interactionArea.on("wheel", function (event) { /* ... remains the same ... */
             event.preventDefault();
             const delta = event.deltaY > 0 ? -0.1 : 0.1;
             animationState.speedMultiplier = Math.max(0.1, Math.min(8.0, animationState.speedMultiplier + delta));
             d3.select("#d3-layout-slider-handle").attr("cy", speedScale(animationState.speedMultiplier));
         });
 
-        // Add label for the speed slider.
         sliderGroup.append("text")
-            .attr("y", sliderHeight + 20)
-            .attr("text-anchor", "middle")
-            .style("font-size", "0.7rem")
-            .style("fill", getComputedStyle(root).getPropertyValue('--accent'))
+            .attr("class", "layout-speed-slider-label") // Use CSS class
+            .attr("y", sliderHeight + 20) // Dynamic position
             .text("Speed");
 
         // --- Animation Controls (Play/Pause, Reset) ---
-
-        // Position controls below clock
+        // ***** UPDATED controls transform to use clockBaseX (original center) *****
         const controlsGroup = svg.append("g")
-            .attr("transform", `translate(${clockX + (containerWidth * 0.01)}, ${clockY + clockRadius + 15})`)
+            .attr("transform", `translate(${clockBaseX}, ${clockY + clockRadius + 15})`); // Use original base X
 
         const playPauseBtn = controlsGroup.append("g")
-            .attr("class", "play-pause-btn")
-            .attr("transform", `translate(-32, 0)`)
-            .style("cursor", "pointer");
+            .attr("class", "layout-play-pause-btn sim-control-btn") // Add shared class
+            .attr("transform", `translate(-32, 0)`);
 
-        playPauseBtn.append("rect")
-            .attr("width", 28)
-            .attr("height", 18)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--accent').trim())
-            .attr("rx", 3);
+        playPauseBtn.append("rect") // Rect is styled by sim-control-btn
+            .attr("width", 28).attr("height", 18).attr("rx", 3);
 
-        // Default to pause icon.
         const playPauseIcon = playPauseBtn.append("text")
-            .attr("x", 14)
-            .attr("y", 13)
-            .attr("text-anchor", "middle")
-            .attr("fill", getComputedStyle(root).getPropertyValue('--white').trim())
-            .style("font-size", "14px")
-            .text("⏸");
+            .attr("x", 14).attr("y", 13) // Positioning
+            .text(animationState.layout.isManuallyPaused ? "▶" : "⏸"); // Set initial icon state
 
         const resetBtn = controlsGroup.append("g")
-            .attr("class", "reset-btn")
-            .attr("transform", "translate(0, 0)")
-            .style("cursor", "pointer");
+            .attr("class", "layout-reset-btn sim-control-btn") // Add shared class
+            .attr("transform", "translate(0, 0)");
 
-        resetBtn.append("rect")
-            .attr("width", 28)
-            .attr("height", 18)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--accent').trim())
-            .attr("rx", 3);
+        resetBtn.append("rect") // Rect is styled by sim-control-btn
+            .attr("width", 28).attr("height", 18).attr("rx", 3);
 
-        // Reset icon.
         resetBtn.append("text")
-            .attr("x", 14)
-            .attr("y", 13)
-            .attr("text-anchor", "middle")
-            .attr("fill", getComputedStyle(root).getPropertyValue('--white').trim())
-            .style("font-size", "13px")
+            .attr("x", 14).attr("y", 13) // Positioning
             .text("⟳");
 
         const skipBtn = controlsGroup.append("g")
-            .attr("class", "skip-btn")
-            .attr("transform", `translate(32, 0)`)
-            .style("cursor", "pointer");
+            .attr("class", "layout-skip-btn sim-control-btn") // Add shared class
+            .attr("transform", `translate(32, 0)`);
 
-        skipBtn.append("rect")
-            .attr("width", 28)
-            .attr("height", 18)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--accent').trim())
-            .attr("rx", 3);
+        skipBtn.append("rect") // Rect is styled by sim-control-btn
+            .attr("width", 28).attr("height", 18).attr("rx", 3);
 
-        // Skip to end icon.
         skipBtn.append("text")
-            .attr("x", 14)
-            .attr("y", 13)
-            .attr("text-anchor", "middle")
-            .attr("fill", getComputedStyle(root).getPropertyValue('--white').trim())
-            .style("font-size", "13px")
+            .attr("x", 14).attr("y", 13) // Positioning
             .text("⏭");
 
         // --- Speedometer ---
-
         const speedoGroup = svg.append("g")
-            .attr("transform", `translate(${speedoX}, ${speedoY})`); // Position speedometer group.
-        const speedoDomain = [0, 15]; // ft/min
+            .attr("transform", `translate(${speedoX}, ${speedoY})`); // Uses final clockX derived speedoX
+
+        const speedoDomain = [0, 15];
         const colorThresholds = { slow: 4, medium: 10 };
-        const radianScale = d3.scaleLinear()
-            .domain(speedoDomain)
-            .range([-Math.PI / 2, Math.PI / 2]); // Map speed to angle.
+        const radianScale = d3.scaleLinear().domain(speedoDomain).range([-Math.PI / 2, Math.PI / 2]);
         const arcGenerator = d3.arc()
-            .innerRadius(speedoRadius * 0.7)
-            .outerRadius(speedoRadius)
+            .innerRadius(speedoRadius * 0.7) // Dynamic radius
+            .outerRadius(speedoRadius)       // Dynamic radius
             .cornerRadius(3);
         const arcs = [
-            // Define colored arcs for the speedometer face.
             { start: speedoDomain[0], end: colorThresholds.slow, color: getComputedStyle(root).getPropertyValue('--secondary2').trim() },
             { start: colorThresholds.slow, end: colorThresholds.medium, color: getComputedStyle(root).getPropertyValue('--primary').trim() },
             { start: colorThresholds.medium, end: speedoDomain[1], color: getComputedStyle(root).getPropertyValue('--secondary1').trim() }
         ];
 
-        // Draw the arcs
-        speedoGroup.selectAll("path.color-arc")
+        speedoGroup.selectAll("path.layout-speedo-arc") // Use CSS class
             .data(arcs)
             .join("path")
-            .attr("class", "color-arc")
-            .attr("fill", d => d.color)
-            .attr("d", d => arcGenerator({ startAngle: radianScale(d.start), endAngle: radianScale(d.end) }));
+            .attr("class", "layout-speedo-arc")
+            .attr("fill", d => d.color) // Dynamic fill
+            .attr("d", d => arcGenerator({ startAngle: radianScale(d.start), endAngle: radianScale(d.end) })); // Dynamic path
 
         const ticks = radianScale.ticks(6);
 
-        // Draw tick labels
-        speedoGroup.selectAll("text.tick-label")
+        speedoGroup.selectAll("text.layout-speedo-tick-label") // Use CSS class
             .data(ticks)
             .join("text")
-            .attr("class", "tick-label")
-            .attr("x", d => Math.sin(radianScale(d)) * (speedoRadius + 15))
-            .attr("y", d => -Math.cos(radianScale(d)) * (speedoRadius + 15))
-            .attr("text-anchor", "middle")
-            .attr("dominant-baseline", "central")
-            .style("font-size", "12px")
-            .style("font-weight", "700")
-            .attr("fill", getComputedStyle(root).getPropertyValue('--accent'))
+            .attr("class", "layout-speedo-tick-label")
+            .attr("x", d => Math.sin(radianScale(d)) * (speedoRadius + 15)) // Dynamic position
+            .attr("y", d => -Math.cos(radianScale(d)) * (speedoRadius + 15)) // Dynamic position
+            .attr("dominant-baseline", "central") // ***** Moved back to .attr() *****
             .text(d => d3.format("d")(d));
 
-        // Calculate target angle for the needle
         const targetAngleDeg = (radianScale(Math.min(speedoDomain[1], results.conveyorSpeed || 0)) * 180 / Math.PI);
-        const needle = speedoGroup.selectAll("line.speedo-needle")
+        const needle = speedoGroup.selectAll("line.layout-speedo-needle") // Use CSS class
             .data([targetAngleDeg]);
 
-        // Create needle at previous angle then animate to target.
         needle.enter()
             .append("line")
-            .attr("class", "speedo-needle")
-            .attr("id", "speedo-needle")
+            .attr("class", "layout-speedo-needle")
+            .attr("id", "speedo-needle") // Keep ID for potential direct selection
             .attr("y1", 10)
-            .attr("y2", -speedoRadius * 0.9)
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim())
-            .attr("stroke-width", 4)
-            .attr("stroke-linecap", "round")
-            .attr("transform", `rotate(${animationState.speedo.currentAngle})`) // Start at previous angle.
+            .attr("y2", -speedoRadius * 0.9) // Dynamic length
+            .attr("transform", `rotate(${animationState.speedo.currentAngle})`)
             .merge(needle)
             .transition()
-            .duration(750)
-            .attrTween("transform", function (d) {
-                // Animate rotation from old angle to new.
+            .duration(750) // Keep animation
+            .attrTween("transform", function (d) { /* ... tween remains the same ... */
                 const startAngle = animationState.speedo.currentAngle;
                 const i = d3.interpolate(startAngle, d);
                 return t => `rotate(${i(t)})`;
             })
-            .on("end", () => {
-                animationState.speedo.currentAngle = targetAngleDeg; // Store the new angle for next update.
-            });
+            .on("end", () => { animationState.speedo.currentAngle = targetAngleDeg; });
 
         needle.exit().remove();
 
-        // Needle center pin
         speedoGroup.append("circle")
-            .attr("r", 8)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--accent'))
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--white'))
-            .attr("stroke-width", 2);
+            .attr("class", "layout-speedo-center-pin") // Use CSS class
+            .attr("r", 8); // Fixed radius
 
-        // Digital speed readout
         speedoGroup.append("text")
-            .text(`${(results.conveyorSpeed || 0).toFixed(1)}`)
-            .attr("y", speedoRadius * 0.5)
-            .attr("text-anchor", "middle")
-            .style("font-size", `${speedoRadius * 0.25}px`)
-            .style("font-weight", "bold")
-            .attr("fill", getComputedStyle(root).getPropertyValue('--accent'));
+            .attr("class", "layout-speedo-readout") // Use CSS class
+            .text(`${(results.conveyorSpeed || 0).toFixed(1)}`) // Dynamic text
+            .attr("y", speedoRadius * 0.5) // Dynamic position
+            .style("font-size", `${speedoRadius * 0.25}px`); // Dynamic size
 
-        // Units label
         speedoGroup.append("text")
+            .attr("class", "layout-speedo-units") // Use CSS class
             .text("ft/min")
-            .attr("y", speedoRadius * 0.75)
-            .attr("text-anchor", "middle")
-            .style("font-size", `${speedoRadius * 0.2}px`)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--accent'));
+            .attr("y", (speedoRadius * 0.75)) // Dynamic position
+            .style("font-size", `${speedoRadius * 0.2}px`); // Dynamic size
 
         // --- Finished Goods Bin ---
 
-        const binAreaTopY = speedoY + speedoRadius - (uiPadding * 0.75);
-        const binAreaHeight = (containerHeight - uiPadding) - binAreaTopY;
-        const maxContentWidth = rightPanelWidth - (uiPadding * 2);
-        const maxContentHeight = binAreaHeight;
-
-        // Calculate a grid layout for finished products.
-        const capacity = 552;
-        const aspectRatio = maxContentWidth / maxContentHeight;
-        let numRows = Math.round(Math.sqrt(capacity / aspectRatio));
-        if (numRows < 1) numRows = 1;
-        let numCols = Math.ceil(capacity / numRows);
-        if (numCols < 1) numCols = 1;
-
-        const itemSizeWithPadding = Math.min(maxContentWidth / numCols, maxContentHeight / numRows);
-        const itemPadding = itemSizeWithPadding * 0.1;
-        const finalItemSize = itemSizeWithPadding - itemPadding;
-
-        const finalContentWidth = numCols * itemSizeWithPadding;
-        const correctedVisualWidth = finalContentWidth - (itemSizeWithPadding);
-
-        // Center the bin within the right panel.
-        const rightPanelCenterX = rightPanelX + (rightPanelWidth / 2);
-        const binContentStartX = rightPanelCenterX - (correctedVisualWidth / 2);
-        const finalContentHeight = numRows * itemSizeWithPadding;
+        // 1. Define the available vertical area for the bin
+        const binAreaTopY = speedoY + speedoRadius + uiPadding; // Add padding below speedo
+        const binAreaBottomY = containerHeight - (uiPadding*1.2); // Bottom padding
+        const binAreaHeight = binAreaBottomY - binAreaTopY;
         const binAreaCenterY = binAreaTopY + (binAreaHeight / 2);
-        const binContentStartY = binAreaCenterY - (finalContentHeight / 2);
 
-        // Store bin configuration for the simulation.
+        // 2. Calculate ideal grid based on aspect ratio and capacity (initial pass)
+        const maxContentWidth = rightPanelWidth - (uiPadding * 2);
+        // Use the *available* bin area height for initial calculation
+        const maxContentHeight = binAreaHeight - (uiPadding * 2); // Allow padding within the area
+
+        const capacity = 552; // Max items
+        let idealItemSize = 10; // Default/minimum size
+        let numRows = 1;
+        let numCols = 1;
+        let idealFinalContentWidth = idealItemSize;
+        let idealFinalContentHeight = idealItemSize;
+        let itemPadding = idealItemSize * 0.1;
+
+        // Only calculate grid if dimensions are valid
+        if (maxContentWidth > 0 && maxContentHeight > 0 && capacity > 0) {
+            const aspectRatio = maxContentWidth / maxContentHeight;
+            numRows = Math.max(1, Math.round(Math.sqrt(capacity / aspectRatio)));
+            numCols = Math.max(1, Math.ceil(capacity / numRows));
+
+            // Calculate item size based on fitting *within* the available area
+            const itemSizeWithPaddingWidth = maxContentWidth / numCols;
+            const itemSizeWithPaddingHeight = maxContentHeight / numRows;
+            const itemSizeWithPadding = Math.min(itemSizeWithPaddingWidth, itemSizeWithPaddingHeight);
+
+            itemPadding = itemSizeWithPadding * 0.1; // 10% padding
+            idealItemSize = itemSizeWithPadding - itemPadding;
+
+            // Prevent negative item size if padding is too large
+            if (idealItemSize < 1) {
+                idealItemSize = 1;
+                itemPadding = 0;
+            }
+
+            // Calculate the total dimensions the grid *would* occupy
+            idealFinalContentWidth = numCols * (idealItemSize + (itemPadding*1.1));
+            // Height calculation needs to subtract the last padding row
+            idealFinalContentHeight = numRows * (idealItemSize + itemPadding) - itemPadding;
+            if (idealFinalContentHeight < 0) idealFinalContentHeight = idealItemSize; // Ensure non-negative
+        }
+
+
+        // 3. Constrain the height used for drawing the bin rectangle
+        // The actual height cannot exceed the available space
+        const actualBinRectHeight = Math.min(idealFinalContentHeight, maxContentHeight);
+
+        // 4. Calculate final Bin Y position based on constrained height
+        // Center the *actual* bin rectangle vertically within its available area
+        const binContentStartY = binAreaCenterY - (actualBinRectHeight / 2);
+
+        // 5. Calculate final Bin X position (centering horizontally)
+        // Use ideal width for centering calculation
+        const actualBinRectWidth = idealFinalContentWidth - itemPadding; // Width for drawing rect
+        const rightPanelCenterX = rightPanelX + (rightPanelWidth / 2);
+        const binContentStartX = rightPanelCenterX - (idealFinalContentWidth / 2);
+
+
+        // 6. Store bin configuration for the simulation (uses ideal layout for item placement)
         const binConfig = {
-            productPixelSize: finalItemSize,
+            productPixelSize: idealItemSize,
             itemsPerRow: numCols,
             padding: itemPadding,
-            binPixelX: rightPanelCenterX - (finalContentWidth / 2),
-            binPixelY_bottom: binContentStartY + finalContentHeight
+            // Use startX for placement calculations
+            binPixelX_Start: binContentStartX,
+            // Use calculated bottom Y (based on start Y and ideal height) for placement logic
+            binPixelY_Bottom: binContentStartY + idealFinalContentHeight,
+            // Add constrained dimensions for potential clipping/checking later if needed
+            // constrainedHeight: actualBinRectHeight,
+            // constrainedStartY: binContentStartY
         };
 
-        // Draw the visual rectangle for the bin.
+        // 7. Draw the visual rectangle for the bin using *actual constrained dimensions*
         svg.append("rect")
+            .attr("class", "layout-bin-rect") // Use CSS class
             .attr("x", binContentStartX)
             .attr("y", binContentStartY)
-            .attr("width", correctedVisualWidth)
-            .attr("height", finalContentHeight)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--idle-color'))
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--accent'))
-            .attr("stroke-width", 1);
+            .attr("width", actualBinRectWidth) // Use width based on ideal grid
+            .attr("height", actualBinRectHeight); // Use constrained height
 
-        // Draw the bin title.
+        // 8. Draw the bin title relative to the *actual* top of the bin rectangle
         svg.append("text")
+            .attr("class", "layout-bin-title") // Use CSS class
             .text("Finished Goods")
             .attr("x", rightPanelCenterX)
-            .attr("y", binContentStartY * 1.1)
-            .attr("text-anchor", "middle")
-            .style("font-size", "14px")
-            .style("font-weight", "bold")
-            .attr("fill", getComputedStyle(root).getPropertyValue('--accent'));
+            .attr("y", binContentStartY - 10); // Position above the actual bin rectangle
 
         // --- Legend and Grid ---
         const legendWidth = 160;
         const legendHeight = 110;
         const legendX = containerWidth * 0.01;
-        const legendY = binContentStartY + finalContentHeight - legendHeight;
+        // Position legend relative to the *actual* bottom of the bin rectangle
+        const legendY = binContentStartY + actualBinRectHeight - legendHeight;
         const legendGroup = svg.append("g")
             .attr("transform", `translate(${legendX}, ${legendY})`);
+
+        // ... (Rest of Legend and Grid drawing code remains the same) ...
         legendGroup.append("rect")
             .attr("width", legendWidth)
             .attr("height", legendHeight)
             .attr("rx", 5)
-            .classed("legend-box", true);
+            .classed("legend-box", true); // Use shared class
 
         legendGroup.append("text")
             .text("Legend")
             .attr("x", legendWidth / 2)
             .attr("y", 20)
-            .attr("text-anchor", "middle")
-            .classed("legend-title", true);
+            .classed("legend-title", true); // Use shared class
 
         const itemsGrid = [
             [
@@ -645,28 +570,31 @@ const LayoutTab = (function () {
         ];
 
         const gridStartX = 15;
-        const gridStartY = 45;
+        const gridStartY = 45; // Start Y position for first row items
         const rowGap = 25;
-        const colGap = 75;
+        const colGap = 75; // Horizontal gap between items in a row
 
         itemsGrid.forEach((rowItems, rowIndex) => {
             rowItems.forEach((item, colIndex) => {
                 const xPos = gridStartX + colIndex * colGap;
                 const yPos = gridStartY + rowIndex * rowGap;
 
+                // Color swatch
                 legendGroup.append("rect")
                     .attr("x", xPos)
-                    .attr("y", yPos - 8)
+                    .attr("y", yPos - 8) // Align rect with text baseline
                     .attr("width", 10)
                     .attr("height", 10)
-                    .attr("fill", item.color)
+                    .attr("fill", item.color) // Dynamic fill
                     .attr("rx", 2);
 
+                // Text label
                 legendGroup.append("text")
-                    .text(item.label)
-                    .attr("x", xPos + 15)
-                    .attr("y", yPos + 1)
-                    .classed("legend-item-text", true)
+                    .text(item.label) // The actual text: Super, Ultra, Mega, Idle
+                    .attr("x", xPos + 15) // Position text next to the rect
+                    .attr("y", yPos)      // Align baseline with rect center
+                    .attr("dominant-baseline", "middle") // Vertically center text
+                    .classed("legend-item-text", true) // Use shared class
                     .style("font-size", "12px")
                     .style("fill", getComputedStyle(root).getPropertyValue('--accent').trim());
             });
@@ -676,102 +604,82 @@ const LayoutTab = (function () {
             .attr("transform", `translate(0, ${legendHeight - 15})`);
 
         squareGroup.append("rect")
+            .attr("class", "layout-legend-grid-square") // Use CSS class
             .attr("x", gridStartX)
             .attr("y", -8)
             .attr("width", 10)
             .attr("height", 10)
-            .attr("fill", getComputedStyle(root).getPropertyValue('--white').trim())
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim())
             .attr("rx", 2);
 
         squareGroup.append("text")
             .attr("x", gridStartX + 15)
-            .attr("y", 1)
-            .classed("legend-item-text", true)
+            .attr("y", 0) // Adjusted y for baseline alignment
+            .attr("dominant-baseline", "middle")
+            .classed("legend-item-text", true) // Use shared class
             .text("Grid Size: 10 ft x 10 ft")
             .style("font-size", "12px")
             .style("fill", getComputedStyle(root).getPropertyValue('--accent').trim());
 
-        // Draw the background grid for scale reference.
+        // ... (Rest of the draw function remains the same, including grid, paths, simulation setup) ...
+
+
+        // Grid Group
         const gridGroup = g.append("g");
-        const gridBounds = {
+        const gridBounds = { /* ... calculation remains the same ... */
             x1: (0 - translateX) / scale,
             y1: (0 - translateY) / scale,
             x2: (containerWidth - translateX) / scale,
             y2: (containerHeight - translateY) / scale
         };
         for (let x = Math.floor(gridBounds.x1 / 10) * 10; x <= gridBounds.x2; x += 10) {
-            gridGroup.append("line")
-                .attr("x1", x)
-                .attr("y1", gridBounds.y1)
-                .attr("x2", x)
-                .attr("y2", gridBounds.y2);
+            gridGroup.append("line") // Lines need dynamic positions
+                .attr("x1", x).attr("y1", gridBounds.y1)
+                .attr("x2", x).attr("y2", gridBounds.y2);
         }
         for (let y = Math.floor(gridBounds.y1 / 10) * 10; y <= gridBounds.y2; y += 10) {
-            gridGroup.append("line")
-                .attr("x1", gridBounds.x1)
-                .attr("y1", y)
-                .attr("x2", gridBounds.x2)
-                .attr("y2", y);
+            gridGroup.append("line") // Lines need dynamic positions
+                .attr("x1", gridBounds.x1).attr("y1", y)
+                .attr("x2", gridBounds.x2).attr("y2", y);
         }
-
-        // Style the grid lines
-        gridGroup.selectAll("line")
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--accent'))
-            .attr("stroke-width", 0.2)
-            .attr("opacity", 0.1);
+        gridGroup.selectAll("line").attr("class", "layout-grid-line"); // Style via CSS
 
         // --- Draw Layout Paths ---
-
-        const reversedPaths = [...allPaths].reverse();
-        g.selectAll("g.element-group")
+        const reversedPaths = [...allPaths].reverse(); // Keep reversal for draw order
+        g.selectAll("g.layout-element-group") // Use class
             .data(reversedPaths, d => `${d.wsId}-${d.elId}`)
             .join("g")
-            .attr("class", "element-group")
+            .attr("class", "layout-element-group")
             .each(function (d) {
-                // 'this' is the <g> element
                 const group = d3.select(this);
 
-                // Draw the outer border path (this will be the main hover target)
-                // Increased stroke-width slightly to make hovering easier
-                group.append("path")
-                    .attr("d", d.path)
-                    .attr("stroke", "transparent") // Make it invisible
-                    .attr("stroke-width", 4) // Give it a wide hover area
-                    .attr("stroke-linecap", d.lineCap)
-                    .style("pointer-events", "stroke"); // Only trigger on the stroke area
+                group.append("path") // Hover path
+                    .attr("class", "layout-element-hover-path") // Use CSS
+                    .attr("d", d.path) // Dynamic path data
+                    .attr("stroke-linecap", d.lineCap); // Keep dynamic linecap
 
-                // Draw the visible accent border
-                group.append("path")
-                    .attr("d", d.path)
-                    .attr("stroke", getComputedStyle(root).getPropertyValue('--accent'))
-                    .attr("stroke-width", 2.25)
-                    .attr("stroke-linecap", d.lineCap)
-                    .style("pointer-events", "none"); // Pass clicks through
+                group.append("path") // Accent border
+                    .attr("class", "layout-element-accent-border") // Use CSS
+                    .attr("d", d.path) // Dynamic path data
+                    .attr("stroke-linecap", d.lineCap); // Keep dynamic linecap
 
-                // Draw the inner colored path
-                group.append("path")
-                    .attr("d", d.path)
-                    .attr("stroke", d.color)
-                    .attr("stroke-width", 1.75)
-                    .attr("stroke-linecap", d.lineCap)
-                    .style("pointer-events", "none"); // Pass clicks through
+                group.append("path") // Color path
+                    .attr("class", "layout-element-color-path") // Use CSS
+                    .attr("d", d.path) // Dynamic path data
+                    .attr("stroke", d.color) // Dynamic color
+                    .attr("stroke-linecap", d.lineCap); // Keep dynamic linecap
             })
-            // Add the new tooltip events to the group itself
-            .on("mouseover", (event, d) => {
+            .on("mouseover", (event, d) => { /* ... tooltip logic remains the same ... */
                 const task = state.taskData.get(d.elId);
-                // Use fallback for labor time, consistent with Precedence tab
                 const laborTime = (task?.laborTime || PERT_LABOR_FALLBACK[d.elId] || 0).toFixed(2);
                 const description = task?.description || "No description available";
 
                 layoutTooltip.style("opacity", 1)
                     .html(
                         `<div class="tooltip-header">Element ${d.elId} (WorkStation ${d.wsId})</div>
-<div class="tooltip-row"><span>Description:</span> <span>${description}</span></div>`
+                         <div class="tooltip-row"><span>Description:</span> <span>${description}</span></div>`
                     );
             })
-            .on("mousemove", (event) => {
-                // Use standard tooltip positioning logic
+            .on("mousemove", (event) => { /* ... tooltip logic remains the same ... */
                 const tooltipNode = layoutTooltip.node();
                 if (!tooltipNode) return;
                 const { width, height } = tooltipNode.getBoundingClientRect();
@@ -782,39 +690,31 @@ const LayoutTab = (function () {
                 if (top + height > window.innerHeight) { top = event.pageY - height - padding; }
                 layoutTooltip.style("left", `${left}px`).style("top", `${top}px`);
             })
-            .on("mouseout", () => {
+            .on("mouseout", () => { /* ... tooltip logic remains the same ... */
                 layoutTooltip.style("opacity", 0);
             });
 
-        g.selectAll("path.workstation-border")
+        g.selectAll("path.layout-workstation-border") // Use class
             .data(workstationBorders, d => d.wsId)
             .join("path")
-            .attr("class", "workstation-border")
-            .attr("d", d => d.path)
-            .attr("fill", "none")
-            .attr("stroke", getComputedStyle(root).getPropertyValue('--accent'))
-            .attr("stroke-width", 0.3)
-            .attr("stroke-linecap", "butt")
-            .attr("opacity", 0.6); // Faint workstation outlines.
+            .attr("class", "layout-workstation-border")
+            .attr("d", d => d.path); // Dynamic path data
 
         // --- Simulation Setup and Initialization ---
-
+        // ... (Simulation logic remains the same, but uses recalculated variables like results, binConfig etc.) ...
         const totalDurationMin = (ASSEMBLY_LINE_LENGTH / results.conveyorSpeed);
         const launchDelayMin = (results.productSpacing / results.conveyorSpeed);
 
-        // Only start the simulation if the calculated times are valid.
         if (isFinite(totalDurationMin) && totalDurationMin > 0 && isFinite(launchDelayMin) && launchDelayMin > 0) {
-            // Create a single master path for animating the products.
             let masterPathString = "";
             allPaths.forEach((pathData, i) => {
                 masterPathString += i === 0 ? pathData.path : pathData.path.replace('M', ' ');
             });
-            const masterPathNode = g.append("path").attr("d", masterPathString).node();
+            const masterPathNode = g.append("path").attr("d", masterPathString).node(); // Needs dynamic path
 
-            // Map element IDs to their start/end distances along the master path.
             let cumulativeDist = 0;
             const tempPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            const elementMap = allPaths.map(p => {
+            const elementMap = allPaths.map(p => { /* ... remains same */
                 tempPath.setAttribute('d', p.path);
                 const len = tempPath.getTotalLength();
                 const segment = { elementId: p.elId, startDist: cumulativeDist, endDist: cumulativeDist + len };
@@ -822,93 +722,62 @@ const LayoutTab = (function () {
                 return segment;
             });
 
-            // The main configuration object passed to the animation engine.
-            const simulationConfig = {
+            const simulationConfig = { // Use recalculated values
                 svg,
                 g,
                 masterPathNode,
                 elementMap,
                 opHours: opInputs.opHours,
                 productionQueue: generateProductionQueue(opInputs.dailyDemand),
-                totalDurationMs: (ASSEMBLY_LINE_LENGTH / results.conveyorSpeed) * 1000 * 60, // Adjusted for matching time scale
-                launchDelayMs: (results.productSpacing / results.conveyorSpeed) * 1000 * 60, // Adjusted for matching time scale
-                binConfig,
-                scale
+                totalDurationMs: (ASSEMBLY_LINE_LENGTH / results.conveyorSpeed) * 1000 * 60,
+                launchDelayMs: (results.productSpacing / results.conveyorSpeed) * 1000 * 60,
+                binConfig, // Use recalculated binConfig
+                scale // Use recalculated scale
             };
 
-            // Add event listeners for the play/pause and reset buttons.
-            playPauseBtn.on("click", () => {
+            // --- Event Listeners ---
+            playPauseBtn.on("click", () => { /* ... remains same */
                 animationState.layout.isPaused = !animationState.layout.isPaused;
                 animationState.layout.isManuallyPaused = animationState.layout.isPaused;
                 playPauseBtn.select('text').text(animationState.layout.isPaused ? "▶" : "⏸");
                 if (!animationState.layout.isPaused && !animationState.layout.isRunning) {
-                    svg.selectAll(".product-shape").remove();
+                    svg.selectAll(".layout-product-shape").remove(); // Use class selector
                     startSimulation(simulationConfig);
                 }
             });
-
-            resetBtn.on("click", () => {
+            resetBtn.on("click", () => { /* ... remains same */
                 stopAllSimulations();
                 animationState.layout.isPaused = false;
                 animationState.layout.isManuallyPaused = false;
                 playPauseBtn.select('text').text("⏸");
-                svg.selectAll(".product-shape").remove();
+                svg.selectAll(".layout-product-shape").remove(); // Use class selector
                 startSimulation(simulationConfig);
             });
-
-            skipBtn.on("click", () => {
-                // Stop current simulation
+            skipBtn.on("click", () => { /* ... remains same, uses class selector */
                 const layout = animationState.layout || {};
-                if (layout.frameId) {
-                    cancelAnimationFrame(layout.frameId);
-                    layout.frameId = null;
-                }
+                if (layout.frameId) { cancelAnimationFrame(layout.frameId); layout.frameId = null; }
                 layout.isRunning = false;
-
-                // Clear any products on the line
-                if (Array.isArray(layout.productsOnLine)) {
-                    layout.productsOnLine.forEach(p => p.element && p.element.remove());
-                    layout.productsOnLine = [];
-                }
-
-                // Remove any existing products in bin
-                svg.selectAll(".product-shape").remove();
-
-                // Place all products in bin (use the runtime layout.binConfig; fallback to local binConfig if present)
+                if (Array.isArray(layout.productsOnLine)) { layout.productsOnLine.forEach(p => p.element && p.element.remove()); layout.productsOnLine = []; }
+                svg.selectAll(".layout-product-shape").remove(); // Use class selector
                 const queue = Array.isArray(layout.productionQueue) ? layout.productionQueue : [];
                 const binCfg = layout.binConfig || (typeof binConfig !== 'undefined' ? binConfig : null);
                 for (let i = 0; i < queue.length; i++) {
                     const modelId = queue[i];
-                    const element = createProductShape(g, modelId);
-                    if (binCfg) {
-                        placeInBin(element, i, binCfg, svg);
-                    } else {
-                        // If no bin config available, just remove any created element to avoid dangling shapes
-                        element && element.remove();
-                    }
+                    const element = createProductShape(g, modelId); // g might be wrong here if scale applied?
+                    if (binCfg) { placeInBin(element, i, binCfg, svg); } // Pass svg
+                    else { element && element.remove(); }
                 }
-
-                layout.finishedGoodsCount = queue.length;
-                layout.queueIndex = queue.length;
-
-                // Set clock to end time using the layout's timing values (guard against missing values)
-                const launchMs = layout.launchDelayMs || 0;
-                const totalDurMs = layout.totalDurationMs || 0;
+                layout.finishedGoodsCount = queue.length; layout.queueIndex = queue.length;
+                const launchMs = layout.launchDelayMs || 0; const totalDurMs = layout.totalDurationMs || 0;
                 const totalSimTimeMs = (launchMs * Math.max(0, queue.length - 1)) + totalDurMs;
                 layout.totalSimTimeMs = totalSimTimeMs;
-                const simMinutes = (totalSimTimeMs / 1000) / 60;
-                const simHours = simMinutes / 60;
+                const simMinutes = (totalSimTimeMs / 1000) / 60; const simHours = simMinutes / 60;
                 d3.select("#sim-clock-minute-hand").attr("transform", `rotate(${(simMinutes % 60) / 60 * 360})`);
                 d3.select("#sim-clock-hour-hand").attr("transform", `rotate(${(simHours % 12) / 12 * 360})`);
-
-                // Set to paused state
-                layout.isPaused = true;
-                layout.isManuallyPaused = true;
-                animationState.layout = layout;
-                playPauseBtn.select('text').text("▶");
+                layout.isPaused = true; layout.isManuallyPaused = true;
+                animationState.layout = layout; playPauseBtn.select('text').text("▶");
             });
 
-            // Start the simulation automatically.
             startSimulation(simulationConfig);
         }
     }
@@ -917,89 +786,83 @@ const LayoutTab = (function () {
 
     /**
      * Creates an SVG shape (circle, square, or triangle) for a product model.
-     * @param {d3.Selection} container - The parent D3 selection to append the shape to.
-     * @param {number} modelId - The ID of the model (1=Super, 2=Ultra, 3=Mega).
-     * @returns {d3.Selection} The created shape selection.
+     * Uses CSS classes for styling.
      */
     function createProductShape(container, modelId) {
-        // Map model IDs to colors and shapes.
-        const modelColors = {
-            1: getComputedStyle(root).getPropertyValue('--super-color'),
-            2: getComputedStyle(root).getPropertyValue('--ultra-color'),
-            3: getComputedStyle(root).getPropertyValue('--mega-color')
+        const modelColors = { /* ... remains same ... */
+            1: getComputedStyle(root).getPropertyValue('--super-color').trim(),
+            2: getComputedStyle(root).getPropertyValue('--ultra-color').trim(),
+            3: getComputedStyle(root).getPropertyValue('--mega-color').trim()
         };
-        const modelBorders = {
-            1: getComputedStyle(root).getPropertyValue('--secondary1'),
-            2: getComputedStyle(root).getPropertyValue('--secondary2'),
-            3: getComputedStyle(root).getPropertyValue('--primary')
+        const modelBorders = { /* ... remains same ... */
+            1: getComputedStyle(root).getPropertyValue('--secondary1').trim(),
+            2: getComputedStyle(root).getPropertyValue('--secondary2').trim(),
+            3: getComputedStyle(root).getPropertyValue('--primary').trim()
         };
         const modelShapes = { 1: 'square', 2: 'triangle', 3: 'circle' };
         const shapeType = modelShapes[modelId];
 
-        // Define shape-specific dimensions.
         let shapeSize = 1.5;
         let shape;
+        const className = `layout-product-shape ${shapeType}`; // Base class + specific shape
+
         if (shapeType === 'circle') {
             shapeSize = 1.55;
-            shape = container.append("circle").attr("r", shapeSize / 2);
+            shape = container.append("circle")
+                .attr("class", className)
+                .attr("r", shapeSize / 2); // Dynamic radius
         } else if (shapeType === 'square') {
             shapeSize = 1.55;
             shape = container.append("rect")
-                .attr("x", -shapeSize / 2)
+                .attr("class", className)
+                .attr("x", -shapeSize / 2) // Dynamic positioning for centering
                 .attr("y", -shapeSize / 2)
-                .attr("width", shapeSize)
+                .attr("width", shapeSize)  // Dynamic size
                 .attr("height", shapeSize);
         } else if (shapeType === 'triangle') {
             shapeSize = 1.47;
             const h = shapeSize * (Math.sqrt(3) / 2);
             shape = container.append("polygon")
-                .attr("points", `0,${-h / 1.5} ${shapeSize / 1.5},${h / 2} ${-shapeSize / 1.5},${h / 2}`);
+                .attr("class", className)
+                .attr("points", `0,${-h / 1.5} ${shapeSize / 1.5},${h / 2} ${-shapeSize / 1.5},${h / 2}`); // Dynamic points
         }
 
-        // Apply common styles to the created shape.
         if (shape) {
-            shape
-                .attr("fill", modelColors[modelId])
-                .attr("stroke", modelBorders[modelId])
-                .attr("stroke-width", 0.2)
-                .attr("class", "product-shape")
-                .style("pointer-events", "none");
+            // Apply dynamic colors directly, static styles via CSS
+            shape.attr("fill", modelColors[modelId])
+                .attr("stroke", modelBorders[modelId]);
         }
         return shape;
     }
 
     /**
      * Moves a product shape to its final position in the finished goods bin.
-     * @param {d3.Selection} element - The product shape to move.
-     * @param {number} count - The zero-indexed count of finished goods.
-     * @param {object} binConfig - The configuration object for the bin layout.
-     * @param {d3.Selection} svg - The main SVG container.
      */
     function placeInBin(element, count, binConfig, svg) {
-        const { binPixelX, binPixelY_bottom, itemsPerRow, productPixelSize, padding } = binConfig;
+        const { binPixelX_Start, binPixelY_Bottom, itemsPerRow, productPixelSize, padding } = binConfig;
         const row = Math.floor(count / itemsPerRow);
         const col = count % itemsPerRow;
+        const slotSize = productPixelSize + padding;
 
-        // Move the element from the main 'g' group to the top-level 'svg' to escape the scaling transform.
-        svg.node().appendChild(element.node());
+        // Ensure the element is appended to the main SVG for correct coordinate space
+        if (element && element.node() && element.node().parentNode !== svg.node()) {
+            svg.node().appendChild(element.node());
+        }
 
-        // Calculate the new pixel coordinates within the bin.
-        const newX = binPixelX + (padding / 2) + (col * productPixelSize) + (productPixelSize / 2) + (productPixelSize * 0.75); // Adjusted for centering
-        const newY = binPixelY_bottom - (padding / 2) - (row * productPixelSize) - (productPixelSize / 2);
-        const newScale = productPixelSize / 1.8; // Scale the shape to fit the bin slot.
+        // Calculate center X and Y for the slot
+        const newX = binPixelX_Start + (col * slotSize) + (slotSize / 2);
+        const newY = binPixelY_Bottom - (row * slotSize) - (slotSize / 2);
 
-        // Animate the element to its final position and scale.
+        const newScale = productPixelSize / 1.8; // Adjust scale factor as needed
+
         element.transition().duration(300).attr('transform', `translate(${newX}, ${newY}) rotate(0) scale(${newScale})`);
     }
 
+
     /**
      * Generates an SVG path string for a portion of a larger path.
-     * @param {Array<object>} points - The array of {x, y} points defining the full path.
-     * @param {number} startFt - The starting distance in feet.
-     * @param {number} lengthFt - The length of the sub-path in feet.
-     * @returns {string} The SVG path data string.
      */
-    function generateSubPath(points, startFt, lengthFt) {
+    function generateSubPath(points, startFt, lengthFt) { /* ... remains the same ... */
         let pathString = "M ";
         let traveledFt = 0;
         let started = false;
@@ -1008,41 +871,48 @@ const LayoutTab = (function () {
             const curr = points[i];
             const segLenFt = Math.sqrt(Math.pow(curr.x - prev.x, 2) + Math.pow(curr.y - prev.y, 2));
 
-            // Find the start point of the sub-path.
             if (!started && traveledFt + segLenFt >= startFt) {
                 const ratio = segLenFt > 0 ? (startFt - traveledFt) / segLenFt : 0;
                 pathString += `${prev.x + ratio * (curr.x - prev.x)} ${prev.y + ratio * (curr.y - prev.y)}`;
                 started = true;
             }
 
-            // Add points to the path until the desired length is reached.
             if (started) {
                 if (traveledFt + segLenFt <= startFt + lengthFt) {
                     pathString += ` L ${curr.x} ${curr.y}`;
                 } else {
                     const ratio = segLenFt > 0 ? (startFt + lengthFt - traveledFt) / segLenFt : 0;
                     pathString += ` L ${prev.x + ratio * (curr.x - prev.x)} ${prev.y + ratio * (curr.y - prev.y)}`;
-                    return pathString; // End the path here.
+                    return pathString;
                 }
             }
             traveledFt += segLenFt;
+        }
+        // If the path ends exactly at the end of the segments
+        if (pathString === "M ") { // Handle zero length case or starting beyond path end
+            if (points.length > 0 && startFt === 0) { // Start at the beginning for zero length
+                return `M ${points[0].x} ${points[0].y}`;
+            } else if (points.length > 0) { // Start beyond end, return endpoint
+                const lastPt = points[points.length - 1];
+                return `M ${lastPt.x} ${lastPt.y}`;
+            } else {
+                return "M 0 0"; // Fallback for empty points
+            }
         }
         return pathString;
     }
 
     /**
      * Initializes and runs the main animation loop for the layout simulation.
-     * @param {object} config - The master configuration object for the simulation.
      */
-    function startSimulation(config) {
-        stopAllSimulations(); // Ensure no other loops are running.
-        let { svg, g, masterPathNode, productionQueue, totalDurationMs, launchDelayMs, binConfig, elementMap } = config;
-        if (!masterPathNode || totalDurationMs <= 0 || launchDelayMs <= 0) return; // Validate inputs.
+    function startSimulation(config) { /* ... Animation loop logic remains the same ... */
+        stopAllSimulations();
+        let { svg, g, masterPathNode, productionQueue, totalDurationMs, launchDelayMs, binConfig, elementMap, scale } = config; // Added scale
+        if (!masterPathNode || totalDurationMs <= 0 || launchDelayMs <= 0) return;
 
-        // Initialize the animation state object.
         const now = performance.now();
         animationState.layout = {
-            ...config,
+            ...config, // Store the passed config including scale
             isRunning: true,
             isPaused: false,
             lastFrameTime: now,
@@ -1053,8 +923,6 @@ const LayoutTab = (function () {
             finishedGoodsCount: 0,
             pathLength: masterPathNode.getTotalLength()
         };
-
-        // The core animation loop.
         function animationLoop(currentTime) {
             if (!animationState.layout.isRunning) return;
 
@@ -1062,20 +930,17 @@ const LayoutTab = (function () {
             const realDeltaMs = currentTime - animationState.layout.lastFrameTime;
             animationState.layout.lastFrameTime = currentTime;
 
-            // Advance simulation time if not paused.
             if (!animationState.layout.isPaused) {
-                const simDeltaMs = realDeltaMs * speedMultiplier * 60; // Match Schedule.js acceleration
+                const simDeltaMs = realDeltaMs * speedMultiplier * 60;
                 animationState.layout.totalSimTimeMs += simDeltaMs;
             }
 
-            // Update the clock display.
             const elapsedSimTimeMs = animationState.layout.totalSimTimeMs;
             const simMinutes = (elapsedSimTimeMs / 1000) / 60;
             const simHours = simMinutes / 60;
             d3.select("#sim-clock-minute-hand").attr("transform", `rotate(${(simMinutes % 60) / 60 * 360})`);
             d3.select("#sim-clock-hour-hand").attr("transform", `rotate(${(simHours % 12) / 12 * 360})`);
 
-            // Launch a new product if it's time.
             if (
                 animationState.layout.totalSimTimeMs >= animationState.layout.nextLaunchTime &&
                 animationState.layout.queueIndex < animationState.layout.productionQueue.length
@@ -1084,30 +949,28 @@ const LayoutTab = (function () {
                 animationState.layout.productsOnLine.push({
                     modelId: modelId,
                     launchTime: animationState.layout.totalSimTimeMs,
-                    element: createProductShape(g, modelId)
+                    element: createProductShape(g, modelId) // Append to scaled group 'g'
                 });
                 animationState.layout.queueIndex++;
                 animationState.layout.nextLaunchTime += animationState.layout.launchDelayMs;
             }
 
-            // Update the position of each product on the line.
             for (let i = animationState.layout.productsOnLine.length - 1; i >= 0; i--) {
                 const product = animationState.layout.productsOnLine[i];
                 const progress = (animationState.layout.totalSimTimeMs - product.launchTime) / animationState.layout.totalDurationMs;
 
                 if (progress >= 1) {
-                    // Product has reached the end of the line.
-                    placeInBin(product.element, animationState.layout.finishedGoodsCount, animationState.layout.binConfig, svg);
+                    // Use the scale stored in animationState.layout when placing in bin
+                    placeInBin(product.element, animationState.layout.finishedGoodsCount, animationState.layout.binConfig, svg); // Pass svg
                     animationState.layout.finishedGoodsCount++;
                     animationState.layout.productsOnLine.splice(i, 1);
                 } else {
-                    // Product is still on the line.
                     const distance = animationState.layout.pathLength * progress;
-                    const pos = animationState.layout.masterPathNode.getPointAtLength(distance); // Get current point on path.
-                    const nextPos = animationState.layout.masterPathNode.getPointAtLength(distance + 1); // Get next point to calculate angle.
-                    const angle = Math.atan2(nextPos.y - pos.y, nextPos.x - pos.x) * 180 / Math.PI; // Calculate rotation.
+                    const pos = animationState.layout.masterPathNode.getPointAtLength(distance);
+                    const nextPos = animationState.layout.masterPathNode.getPointAtLength(distance + 1);
+                    const angle = Math.atan2(nextPos.y - pos.y, nextPos.x - pos.x) * 180 / Math.PI;
 
-                    // Add shape-specific offset to better center shapes on the path.
+                    // Offset calculation remains the same
                     const modelShapes = { 1: 'square', 2: 'triangle', 3: 'circle' };
                     const shapeType = modelShapes[product.modelId];
                     let offset = 0.1;
@@ -1115,36 +978,45 @@ const LayoutTab = (function () {
                     if (shapeType === 'square') offset = 0.01;
                     if (shapeType === 'triangle') offset = 0.14;
 
-                    const perpAngle = angle + 90; // Perpendicular angle for offset.
+                    const perpAngle = angle + 90;
                     const offsetX = Math.cos(perpAngle * Math.PI / 180) * offset;
                     const offsetY = Math.sin(perpAngle * Math.PI / 180) * offset;
 
                     product.element.attr('transform', `translate(${pos.x + offsetX},${pos.y + offsetY}) rotate(${angle})`);
 
-                    // Change product color to idle if the current element isn't used for its model type.
+                    // Color change logic remains the same
                     const currentSegment = elementMap.find(e => distance >= e.startDist && distance < e.endDist);
+                    const modelColors = { 1: '--super-color', 2: '--ultra-color', 3: '--mega-color' };
+                    const shapeModelColorVar = modelColors[product.modelId];
+
                     product.element.attr(
                         'fill',
                         (currentSegment && doesElementBuildModel(currentSegment.elementId, product.modelId))
-                            ? getComputedStyle(root).getPropertyValue(`--${modelShapes[product.modelId] === 'square' ? 'super' : modelShapes[product.modelId] === 'triangle' ? 'ultra' : 'mega'}-color`).trim()
-                            : getComputedStyle(root).getPropertyValue('--idle-color')
+                            ? getComputedStyle(root).getPropertyValue(shapeModelColorVar).trim()
+                            : getComputedStyle(root).getPropertyValue('--idle-color').trim()
                     );
                 }
             }
 
-            // Continue the loop if there are products on the line or in the queue.
             if (animationState.layout.productsOnLine.length > 0 || animationState.layout.queueIndex < animationState.layout.productionQueue.length) {
                 animationState.layout.frameId = requestAnimationFrame(animationLoop);
             } else {
                 animationState.layout.isRunning = false;
             }
         }
-
-        animationState.layout.frameId = requestAnimationFrame(animationLoop); // Start the first frame.
+        animationState.layout.frameId = requestAnimationFrame(animationLoop);
     }
 
-    // Expose the public draw method.
+    /**
+     * Public resize function. Simply calls draw() as draw handles resizing internally.
+     */
+    function resize() {
+        draw();
+    }
+
+    // Expose the public draw and resize methods.
     return {
-        draw: draw
+        draw: draw,
+        resize: resize // Add the resize method
     };
 })();
