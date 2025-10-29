@@ -91,6 +91,26 @@ let animationState = {
 };
 
 /**
+* Utility function to delay execution of a function until after a certain time
+* has passed since the last time it was invoked.
+* @param {Function} func - The function to debounce.
+* @param {number} wait - The delay in milliseconds.
+* @returns {Function} The debounced function.
+*/
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const context = this;
+        const later = function () {
+            timeout = null;
+            func.apply(context, args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+/**
 * --------------------------------------------------------------------
 * DOM ELEMENTS
 * --------------------------------------------------------------------
@@ -191,7 +211,6 @@ async function main() {
     document.querySelectorAll("input[type='range']").forEach(input => {
         enableMiddleDragNumberInput(input, 1, 1);
     });
-    // Wire right-sidebar tooltips for operational and financial controls
     try {
         wireRightSidebarTooltips();
     } catch (err) {
@@ -268,53 +287,140 @@ function stopAllSimulations() {
 }
 
 /**
-* Animates a numeric value in a DOM element from a start to an end value.
+* Parses a numeric value from an element's text content, ignoring
+* currency symbols, units, and other non-numeric characters. Returns NaN if parsing fails.
+* @param {HTMLElement} element - The DOM element to parse.
+* @returns {number | NaN} The parsed numeric value or NaN.
+*/
+function parseElementValue(element) {
+    // Check if element or textContent is null/undefined
+    if (!element || typeof element.textContent !== 'string') {
+        // console.warn("parseElementValue: Invalid element or textContent", element); // DEBUG
+        return NaN;
+    }
+    const text = element.textContent.trim();
+    // Handle specific non-numeric placeholders or empty strings
+    if (text === '---' || text === '' || text === 'N/A' || text === 'No Return' || text === 'Net Loss') {
+        // console.log(`parseElementValue: Handling placeholder "${text}" -> NaN`); // DEBUG
+        return NaN;
+    }
+
+    let cleanedText;
+    // Handle currency and potential parentheses for negatives first
+    // Regex allows leading/trailing whitespace around symbols which trim() handles
+    if (text.includes('$') || text.includes('(')) {
+        cleanedText = text.replace(/[$,]/g, ''); // Remove $ and commas
+        // Handle accounting negative format (123.45) -> -123.45
+        if (cleanedText.startsWith('(') && cleanedText.endsWith(')')) {
+            cleanedText = '-' + cleanedText.substring(1, cleanedText.length - 1);
+        }
+    } else {
+        // Handle units typically found at the end of the string
+        // Added 'Days'/'Day' and specific Efficiency tab units
+        cleanedText = text.replace(/%|\/hr| ft\/min| ft| hrs$| h$| Days$| Day$/g, '').trim();
+    }
+
+    // After cleaning, check if it looks like a number (allows optional -, digits, optional decimal)
+    // Allows scientific notation like 1.23e-4
+    if (!/^-?\d*\.?\d+(e[-+]?\d+)?$/i.test(cleanedText)) {
+        // console.warn(`parseElementValue: Cleaned text "${cleanedText}" from "${text}" is not a valid number format.`); // DEBUG
+        return NaN;
+    }
+
+    const parsed = parseFloat(cleanedText);
+
+    // Final check if parseFloat resulted in a valid number (e.g., handles "Infinity")
+    if (typeof parsed !== 'number' || !isFinite(parsed)) {
+        // console.warn(`parseElementValue: parseFloat resulted in NaN/Infinity for "${cleanedText}" from "${text}".`); // DEBUG
+        return NaN;
+    }
+
+    // console.log(`Parsing: "${text}" -> "${cleanedText}" -> ${parsed}`); // DEBUG
+    return parsed;
+}
+
+
+/**
+* Animates a numeric value in a DOM element from its previously stored value
+* (or current parsed value if none stored) to an end value. Stores the end value
+* for the next animation. Handles potential NaN inputs gracefully.
 * @param {HTMLElement} element - The DOM element to update.
-* @param {number} start - The starting number.
-* @param {number} end - The ending number.
+* @param {number} end - The target ending number. MUST be a valid, finite number.
 * @param {number} [duration=1000] - The animation duration in milliseconds.
 * @param {Function} [formatter] - A function to format the number for display.
 */
-function animateValue(element, start, end, duration = 1000, formatter = (val) => val.toFixed(1)) {
-    if (!element) return;
-    if (element._animationId) {
-        cancelAnimationFrame(element._animationId);
+function animateValue(element, end, duration = 1000, formatter = (val) => val.toFixed(1)) {
+    if (!element) {
+        console.warn("animateValue called with null or undefined element.");
+        return;
     }
-    const startTime = Date.now();
-    const range = end - start;
+    // --- Validate End Value ---
+    // CRITICAL: Ensure 'end' is a valid, finite number before proceeding.
+    // If not, log an error and potentially stop to avoid propagating NaN.
+    if (typeof end !== 'number' || !isFinite(end)) {
+        console.error(`animateValue received invalid 'end' value: ${end}. Cannot animate. Element:`, element, "Current text:", element.textContent);
+        // Set a default state like '---' or 0 and store a valid fallback
+        element.textContent = formatter(0); // Or perhaps '---'
+        element._previousNumericValue = 0;
+        return;
+    }
+    const validEnd = end; // Use the validated 'end' value
 
-    function updateValue() {
-        const now = Date.now();
-        const elapsed = now - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-        const easeProgress = 1 - Math.pow(1 - progress, 4);
-        const current = start + (range * easeProgress);
-        element.textContent = formatter(current);
-        if (progress < 1) {
-            element._animationId = requestAnimationFrame(updateValue);
-        } else {
-            element._animationId = null;
+    // --- Determine Start Value ---
+    let start;
+    // 1. Try the stored value
+    if (typeof element._previousNumericValue === 'number' && isFinite(element._previousNumericValue)) {
+        start = element._previousNumericValue;
+    } else {
+        // 2. Try parsing the current text content
+        start = parseElementValue(element);
+        // 3. If parsing fails (returns NaN), fallback to the TARGET value (snap effect)
+        if (typeof start !== 'number' || !isFinite(start)) {
+            // console.warn(`Parsing failed for start value, snapping to end value ${validEnd}. Element:`, element, "Current text:", element.textContent); // DEBUG
+            start = validEnd; // Use the target value directly
         }
     }
-    updateValue();
-}
 
-/**
-* Parses a numeric value from an element's text content, ignoring
-* currency symbols and other non-numeric characters.
-* @param {HTMLElement} element - The DOM element to parse.
-* @returns {number} The parsed numeric value.
-*/
-function parseElementValue(element) {
-    if (!element || !element.textContent) return 0;
-    const text = element.textContent;
-    if (text.includes('$')) {
-        const cleanedText = text.replace(/[$,]/g, '');
-        const match = cleanedText.match(/-?\d+\.?\d*/);
-        return match ? parseFloat(match[0]) : 0;
+    // Store the VALID end value immediately. This ensures the *next* animation starts correctly.
+    element._previousNumericValue = validEnd;
+
+    // --- Animation Handling ---
+    if (element._animationId) {
+        cancelAnimationFrame(element._animationId);
+        element._animationId = null;
     }
-    const match = text.match(/-?\d+\.?\d*/);
-    return match ? parseFloat(match[0]) : 0;
+
+    // If duration is 0, start equals end, or if we snapped start to end, set final value immediately.
+    if (duration <= 0 || Math.abs(validEnd - start) < 1e-6) {
+        element.textContent = formatter(validEnd);
+        // console.log(`Set immediate: ${formatter(validEnd)}`, element); // DEBUG
+        return; // No animation needed
+    }
+
+    // --- Animation Logic ---
+    const startTime = performance.now(); // Use performance.now() for higher precision
+    const range = validEnd - start;
+    // console.log(`Animating from ${start} to ${validEnd} over ${duration}ms`, element); // DEBUG
+
+    function step(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const easedProgress = 1 - Math.pow(1 - progress, 4); // easeOutQuart
+        const current = start + (range * easedProgress);
+
+        element.textContent = formatter(current);
+
+        if (progress < 1) {
+            element._animationId = requestAnimationFrame(step);
+        } else {
+            // Animation finished: Ensure final value is exact and clear ID
+            element.textContent = formatter(validEnd);
+            element._animationId = null;
+            // _previousNumericValue is already set
+            // console.log(`Animation finished: ${formatter(validEnd)}`, element); // DEBUG
+        }
+    }
+    element._animationId = requestAnimationFrame(step);
 }
 
 /**
@@ -348,7 +454,6 @@ function updateFinancialSidebar({ npv, irr, payback } = {}) {
 
         const hasAnimator = (typeof animateValue === 'function');
 
-        // NPV: animate when possible, otherwise set immediately
         if (npvEl) {
             if (hasAnimator && isFinite(npvVal) && startNpv !== npvVal) {
                 animateValue(npvEl, startNpv, npvVal, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }));
@@ -357,7 +462,6 @@ function updateFinancialSidebar({ npv, irr, payback } = {}) {
             }
         }
 
-        // IRR: show percent when valid, otherwise 'No Return'
         if (irrEl) {
             if (irrIsValid) {
                 if (hasAnimator && startIrr !== irrPercent) {
@@ -366,12 +470,10 @@ function updateFinancialSidebar({ npv, irr, payback } = {}) {
                     irrEl.textContent = `${(irr * 100).toFixed(1)}%`;
                 }
             } else {
-                // Immediately set 'No Return' when irr is invalid
                 irrEl.textContent = 'No Return';
             }
         }
 
-        // Payback: show days when finite, otherwise 'Net Loss'
         if (paybackEl) {
             if (paybackIsFinite) {
                 if (hasAnimator && startPayback !== paybackDays) {
@@ -380,7 +482,6 @@ function updateFinancialSidebar({ npv, irr, payback } = {}) {
                     paybackEl.textContent = `${paybackDays} Days`;
                 }
             } else {
-                // Immediately set 'Net Loss' when payback is infinite/not finite
                 paybackEl.textContent = 'Net Loss';
             }
         }
@@ -389,7 +490,6 @@ function updateFinancialSidebar({ npv, irr, payback } = {}) {
     }
 }
 
-// Expose helper globally for tabs to call
 if (typeof window !== 'undefined') window.updateFinancialSidebar = updateFinancialSidebar;
 
 /**
@@ -411,7 +511,6 @@ function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
         return { min, max, step: stepValue };
     };
 
-    // Count decimals reliably (handles normal decimals and small exponent forms)
     const countDecimals = (n) => {
         if (!isFinite(n)) return 0;
         const s = String(n);
@@ -426,52 +525,45 @@ function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
     const formatValue = (val, stepVal) => {
         if (!isFinite(val)) return '';
         const decimals = Math.max(0, countDecimals(stepVal));
-        // Return exact multiple-of-step style formatting (no nearest rounding to unrelated multiples)
         return Number(val).toFixed(decimals);
     };
 
-    // Robust numeric parser for displayed input values (handles currency formatting, commas)
     const parseDisplayedNumber = (v) => {
         if (v === null || v === undefined) return 0;
         if (typeof v === 'number' && Number.isFinite(v)) return v;
         let s = String(v).trim();
         if (s === '') return 0;
-        // Remove currency symbols, commas, spaces, and parentheses
-        s = s.replace(/\(([^)]+)\)/, '-$1'); // convert (123) to -123
+        s = s.replace(/\(([^)]+)\)/, '-$1');
         s = s.replace(/[^0-9eE+\-\.]/g, '');
         const n = parseFloat(s);
         return Number.isFinite(n) ? n : 0;
     };
 
-    // Use pointerdown for better compatibility inside foreignObject / SVG wrappers
     input.addEventListener("pointerdown", (e) => {
         if (e.pointerType === 'mouse' && e.button === 1) {
             e.preventDefault();
             e.stopPropagation();
             isDragging = true;
             startY = e.clientY;
-            // Parse displayed value robustly (handles currency/text inputs)
             startValue = parseDisplayedNumber(input.value || input.dataset.committedValue || 0);
-            try { console.debug && console.debug('pointerdown startValue=', startValue, 'id=', input.id); } catch (err) {}
+            try { console.debug && console.debug('pointerdown startValue=', startValue, 'id=', input.id); } catch (err) { }
 
             const onPointerMove = (ev) => {
                 if (!isDragging) return;
                 const deltaY = startY - ev.clientY;
                 const constraints = getConstraints();
-                // Compute integer steps moved from the start position so value changes by exact multiples of step
                 const deltaSteps = Math.round(deltaY * sensitivity);
                 let newVal = startValue + (deltaSteps * constraints.step);
                 newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
-                // Preserve comma-formatting for currency inputs
                 try {
-                    try { console.debug && console.debug('pointermove deltaSteps=', deltaSteps, 'newValRaw=', newVal); } catch (err) {}
+                    try { console.debug && console.debug('pointermove deltaSteps=', deltaSteps, 'newValRaw=', newVal); } catch (err) { }
                     if (input && input.dataset && input.dataset.type === 'currency') {
                         const decimals = Math.max(0, countDecimals(constraints.step));
                         input.value = Number(newVal).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
                     } else {
                         input.value = formatValue(newVal, constraints.step);
                     }
-                    try { console.debug && console.debug('pointermove applied value=', input.value, 'id=', input.id); } catch (err) {}
+                    try { console.debug && console.debug('pointermove applied value=', input.value, 'id=', input.id); } catch (err) { }
                 } catch (e) {
                     input.value = formatValue(newVal, constraints.step);
                 }
@@ -495,8 +587,7 @@ function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
             const constraints = getConstraints();
             const direction = e.deltaY > 0 ? -1 : 1;
             let currentValue = parseDisplayedNumber(input.value || input.dataset.committedValue || 0);
-            try { console.debug && console.debug('wheel currentValue=', currentValue, 'id=', input.id, 'deltaY=', e.deltaY); } catch (err) {}
-            // change by exactly one step per wheel event
+            try { console.debug && console.debug('wheel currentValue=', currentValue, 'id=', input.id, 'deltaY=', e.deltaY); } catch (err) { }
             let newVal = currentValue + (direction * constraints.step);
             newVal = Math.max(constraints.min, Math.min(constraints.max, newVal));
             try {
@@ -506,7 +597,7 @@ function enableMiddleDragNumberInput(input, step = 1, sensitivity = 0.1) {
                 } else {
                     input.value = formatValue(newVal, constraints.step);
                 }
-                try { console.debug && console.debug('wheel applied value=', input.value, 'id=', input.id); } catch (err) {}
+                try { console.debug && console.debug('wheel applied value=', input.value, 'id=', input.id); } catch (err) { }
             } catch (err) {
                 input.value = formatValue(newVal, constraints.step);
             }
@@ -535,24 +626,30 @@ function restoreActiveTab() {
 
 /**
 * Main UI update function. It recalculates metrics and updates all
-* output displays and visualizations.
+* output displays and visualizations. Now correctly redraws the active tab.
 */
 function updateUI(options = {}) {
+    // --- Update Top-Level Displays ---
     employeeCountDisplay.textContent = numEmployeesInput.value;
 
+    // --- Render Sidebar & Drag-Drop ---
+    // These need to run on most updates as data/structure might change
     renderWorkstationSidebar(parseInt(numEmployeesInput.value));
-    setWorkstationListHeight();
+    setupDragAndDrop(); // Re-initialize sortable after sidebar redraw
 
-    setupDragAndDrop();
-
-    // Run precedence check *unless* we're being called by updateWorkstationOrder
+    // --- Precedence Validation ---
+    // Skip only if explicitly told (e.g., during drag/drop update)
     if (!options.skipPrecedence) {
         invalidPrecedenceNodes = validatePrecedence();
     }
 
+    // --- Calculate Metrics & Update Right Sidebar ---
+    // This part runs regardless of the active tab
     if (invalidPrecedenceNodes.size > 0) {
+        // Display precedence error state
         demandStatusEl.textContent = "Fails to Meet Precedence";
         demandStatusEl.className = "status failure";
+        // Clear or show placeholder values for metrics
         wipEl.textContent = '---';
         throughputEl.textContent = '---';
         conveyorSpeedEl.textContent = '---';
@@ -563,7 +660,13 @@ function updateUI(options = {}) {
         totalIdleTimeEl.textContent = '---';
         balanceDelayEl.textContent = '---';
         idleTimeCvEl.textContent = '---';
+        // Clear financial sidebar if precedence fails
+        if (typeof updateFinancialSidebar === 'function') {
+            updateFinancialSidebar({ npv: NaN, irr: NaN, payback: NaN });
+        }
+
     } else {
+        // Calculate metrics if precedence is valid
         const opInputs = {
             dailyDemand: parseInt(dailyDemandInput.value),
             opHours: parseFloat(opHoursInput.value),
@@ -579,22 +682,23 @@ function updateUI(options = {}) {
             megaCogs: parseFloat(megaCogsInput.value),
         };
         const results = calculateMetrics(opInputs, finInputs);
-        if (results) {
-            animateValue(wipEl, parseElementValue(wipEl), results.wip, 800, val => val.toFixed(1));
-            animateValue(throughputEl, parseElementValue(throughputEl), results.throughputUnitsPerHour, 800, val => `${val.toFixed(1)}/hr`);
-            animateValue(conveyorSpeedEl, parseElementValue(conveyorSpeedEl), results.conveyorSpeed, 800, val => `${val.toFixed(2)} ft/min`);
-            animateValue(productSpacingEl, parseElementValue(productSpacingEl), results.productSpacing, 800, val => `${val.toFixed(2)} ft`);
-            animateValue(grossProfitEl, parseElementValue(grossProfitEl), results.dailyGrossProfit, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }));
-            animateValue(profitMarginEl, parseElementValue(profitMarginEl), results.grossProfitMargin, 800, val => `${val.toFixed(1)}%`);
-            animateValue(avgEfficiencyEl, parseElementValue(avgEfficiencyEl), results.averageEfficiency, 800, val => `${val.toFixed(1)}%`);
-            animateValue(totalIdleTimeEl, parseElementValue(totalIdleTimeEl), results.totalIdleTime / 60, 800, val => `${val.toFixed(2)} hrs`);
-            animateValue(balanceDelayEl, parseElementValue(balanceDelayEl), results.balanceDelay, 800, val => `${val.toFixed(1)}%`);
-            animateValue(idleTimeCvEl, parseElementValue(idleTimeCvEl), results.idleTimeCv, 800, val => `${val.toFixed(1)}%`);
 
+        if (results) {
+            // Animate metric updates
+            animateValue(wipEl, results.wip, 800, val => val.toFixed(1));
+            animateValue(throughputEl, results.throughputUnitsPerHour, 800, val => `${val.toFixed(1)}/hr`);
+            animateValue(conveyorSpeedEl, results.conveyorSpeed, 800, val => `${val.toFixed(2)} ft/min`);
+            animateValue(productSpacingEl, results.productSpacing, 800, val => `${val.toFixed(2)} ft`);
+            animateValue(grossProfitEl, results.dailyGrossProfit, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }));
+            animateValue(profitMarginEl, results.grossProfitMargin, 800, val => `${val.toFixed(1)}%`);
+            animateValue(avgEfficiencyEl, results.averageEfficiency, 800, val => `${val.toFixed(1)}%`);
+            animateValue(totalIdleTimeEl, results.totalIdleTime / 60, 800, val => `${val.toFixed(2)} hrs`);
+            animateValue(balanceDelayEl, results.balanceDelay, 800, val => `${val.toFixed(1)}%`);
+            animateValue(idleTimeCvEl, results.idleTimeCv, 800, val => `${val.toFixed(1)}%`);
+
+            // Update demand status text and class
             const idleHoursTotal = (results.totalIdleTime || 0) / 60;
-            const idleHoursPerEmployee = (opInputs && opInputs.numEmployees && opInputs.numEmployees > 0)
-                ? idleHoursTotal / opInputs.numEmployees
-                : idleHoursTotal;
+            const idleHoursPerEmployee = (opInputs.numEmployees > 0) ? idleHoursTotal / opInputs.numEmployees : idleHoursTotal;
 
             if (results.meetsDemand && idleHoursPerEmployee > 12) {
                 demandStatusEl.textContent = "Too Much Idle Time";
@@ -603,25 +707,94 @@ function updateUI(options = {}) {
                 demandStatusEl.textContent = results.meetsDemand ? "Meets Demand" : "Fails to Meet Demand";
                 demandStatusEl.className = results.meetsDemand ? "status success" : "status failure";
             }
+        } else {
+            // Handle case where calculateMetrics returns null/undefined
+            console.error("calculateMetrics returned invalid results.");
+            // Show error state for metrics
+            // ... (similar to precedence error state) ...
         }
     }
 
+    // --- Update the ACTIVE Visualization ---
+    // This section now correctly triggers redraw/update for the current tab
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-    if (activeTab === 'precedence') {
-        if (!options.skipPrecedence) {
-            PrecedenceTab.update(invalidPrecedenceNodes);
+
+    try {
+        stopAllSimulations(); // Stop simulations before redrawing
+
+        // Use a switch statement for clarity and safety
+        switch (activeTab) {
+            case 'overview':
+                // Overview might need updating if its content depends on inputs
+                if (typeof drawOverviewPanel === 'function') {
+                    drawOverviewPanel();
+                }
+                break;
+            case 'precedence':
+                // PrecedenceTab has a specific 'update' method for efficiency
+                if (!options.skipPrecedence && typeof PrecedenceTab !== 'undefined' && PrecedenceTab.update) {
+                    PrecedenceTab.update(invalidPrecedenceNodes);
+                } else if (!options.skipPrecedence) {
+                    console.warn("PrecedenceTab.update not found or skipped.");
+                    // Optionally call drawPrecedenceChart() as a fallback if update isn't available
+                    // if (typeof drawPrecedenceChart === 'function') drawPrecedenceChart();
+                }
+                break;
+            case 'layout':
+                if (typeof LayoutTab !== 'undefined' && LayoutTab.draw) {
+                    LayoutTab.draw();
+                } else {
+                    console.warn("LayoutTab.draw not found.");
+                }
+                break;
+            case 'schedule':
+                if (typeof ScheduleTab !== 'undefined' && ScheduleTab.draw) {
+                    ScheduleTab.draw();
+                } else {
+                    console.warn("ScheduleTab.draw not found.");
+                }
+                break;
+            case 'efficiency':
+                if (typeof EfficiencyTab !== 'undefined' && EfficiencyTab.draw) {
+                    // Call draw for efficiency as it recalculates and redraws everything
+                    EfficiencyTab.draw();
+                } else {
+                    console.warn("EfficiencyTab.draw not found.");
+                }
+                break;
+            case 'profit':
+                // Profit tab might need a redraw if financial inputs changed
+                // calculateOptimalProfitData is already called if needed in handleInputChange
+                if (typeof ProfitTab !== 'undefined' && ProfitTab.draw) {
+                    ProfitTab.draw();
+                } else {
+                    console.warn("ProfitTab.draw not found.");
+                }
+                break;
+            case 'investment':
+                // Investment panel likely needs redraw if inputs change
+                if (typeof drawInvestmentPanel === 'function') {
+                    drawInvestmentPanel();
+                }
+                break;
+            case 'location':
+                if (typeof LocationTab !== 'undefined' && LocationTab.draw) {
+                    LocationTab.draw();
+                } else {
+                    console.warn("LocationTab.draw not found.");
+                }
+                break;
+            default:
+                // No specific update action needed for unknown or unhandled tabs
+                console.log(`No specific update action defined for active tab: ${activeTab}`);
+                break;
         }
+    } catch (err) {
+        console.error(`Error updating active tab (${activeTab}):`, err);
     }
 
-    else if (activeTab === 'layout' || activeTab === 'schedule' || activeTab === 'efficiency' || activeTab === 'profit' || activeTab === 'location') {
-        stopAllSimulations();
-        if (activeTab === 'layout') LayoutTab.draw();
-        if (activeTab === 'schedule') ScheduleTab.draw();
-        if (activeTab === 'efficiency') EfficiencyTab.draw();
-        if (activeTab === 'profit') ProfitTab.draw();
-        if (activeTab === 'location') LocationTab.draw();
-    }
-    setWorkstationListHeight();
+    // --- Final Adjustments ---
+    setWorkstationListHeight(); // Adjust height after potential redraw
 }
 
 /**
@@ -650,12 +823,9 @@ function renderWorkstationSidebar(numEmployees) {
 
     const accentColor = getComputedStyle(root).getPropertyValue('--accent').trim();
 
-    // Use the project's standardized D3 tooltip (shared single instance)
     const tooltip = createTooltip('workstation-tooltip');
-    // Ensure tooltip is non-interactive and above everything so delegation works across stacking contexts
     tooltip.style('pointer-events', 'none').style('z-index', 9999);
 
-    // Build DOM structure as before but DO NOT attach per-row listeners.
     sortedStationIds.forEach((stationId, stationIndex) => {
         const elementsInStation = config[stationId];
         const elementColorScale = generateElementColorScale(stationIndex, numWorkstations, elementsInStation.length);
@@ -664,7 +834,6 @@ function renderWorkstationSidebar(numEmployees) {
 
         const title = document.createElement('div');
         title.className = 'workstation-title';
-        // Compute station physical length in feet (each unit of elementTime == 15 ft)
         const stationTotalElementTime = elementsInStation.reduce((s, tId) => s + (state.taskData.get(tId)?.elementTime || 0), 0);
         const stationLengthFt = stationTotalElementTime * 15;
         title.textContent = `Workstation ${stationId} — ${stationLengthFt.toFixed(1)} ft`;
@@ -673,7 +842,7 @@ function renderWorkstationSidebar(numEmployees) {
         const elementsContainer = document.createElement('div');
         elementsContainer.className = 'workstation-elements';
         elementsInStation.forEach((taskId, elementIndex) => {
-                const task = state.taskData.get(taskId);
+            const task = state.taskData.get(taskId);
             if (task) {
                 const elementColor = elementColorScale(elementIndex);
                 const elementRow = document.createElement('div');
@@ -712,7 +881,6 @@ function renderWorkstationSidebar(numEmployees) {
                 elementTimeBar.appendChild(laborTimeBar);
                 barWrapper.appendChild(elementTimeBar);
                 elementRow.appendChild(barWrapper);
-                // also expose the parent workstation id and length on the row for tooltip use
                 elementRow.dataset.workstationId = stationId;
                 elementRow.dataset.workstationLengthFt = stationLengthFt.toFixed(1);
                 elementsContainer.appendChild(elementRow);
@@ -722,8 +890,6 @@ function renderWorkstationSidebar(numEmployees) {
         workstationList.appendChild(workstationDiv);
     });
 
-    // Delegated tooltip handling so listeners survive tab switches and DOM rebuilds.
-    // Only attach once.
     if (!workstationList._hasTooltipDelegation) {
         let activeRow = null;
 
@@ -732,7 +898,6 @@ function renderWorkstationSidebar(numEmployees) {
             const desc = task.description ? `<div class="tt-desc">${task.description}</div>` : '';
             const et = isFinite(task.elementTime) ? task.elementTime.toFixed(2) : '—';
             const lt = isFinite(task.laborTime) ? task.laborTime.toFixed(2) : '—';
-            // Element physical length in feet (each elementTime unit maps to 15 ft)
             const elLenFt = isFinite(task.elementTime) ? (task.elementTime * 15).toFixed(1) : null;
             const elLenRow = elLenFt != null ? `<div class="tooltip-row"><span class="tooltip-key">Element Length</span><span>${elLenFt} ft</span></div>` : '';
             const wsId = opts.wsId || task._workstationId || '';
@@ -742,18 +907,14 @@ function renderWorkstationSidebar(numEmployees) {
             return `<div class="tt-title">Element ${task._id || ''}</div>${desc}${wsIdRow}${wsRow}${elLenRow}<div class="tt-stats">Element: ${et} min &nbsp;|&nbsp; Labor: ${lt} min</div>`;
         };
 
-        // pointerover: show tooltip when entering an .element-row
         workstationList.addEventListener('pointerover', (e) => {
             const row = e.target.closest?.('.element-row');
             if (!row || !workstationList.contains(row)) return;
             activeRow = row;
             const taskId = parseInt(row.dataset.taskId);
             const task = state.taskData.get(taskId);
-            // Provide a small guard: if task missing, don't show
             if (!task) return;
-            // keep task id handy in tooltip (used in build)
             task._id = taskId;
-            // attach workstation metadata from the DOM (if available)
             task._workstationId = row.dataset.workstationId || '';
             task._workstationLengthFt = row.dataset.workstationLengthFt != null ? row.dataset.workstationLengthFt : null;
             tooltip.html(buildTooltipHtmlForTask(task, { wsId: task._workstationId, wsLen: task._workstationLengthFt }))
@@ -762,21 +923,17 @@ function renderWorkstationSidebar(numEmployees) {
                 .style('top', `${e.pageY + 12}px`);
         });
 
-        // pointermove: update position while over the active row
         workstationList.addEventListener('pointermove', (e) => {
             if (!activeRow) return;
-            // Ensure the pointer is still inside the activeRow; otherwise ignore
             const rowUnderPointer = e.target.closest?.('.element-row');
             if (rowUnderPointer !== activeRow) return;
             tooltip.style('left', `${e.pageX + 12}px`)
                 .style('top', `${e.pageY + 12}px`);
         });
 
-        // pointerout: hide tooltip when leaving the .element-row
         workstationList.addEventListener('pointerout', (e) => {
             const fromRow = e.target.closest?.('.element-row');
             const toEl = e.relatedTarget;
-            // If we left a row and are not moving into a descendant of that same row, hide
             if (fromRow && (!toEl || !fromRow.contains(toEl))) {
                 activeRow = null;
                 tooltip.style('opacity', 0);
@@ -786,7 +943,6 @@ function renderWorkstationSidebar(numEmployees) {
         workstationList._hasTooltipDelegation = true;
     }
 
-    // Adjust top padding to visually align with svg container
     const firstTitle = workstationList.querySelector('.workstation-title');
     const svgContainer = document.getElementById('svg-container');
     if (firstTitle && svgContainer) {
@@ -802,9 +958,6 @@ function renderWorkstationSidebar(numEmployees) {
 /**
 * Sets up event listeners for the main financial and operational input controls.
 */
-/**
-* UI - Set listeners for the variable inputs.
-*/
 function setupEventListeners() {
     const inputs = [
         dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput,
@@ -816,31 +969,26 @@ function setupEventListeners() {
     });
 }
 
-// Commit on Enter, Escape (revert), Blur (with special empty handling)
 function attachCommitBehavior(inputs, onCommit) {
     const timers = new WeakMap();
     const autoFlag = new WeakMap();
 
-    // Clear all auto-commit flags on global mouseup (end of middle-drag)
     const clearAllAutoFlags = () => {
         inputs.forEach(inp => autoFlag.set(inp, false));
     };
     document.addEventListener('mouseup', clearAllAutoFlags);
 
-    // Track pointer interactions to distinguish: (a) quick click, (b) hover-then-click, (c) spinner-area click
     let lastPointerEnterTime = 0;
-    const lastPointerDown = new WeakMap(); // stores { time, inSpinnerArea }
+    const lastPointerDown = new WeakMap();
 
     inputs.forEach(input => {
         if (!input) return;
 
-        // Ensure we have a committed baseline value stored
         if (!input.dataset.committedValue) input.dataset.committedValue = input.value ?? '';
 
         autoFlag.set(input, false);
         input.dataset.awaitingInput = 'false';
 
-        // Track pointerenter to know if the user hovered over the control earlier
         input.addEventListener('pointerenter', () => {
             lastPointerEnterTime = Date.now();
             input._hovering = true;
@@ -849,22 +997,18 @@ function attachCommitBehavior(inputs, onCommit) {
             input._hovering = false;
         });
 
-        // On pointerdown, capture whether the down occurred in the right-side "spinner" region.
         input.addEventListener('pointerdown', (ev) => {
             const rect = input.getBoundingClientRect();
             const inSpinnerArea = (ev.clientX >= rect.right - 32);
             lastPointerDown.set(input, { time: Date.now(), inSpinnerArea });
-            // If middle-button drag starts, enable auto-commit scrub flag
             if (ev.button === 1) {
                 autoFlag.set(input, true);
             }
         });
 
-        // When user focuses the field: show an empty box with cursor but keep committed value stored
         input.addEventListener('focus', (focusEv) => {
             input.dataset.preFocusValue = input.dataset.committedValue ?? '';
 
-            // Never clear ranges; keep their native behavior
             if (input.type === 'range') return;
 
             const now = Date.now();
@@ -872,12 +1016,9 @@ function attachCommitBehavior(inputs, onCommit) {
             const pointerDownRecent = pd && (now - pd.time < 300);
             const clickedOnSpinner = pointerDownRecent && pd.inSpinnerArea;
 
-            // If user clicked on the approximate spinner area, do not clear (allow spinner to work).
-            // Otherwise clear on focus to provide an immediate typing/clearing experience.
             const shouldClearForTyping = !clickedOnSpinner;
 
             if (shouldClearForTyping) {
-                // Clear for typing and mark awaitingInput so blur logic knows
                 input.dataset.awaitingInput = 'true';
                 input.value = '';
                 try {
@@ -885,7 +1026,6 @@ function attachCommitBehavior(inputs, onCommit) {
                     else input.setSelectionRange(0, 0);
                 } catch (_) { }
             } else {
-                // Preserve visible value so arrows / spinner behave predictably
                 if (input.dataset.awaitingInput !== 'true') {
                     input.dataset.awaitingInput = 'true';
                     input.value = input.dataset.committedValue ?? input.value ?? '';
@@ -897,28 +1037,23 @@ function attachCommitBehavior(inputs, onCommit) {
             }
         });
 
-        // Middle-button drag enables auto-commit behavior (scrub)
         input.addEventListener('mousedown', (e) => {
             if (e.button === 1) {
                 autoFlag.set(input, true);
             }
         });
 
-        // Debounced auto-commit, but only if middle-scrub is active
         input.addEventListener('input', () => {
             const prevTimer = timers.get(input);
             if (prevTimer) clearTimeout(prevTimer);
 
-            // Immediate commit for range inputs (sliders) so they update instantly
             if (input.type === 'range') {
                 commitInput(input, onCommit);
                 input.dataset.awaitingInput = 'false';
                 return;
             }
 
-            // If middle-scrub is required for auto-commit, ignore otherwise
             if (!autoFlag.get(input)) {
-                // Mark that user did type something (so blur won't restore)
                 input.dataset.awaitingInput = 'true';
                 return;
             }
@@ -933,7 +1068,6 @@ function attachCommitBehavior(inputs, onCommit) {
             timers.set(input, t);
         });
 
-        // Also commit on change as a safe fallback (e.g., some browsers fire change reliably)
         input.addEventListener('change', () => {
             const prevTimer = timers.get(input);
             if (prevTimer) clearTimeout(prevTimer);
@@ -941,7 +1075,6 @@ function attachCommitBehavior(inputs, onCommit) {
             input.dataset.awaitingInput = 'false';
         });
 
-        // Commit on Enter, revert on Escape (always active)
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 const prevTimer = timers.get(input);
@@ -952,16 +1085,12 @@ function attachCommitBehavior(inputs, onCommit) {
             } else if (e.key === 'Escape') {
                 const prevTimer = timers.get(input);
                 if (prevTimer) clearTimeout(prevTimer);
-                // Restore previous committed value visually and cancel awaiting state
                 input.value = input.dataset.committedValue ?? '';
                 input.dataset.awaitingInput = 'false';
                 input.blur();
             }
         });
 
-        // Commit on blur (always active) with special behavior:
-        // - If user focused and did not enter a new value (still empty), restore previous committed value
-        // - Otherwise attempt to commit (commitInput will validate / clamp / persist)
         input.addEventListener('blur', () => {
             const prevTimer = timers.get(input);
             if (prevTimer) clearTimeout(prevTimer);
@@ -970,19 +1099,15 @@ function attachCommitBehavior(inputs, onCommit) {
             const text = (input.value || '').trim();
 
             if (awaiting && text === '') {
-                // User focused but didn't type a new value → restore previous committed value
                 input.value = input.dataset.committedValue ?? '';
                 input.dataset.awaitingInput = 'false';
-                // No commit callback needed because value didn't change
             } else {
-                // Either user typed something, or this wasn't an "empty-until-typed" session → attempt commit
                 commitInput(input, onCommit);
                 input.dataset.awaitingInput = 'false';
             }
         });
     });
 
-    // Add Ctrl+Click to reset functionality
     const defaultValues = {
         'dailyDemand': 180,
         'opHours': 15.0,
@@ -995,7 +1120,6 @@ function attachCommitBehavior(inputs, onCommit) {
         'megaSell': 1000,
         'megaCogs': 960
     };
-    // Economic parameters defaults (inv- prefixed inputs)
     Object.assign(defaultValues, {
         'inv-analysisPeriod': 5,
         'inv-marr': 12.0,
@@ -1026,7 +1150,7 @@ function attachCommitBehavior(inputs, onCommit) {
                     const step = parseFloat(input.step) || 1;
 
                     input.value = Math.max(min, Math.min(max, defaultValue));
-                    commitInput(input, onCommit); // This will now work correctly
+                    commitInput(input, onCommit);
 
                     input.style.backgroundColor = getComputedStyle(root).getPropertyValue('--primary').trim();
                     setTimeout(() => { input.style.backgroundColor = ''; }, 200);
@@ -1039,11 +1163,9 @@ function attachCommitBehavior(inputs, onCommit) {
 function commitInput(input, onCommit) {
     const raw = (input.value || '').trim();
     if (raw === '') {
-        // Revert to last committed to avoid propagating invalid/empty state
         input.value = input.dataset.committedValue ?? '';
         return;
     }
-    // Parse displayed value robustly: handle commas, currency symbols, parentheses for negatives
     let cleaned = raw.replace(/\(([^)]+)\)/, '-$1');
     cleaned = cleaned.replace(/[^0-9eE+\-\.]/g, '');
     const n = parseFloat(cleaned);
@@ -1053,10 +1175,8 @@ function commitInput(input, onCommit) {
     }
     const clamped = clampByField(input.id, n);
 
-    // If this is a currency-styled input, format with commas/decimals for display
     try {
         if (input && input.dataset && input.dataset.type === 'currency') {
-            // Try to preserve decimals based on step attribute when present
             const stepVal = input.id === 'opHours' ? 0.25 : (parseFloat(input.step) || 1);
             const decimals = Math.max(0, (function (s) {
                 if (!isFinite(s)) return 0;
@@ -1139,70 +1259,91 @@ function setupUIEventListeners() {
             titleWrapper.style.display = 'flex';
             titleWrapper.style.justifyContent = 'space-between';
             titleWrapper.style.alignItems = 'center';
-            // Maintain original spacing by moving the title's margin to the wrapper
             titleWrapper.style.marginBottom = getComputedStyle(operationalTitle).marginBottom;
             operationalTitle.style.marginBottom = '0';
 
-            // Replace the original title with the new wrapper
             operationalTitle.parentNode.insertBefore(titleWrapper, operationalTitle);
 
-            // Move the title and the new switch group into the wrapper
             titleWrapper.appendChild(operationalTitle);
             titleWrapper.appendChild(switchContainer);
         } else {
-            // Fallback if the title can't be found: place it at the top.
             rightSidebar.insertBefore(switchContainer, rightSidebar.firstChild);
         }
     }
 
     /**
-     * Smoothly resizes the active visualization during a 300ms animation window.
-     * For "overview" and "investment" tabs we avoid re-drawing (which clears and re-fetches
-     * the foreignObject content) and instead adjust sizes / emit a resize event so the
-     * existing DOM can smoothly adapt without going white.
-     */
-    function smoothResize() {
-        const duration = 300; // Match CSS transition duration
-        let start = null;
+    * Central handler for resizing visualizations.
+    * Calls the .resize() method on the active tab's module, if it exists.
+    * For tabs with foreignObjects, it dispatches a custom 'appResize' event.
+    * Falls back to renderActiveTab() for modules without a .resize() method.
+    */
+    function handleResize() {
+        const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+        if (!activeTab) return;
 
-        function resizeActiveVisual() {
-            const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
-            if (!activeTab) return;
-
-            // If tab uses an SVG with a foreignObject (overview / investment), don't re-render.
+        try {
             if (activeTab === 'overview' || activeTab === 'investment') {
                 const panelEl = document.getElementById(`${activeTab}-panel`);
                 if (panelEl) {
-                    // Ensure the foreignObject spans the available area (prevents white flash)
                     const fo = panelEl.querySelector('foreignObject');
                     if (fo) {
                         fo.setAttribute('width', '100%');
                         fo.setAttribute('height', '100%');
                     }
-                    // Also dispatch a resize event so any listeners can adapt layouts (e.g., charts)
-                    window.dispatchEvent(new Event('resize'));
+                    // Dispatch a custom event for FO content to listen to
+                    window.dispatchEvent(new Event('appResize'));
                 }
-            } else if (activeTab === 'precedence') {
-                // For precedence, resize the SVG and restart simulation to animate expansion
+            }
+            // Handle SVG-native tabs (call .resize() if it exists)
+            else if (activeTab === 'precedence' && typeof PrecedenceTab !== 'undefined' && PrecedenceTab.resize) {
                 PrecedenceTab.resize();
-            } else {
-                // For other tabs, continue to use existing rendering functions
+            }
+            else if (activeTab === 'layout' && typeof LayoutTab !== 'undefined' && LayoutTab.resize) {
+                LayoutTab.resize();
+            }
+            else if (activeTab === 'schedule' && typeof ScheduleTab !== 'undefined' && ScheduleTab.resize) {
+                ScheduleTab.resize();
+            }
+            else if (activeTab === 'efficiency' && typeof EfficiencyTab !== 'undefined' && EfficiencyTab.resize) {
+                EfficiencyTab.resize();
+            }
+            else if (activeTab === 'profit' && typeof ProfitTab !== 'undefined' && ProfitTab.resize) {
+                ProfitTab.resize();
+            }
+            else if (activeTab === 'location' && typeof LocationTab !== 'undefined' && LocationTab.resize) {
+                LocationTab.resize();
+            }
+            // Fallback for any tab that doesn't have a .resize() method
+            else {
                 renderActiveTab();
             }
+        } catch (err) {
+            console.error(`Error during resize for tab ${activeTab}:`, err);
         }
+
+        setWorkstationListHeight();
+    }
+
+    /**
+     * Smoothly resizes the active visualization during the sidebar's
+     * 300ms CSS transition animation.
+     */
+    function smoothResize() {
+        const duration = 300; // Match CSS transition duration
+        let start = null;
 
         function step(timestamp) {
             if (!start) start = timestamp;
             const progress = timestamp - start;
 
-            // Update the UI for the intermediate frame without clearing foreignObject content
-            resizeActiveVisual();
+            // Call the main resize logic on each frame of the animation
+            handleResize();
 
             if (progress < duration) {
                 requestAnimationFrame(step);
             } else {
                 // Final ensure layout is correct at the end of animation
-                resizeActiveVisual();
+                handleResize();
             }
         }
         requestAnimationFrame(step);
@@ -1256,6 +1397,9 @@ function setupUIEventListeners() {
             contentGroup.setAttribute('transform', `translate(0, ${-scrollTop})`);
         }
     });
+
+    // --- Add Global Window Resize Listener ---
+    window.addEventListener('resize', debounce(handleResize, 150));
 }
 
 /**
@@ -1263,7 +1407,6 @@ function setupUIEventListeners() {
 */
 function handleVisibilityChange() {
     if (document.hidden) {
-        // Pause animations without resetting state
         if (animationState && animationState.schedule && animationState.schedule.isRunning && !animationState.schedule.isManuallyPaused) {
             animationState.schedule.isPaused = true;
         }
@@ -1271,7 +1414,6 @@ function handleVisibilityChange() {
             animationState.layout.isPaused = true;
         }
     } else {
-        // Resume animations; reset lastFrameTime to avoid jumps
         if (animationState && animationState.schedule && animationState.schedule.isPaused && !animationState.schedule.isManuallyPaused) {
             animationState.schedule.isPaused = false;
             animationState.schedule.lastFrameTime = performance.now();
@@ -1327,32 +1469,22 @@ function createTooltip(className) {
     return tooltip;
 }
 
-// Adds simple tooltip definitions and wires hover handlers for three
-// financial controls in the right sidebar: labor cost, the selling
-// price heading, and the material cost heading. Selling/material
-// headings are header spans inside `.fin-grid`, so we handle those
-// specially when there is no label[for=..].
 function wireRightSidebarTooltips() {
     const tooltips = {
-        // Operational Inputs
         'dailyDemand': 'Number of units which can be sold, or which producing more than needed is a liability. Production should match your demand.',
         'opHours': 'Number of hours the assembly line is running per day.',
         'numEmployees': 'Total number of employees working. Corresponds to the number of workstations.',
-        // Financial Inputs
         'laborCost': 'Hourly labor cost per employee.',
         'sellPriceHeading': 'Selling price per unit (used to compute total revenue).',
         'materialCostHeading': 'Material / COGS per unit (used to compute cost of goods sold).',
-        // Key Metrics
         'wip': 'Work in Progress. Number of incomplete products currently being worked on.',
         'throughput': 'Number of models built within a given time-period, usually an hour.',
         'conveyorSpeed': 'Conveyor belt speed in feet per minute.',
         'productSpacing': 'Distance between consecutive products on the line, in feet.',
-        // Efficiency Metrics
         'avgEfficiency': 'Average percentage of time in which the assembly line/workstation are working on a model.',
         'totalIdleTime': 'Total amount of time workstations are idle / not working, in hours.',
         'balanceDelay': 'Percentage of time in which the individual(s) in a workstation/line are idle / not working.',
         'idleTimeCv': 'Coefficient of variation of idle times across stations (%).',
-        // Financial Metrics
         'grossProfit': 'Value of goods sold minus COGS. Represents the value a given product provides for the company, to sustain operations.',
         'profitMargin': 'Percentage of profit compared to total goods sold. Can be either net or gross.',
         'npvMetric': 'Used to determine the profitability of an investment by comparing the present value of future cash inflows to the initial investment.',
@@ -1365,11 +1497,9 @@ function wireRightSidebarTooltips() {
     if (!sidebar) return;
     const containerElement = sidebar;
 
-    // locate the fin-grid header spans (sell price and material cost)
     const finGrid = containerElement.querySelector('.fin-grid');
     const finSpans = finGrid ? Array.from(finGrid.querySelectorAll('span')) : [];
 
-    // helper: given a strong#id in an output-grid, return the preceding label span
     const findLabelSpanForStrong = (strongId) => {
         const strongEl = containerElement.querySelector(`#${strongId}`);
         if (!strongEl) return null;
@@ -1381,16 +1511,13 @@ function wireRightSidebarTooltips() {
     for (const [id, text] of Object.entries(tooltips)) {
         let target = null;
 
-        // First try: label[for="id"] (works for standard input labels)
         target = containerElement.querySelector(`label[for="${id}"]`);
 
-        // Special-case: fin-grid header spans
         if (!target) {
             if (id === 'sellPriceHeading' && finSpans.length >= 2) target = finSpans[1];
             if (id === 'materialCostHeading' && finSpans.length >= 3) target = finSpans[2];
         }
 
-        // For metric values, attach to the left-hand label span next to the strong#id
         if (!target) {
             target = findLabelSpanForStrong(id);
         }
@@ -1708,12 +1835,10 @@ function updateWorkstationOrder() {
     state.configData[numEmployees] = newConfig;
     invalidPrecedenceNodes = validatePrecedence();
 
-    // Explicitly update the precedence chart visuals
     if (document.querySelector('.tab-btn[data-tab="precedence"].active')) {
         PrecedenceTab.update(invalidPrecedenceNodes);
     }
 
-    // Call updateUI to refresh the financial panel
     setTimeout(() => updateUI({ skipPrecedence: true }), 0);
 }
 
@@ -2083,7 +2208,7 @@ function setWorkstationListHeight() {
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     let containerHeight = svgContainer.clientHeight;
     let marginTop = 0;
-    if (activeTab === 'schedule' && ScheduleTab.containerHeight) {
+    if (activeTab === 'schedule' && typeof ScheduleTab !== 'undefined' && ScheduleTab.containerHeight) {
         containerHeight = ScheduleTab.containerHeight;
         marginTop = ScheduleTab.margin?.top || 0;
     }
@@ -2148,5 +2273,4 @@ async function drawOverviewPanel() {
     }
 }
 
-// Run the application
 document.addEventListener('DOMContentLoaded', main());
