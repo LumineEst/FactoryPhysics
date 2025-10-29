@@ -474,9 +474,45 @@ const drawInvestmentPanel = (function () {
                 const npvEl = document.getElementById('npvMetric');
                 const irrEl = document.getElementById('irrMetric');
                 const paybackEl = document.getElementById('paybackMetric');
-                if (npvEl) npvEl.textContent = isFinite(p50Result.metrics.npv) ? p50Result.metrics.npv.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }) : '$0';
-                if (irrEl) irrEl.textContent = !isNaN(p50Result.metrics.irr) ? `${(p50Result.metrics.irr * 100).toFixed(1)}%` : 'No Return';
-                if (paybackEl) paybackEl.textContent = isFinite(p50Result.metrics.payback) ? `${Math.ceil(p50Result.metrics.payback * 365.2425)} Days` : 'Net Loss';
+                if (npvEl) {
+                    if (hasAnimator && isFinite(npvVal) /* Removed startNpv !== npvVal check */) {
+                        // Correct order: element, endValue, duration, formatter
+                        animateValue(npvEl, npvVal, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }));
+                    } else {
+                        npvEl.textContent = npvVal.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+                        if (hasAnimator) npvEl._previousNumericValue = npvVal; // Store value if not animating
+                    }
+                }
+                if (irrEl) {
+                    if (irrIsValid) {
+                        if (hasAnimator /* Removed startIrr !== irrPercent check */) {
+                            // Correct order: element, endValue, duration, formatter
+                            animateValue(irrEl, irrPercent, 800, val => `${val.toFixed(1)}%`);
+                        } else {
+                            irrEl.textContent = `${(irr * 100).toFixed(1)}%`;
+                            if (hasAnimator) irrEl._previousNumericValue = irrPercent; // Store value if not animating
+                        }
+                    } else {
+                        irrEl.textContent = 'No Return';
+                        if (hasAnimator) irrEl._previousNumericValue = NaN; // Store NaN if invalid
+                    }
+                }
+
+                if (paybackEl) {
+                    if (paybackIsFinite) {
+                        if (hasAnimator /* Removed startPayback !== paybackDays check */) {
+                            // Correct order: element, endValue, duration, formatter
+                            animateValue(paybackEl, paybackDays, 800, val => `${Math.round(val)} Days`);
+                        } else {
+                            paybackEl.textContent = `${paybackDays} Days`;
+                            if (hasAnimator) paybackEl._previousNumericValue = paybackDays; // Store value if not animating
+                        }
+                    } else {
+                        paybackEl.textContent = 'Net Loss';
+                        if (hasAnimator) paybackEl._previousNumericValue = NaN; // Store NaN if invalid
+                    }
+                }
+
             }
         } catch (err) {
             console.error('Failed to call updateFinancialSidebar:', err);
@@ -610,7 +646,7 @@ const drawInvestmentPanel = (function () {
             if (el) el.value = investmentState[key];
         });
 
-    const fieldsToFormat = ['inv-mfgOverhead', 'inv-sgaExpenses', 'inv-freightExpense', 'inv-installationCost', 'inv-salvageValue', 'inv-std'];
+        const fieldsToFormat = ['inv-mfgOverhead', 'inv-sgaExpenses', 'inv-freightExpense', 'inv-installationCost', 'inv-salvageValue', 'inv-std'];
         fieldsToFormat.forEach(id => {
             const input = document.getElementById(id);
             if (input) {
@@ -640,43 +676,43 @@ const drawInvestmentPanel = (function () {
             }
         });
 
-            // Attach the same commit/auto-commit and middle-drag behaviors used by the right-sidebar
-            // so that Economic Parameters inputs behave identically to right-sidebar textboxes.
-            try {
-                const invInputs = Array.from(container.node().querySelectorAll("input[data-type='currency'], input[type='number'], select")).filter(el => el && el.id !== 'inv-workingDays');
-                    if (invInputs.length) {
-                    // Wire commit behavior: update investmentState and trigger analysis
-                    attachCommitBehavior(invInputs, (id, value) => {
-                        const key = id.replace('inv-', '');
-                        // Debug: log commits for currency fields which were reverting
-                        try { console.debug && console.debug('INV COMMIT ->', id, value, 'key=', key); } catch(e){}
-                        if (key in investmentState) {
-                            investmentState[key] = value;
-                            try { console.debug && console.debug('investmentState updated:', key, investmentState[key]); } catch(e){}
-                        }
-                        if (['std', 'cv', 'p90Demand', 'p10Demand', 'ciLevel'].includes(key)) {
-                            updateProbabilisticValues(key.replace('Demand', ''));
-                        } else {
-                            clearTimeout(analysisDebounceTimer);
-                            analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
-                        }
-                    });
+        // Attach the same commit/auto-commit and middle-drag behaviors used by the right-sidebar
+        // so that Economic Parameters inputs behave identically to right-sidebar textboxes.
+        try {
+            const invInputs = Array.from(container.node().querySelectorAll("input[data-type='currency'], input[type='number'], select")).filter(el => el && el.id !== 'inv-workingDays');
+            if (invInputs.length) {
+                // Wire commit behavior: update investmentState and trigger analysis
+                attachCommitBehavior(invInputs, (id, value) => {
+                    const key = id.replace('inv-', '');
+                    // Debug: log commits for currency fields which were reverting
+                    try { console.debug && console.debug('INV COMMIT ->', id, value, 'key=', key); } catch (e) { }
+                    if (key in investmentState) {
+                        investmentState[key] = value;
+                        try { console.debug && console.debug('investmentState updated:', key, investmentState[key]); } catch (e) { }
+                    }
+                    if (['std', 'cv', 'p90Demand', 'p10Demand', 'ciLevel'].includes(key)) {
+                        updateProbabilisticValues(key.replace('Demand', ''));
+                    } else {
+                        clearTimeout(analysisDebounceTimer);
+                        analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
+                    }
+                });
 
-                    // Enable middle-drag / wheel interactions for numeric and currency inputs
-                    invInputs.forEach(inp => {
-                        if (inp.tagName.toLowerCase() === 'input') {
-                            const isNumber = inp.type === 'number' || inp.type === 'range';
-                            const isCurrency = inp.dataset && inp.dataset.type === 'currency';
-                            const looksNumericText = inp.type === 'text' && /^-?\d[\d,\.]*$/.test((inp.value || '').toString().trim());
-                            if (isNumber || isCurrency || looksNumericText) {
-                                try { enableMiddleDragNumberInput(inp, 1, 1); } catch (e) { /* noop */ }
-                            }
+                // Enable middle-drag / wheel interactions for numeric and currency inputs
+                invInputs.forEach(inp => {
+                    if (inp.tagName.toLowerCase() === 'input') {
+                        const isNumber = inp.type === 'number' || inp.type === 'range';
+                        const isCurrency = inp.dataset && inp.dataset.type === 'currency';
+                        const looksNumericText = inp.type === 'text' && /^-?\d[\d,\.]*$/.test((inp.value || '').toString().trim());
+                        if (isNumber || isCurrency || looksNumericText) {
+                            try { enableMiddleDragNumberInput(inp, 1, 1); } catch (e) { /* noop */ }
                         }
-                    });
-                }
-            } catch (err) {
-                console.error('Failed to attach investment input behaviors:', err);
+                    }
+                });
             }
+        } catch (err) {
+            console.error('Failed to attach investment input behaviors:', err);
+        }
 
         const controlsArea = inputColumn.append("div").attr("class", "inv-analysis-controls");
         controlsArea.html(`<div class="inv-button-group"><button id="inv-baseCaseBtn">Base Case</button><button id="inv-expansionCaseBtn">Expansion Case</button></div>`);
