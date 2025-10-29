@@ -37,6 +37,9 @@ const LocationTab = (() => {
     let simulationPromiseReject = null; // for async/await handling of worker
     let isValidationRun = false; // Flag for simulation runs that shouldn't update global state
 
+    // --- Using GLOBAL createTooltip from script.js ---
+    // --- Using standard positioning pattern in mousemove events ---
+
     /**
      * Manages SVG layout, calculating positions and dimensions for all components.
      */
@@ -60,7 +63,7 @@ const LocationTab = (() => {
             this.svgWidth = width || 0;
             this.svgHeight = height || 0;
             this.isRibbonOpen = isRibbonOpen;
-            console.log(`LayoutManager Updated: W=${this.svgWidth.toFixed(0)}, H=${this.svgHeight.toFixed(0)}, Ribbon=${this.isRibbonOpen}`); // Debug
+            // console.log(`LayoutManager Updated: W=${this.svgWidth.toFixed(0)}, H=${this.svgHeight.toFixed(0)}, Ribbon=${this.isRibbonOpen}`); // Debug
         },
 
         /**
@@ -309,7 +312,7 @@ const LocationTab = (() => {
      */
     function toggleBottomRibbon() {
         isBottomRibbonOpen = !isBottomRibbonOpen;
-        console.log(`Toggling ribbon. New state: ${isBottomRibbonOpen ? 'Open' : 'Closed'}`);
+        // console.log(`Toggling ribbon. New state: ${isBottomRibbonOpen ? 'Open' : 'Closed'}`); // Debug
 
         // Update map elements (resizes the map)
         updateDynamicMapElements(); // Calls layoutManager.update internally
@@ -496,7 +499,7 @@ const LocationTab = (() => {
                 return reject(new Error("Could not get simulation parameters."));
             }
 
-            console.log(`WORKER: Posting simulation job (Validation: ${isValidationRun})...`);
+            // console.log(`WORKER: Posting simulation job (Validation: ${isValidationRun})...`); // Debug
             isSimulationRunning = true;
             if (!isValidationRun) {
                 simulationError = null; // Clear previous errors
@@ -754,16 +757,30 @@ const LocationTab = (() => {
         const svgContainer = svgNode.parentNode;
         if (!svgContainer) return;
 
-        const { width: viewBoxWidth, height: viewBoxHeight } = svgContainer.getBoundingClientRect();
+        // --- FIX: Get dimensions reliably ---
+        let viewBoxWidth = 0;
+        let viewBoxHeight = 0;
+        try {
+            const rect = svgContainer.getBoundingClientRect();
+            viewBoxWidth = rect.width;
+            viewBoxHeight = rect.height;
+        } catch (e) {
+            console.error("Could not get bounding rect for chart container", e);
+            return; // Cannot proceed without dimensions
+        }
+        // --- END FIX ---
+
 
         // --- 1. Handle Loading State ---
         if (isSimulationRunning) {
             metricsPlaceholder.html(`<p class="loading sim-loading-text">Loading...</p>`);
-            svg.append("text")
-                .attr("x", viewBoxWidth / 2)
-                .attr("y", viewBoxHeight / 2)
-                .attr("text-anchor", "middle")
-                .text("Loading Simulation...");
+            if (viewBoxWidth > 0 && viewBoxHeight > 0) { // Only draw text if dimensions are valid
+                svg.append("text")
+                    .attr("x", viewBoxWidth / 2)
+                    .attr("y", viewBoxHeight / 2)
+                    .attr("text-anchor", "middle")
+                    .text("Loading Simulation...");
+            }
             return;
         }
 
@@ -776,7 +793,7 @@ const LocationTab = (() => {
             ? "CONFLICT"
             : (!hasValidResults ? "NO_RESULTS_OR_GENERAL_ERROR" : "VALID_RESULTS");
 
-        console.log(`drawHoldingCostChart: Display State = ${displayState}, Conflict Msg Present: ${!!isConflictError}, Valid Results Present: ${hasValidResults}`);
+        // console.log(`drawHoldingCostChart: Display State = ${displayState}, Conflict Msg Present: ${!!isConflictError}, Valid Results Present: ${hasValidResults}`); // Debug
 
         // --- 3. Setup SVG and Margins ---
         if (viewBoxWidth <= 0 || viewBoxHeight <= 0) {
@@ -817,7 +834,7 @@ const LocationTab = (() => {
 
         // --- 4. Draw Empty Chart (if no results or general error) ---
         if (displayState === "NO_RESULTS_OR_GENERAL_ERROR") {
-            console.log("Drawing empty axes.");
+            // console.log("Drawing empty axes."); // Debug
             const x = d3.scaleTime().domain([startDate, endDate]).range([0, width]);
             drawMonthAxis(g, x, height);
             const defaultYDomain = [0, 100];
@@ -848,7 +865,7 @@ const LocationTab = (() => {
         }
 
         // --- 5. Draw Chart with Valid Results (or Conflict Overlay) ---
-        console.log("Drawing chart content using simulationResults.");
+        // console.log("Drawing chart content using simulationResults."); // Debug
         const dailyData = simulationResults.map(d => ({ ...d, dateObj: new Date(d.date + 'T00:00:00Z') }));
 
         // Calculate metrics
@@ -1193,7 +1210,7 @@ const LocationTab = (() => {
             return;
         }
 
-        console.log(`updateDynamicMapElements: Using dimensions W: ${width.toFixed(0)}, H: ${height.toFixed(0)}`);
+        // console.log(`updateDynamicMapElements: Using dimensions W: ${width.toFixed(0)}, H: ${height.toFixed(0)}`); // Debug
         const svg = d3.select("#location-panel");
         layoutManager.update(width, height, isBottomRibbonOpen); // Update layout manager
 
@@ -1225,7 +1242,7 @@ const LocationTab = (() => {
         // --- 2. Update Map Projection ---
         if (mapInitialized && continentalStatesFeatures && projection && path) {
             const mapBounds = layoutManager.getMapBounds();
-            console.log(`updateDynamicMapElements: Fitting map to [${mapBounds.width.toFixed(0)}, ${mapBounds.height.toFixed(0)}] at y=${mapBounds.y.toFixed(0)}`);
+            // console.log(`updateDynamicMapElements: Fitting map to [${mapBounds.width.toFixed(0)}, ${mapBounds.height.toFixed(0)}] at y=${mapBounds.y.toFixed(0)}`); // Debug
 
             if (mapBounds.width > 0 && mapBounds.height > 0) {
                 // Fit projection to the available map area
@@ -1247,10 +1264,7 @@ const LocationTab = (() => {
                 updateOptimalFactoryMarker();
                 updateConnectionLines();
 
-                // Redraw simulation chart if ribbon is open
-                if (isBottomRibbonOpen) {
-                    drawHoldingCostChart();
-                }
+                // Chart redraw is handled by the main resize function if needed
 
             } else {
                 console.warn("updateDynamicMapElements skipped map update: mapBounds have zero dimensions.");
@@ -1305,7 +1319,7 @@ const LocationTab = (() => {
                 // --- 2a. Worker Message Handler ---
                 simulationWorker.onmessage = (e) => {
                     const { type, results, message } = e.data;
-                    console.log("Main received:", type, (isValidationRun ? "(Validation)" : ""));
+                    // console.log("Main received:", type, (isValidationRun ? "(Validation)" : "")); // Debug
                     isSimulationRunning = false;
 
                     if (type === 'complete') {
@@ -1313,7 +1327,7 @@ const LocationTab = (() => {
                             // Store results for non-validation runs
                             simulationResults = results;
                             simulationError = null;
-                            console.log("onmessage: Success - Stored new results.");
+                            // console.log("onmessage: Success - Stored new results."); // Debug
                         }
                         if (simulationPromiseResolve) simulationPromiseResolve(results);
 
@@ -1326,10 +1340,10 @@ const LocationTab = (() => {
                             if (!isConflictError) {
                                 // Clear results on a general error
                                 simulationResults = null;
-                                console.log("onmessage: Non-conflict error - Cleared simulationResults.");
+                                // console.log("onmessage: Non-conflict error - Cleared simulationResults."); // Debug
                             } else {
                                 // On conflict, keep old results to show chart + overlay
-                                console.log("onmessage: Conflict error - PRESERVING current simulationResults state.");
+                                // console.log("onmessage: Conflict error - PRESERVING current simulationResults state."); // Debug
                             }
                         }
                         if (simulationPromiseReject) simulationPromiseReject(new Error(message || "Worker error"));
@@ -1540,7 +1554,7 @@ const LocationTab = (() => {
                 `Est. Breakdown:<br>Capital: ${breakdown.c}%<br>Storage: ${breakdown.s}%<br>Administative: ${breakdown.v}%<br>Risk: ${breakdown.r}%<hr>Total: ${breakdown.t}%`
             );
         })
-            .on("mousemove", (event) => breakdownTooltip
+            .on("mousemove", (event) => breakdownTooltip // Use standard positioning
                 .style("left", (event.pageX + 15) + "px")
                 .style("top", (event.pageY - 28) + "px")
             )
@@ -1983,7 +1997,7 @@ const LocationTab = (() => {
      */
     function removeCity(cityName) {
         if (cityName && cityData.delete(cityName)) {
-            console.log("Removing city:", cityName);
+            // console.log("Removing city:", cityName); // Debug
             d3.select(".city-info-box").style("display", "none"); // Hide info box
 
             if (selectedCityName === cityName) {
@@ -2236,8 +2250,24 @@ const LocationTab = (() => {
      * Resize function called by the global resize handler.
      */
     const resize = () => {
-        console.log("LocationTab.resize() called.");
-        updateDynamicMapElements();
+        // console.log("LocationTab.resize() called."); // Debug
+        updateDynamicMapElements(); // This updates layoutManager and map elements
+
+        // --- FIX: Delay chart redraw until *next event loop task* after DOM update ---
+        requestAnimationFrame(() => {
+            // Further delay to ensure layout reflow is complete
+            setTimeout(() => {
+                if (isBottomRibbonOpen && document.querySelector('.tab-btn.active')?.dataset.tab === 'location') {
+                    // console.log("LocationTab.resize: Redrawing bottom chart after timeout in rAF."); // Debug
+                    try {
+                        drawHoldingCostChart();
+                    } catch (e) {
+                        console.error("Error redrawing holding cost chart on resize:", e);
+                    }
+                }
+            }, 0); // Timeout 0 pushes it to the next task queue
+        });
+        // --- END FIX ---
     };
 
     // Return the public interface
