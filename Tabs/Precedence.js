@@ -11,8 +11,19 @@ const PrecedenceTab = (function () {
     let pertTooltip = null;
     let simulation = null;
     let svg = null;
+    let link = null; // D3 selection for links
+    let svgWidth = 0;
+    let svgHeight = 0;
 
-    // --- HELPER FUNCTIONS ---
+    // Data for layouts
+    let nodes = [];
+    let links = [];
+    let isKwLayoutActive = false;
+    let kwTargetPositions = new Map();
+
+
+    // --- MODULE-LEVEL HELPER FUNCTIONS ---
+
     function flatten() {
         const directPredecessors = new Map();
         PRECEDENCE_DATA.forEach(el => {
@@ -36,12 +47,172 @@ const PrecedenceTab = (function () {
         });
         return fullPredecessorMap;
     }
+
+    /**
+     * Calculates the end-point of a link, shortened to stop at the edge
+     * of the target node's circle.
+     */
+    function getShortenedLinkEndpoint(sourcePos, targetPos, targetNode) {
+        const targetRadius = (targetNode.r || 12) + 3;
+        const dx = targetPos.x - sourcePos.x;
+        const dy = targetPos.y - sourcePos.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        let x2 = targetPos.x, y2 = targetPos.y;
+        if (distance > 0) {
+            const ratio = (distance - targetRadius) / distance;
+            x2 = sourcePos.x + dx * ratio;
+            y2 = sourcePos.y + dy * ratio;
+        }
+        return { x: x2, y: y2 };
+    }
+
+    /**
+     * Calculates and stores the target (x, y) positions for the
+     * K&W (Kamada-Kawai-style) hierarchical layout.
+     */
+    function precomputeKwPositions() {
+        if (!nodes.length || !links.length || !svgWidth || !svgHeight) return;
+
+        kwTargetPositions.clear();
+        const predecessors = new Map(nodes.map(n => [n.id, links.filter(l => l.target.id === n.id).map(l => l.source)]));
+        const memo = new Map();
+        function getDepth(node) {
+            if (memo.has(node.id)) return memo.get(node.id);
+            const preds = predecessors.get(node.id);
+            if (!preds || preds.length === 0) { memo.set(node.id, 0); return 0; }
+            const depth = 1 + Math.max(...preds.map(p => getDepth(p)));
+            memo.set(node.id, depth);
+            return depth;
+        }
+        nodes.forEach(n => getDepth(n));
+        const nodesByDepth = new Map();
+        let maxDepth = 0;
+        nodes.forEach(node => {
+            const depth = memo.get(node.id) || 0;
+            if (!nodesByDepth.has(depth)) nodesByDepth.set(depth, []);
+            nodesByDepth.get(depth).push(node);
+            if (depth > maxDepth) maxDepth = depth;
+        });
+        const xPadding = 100, yPadding = 80;
+        const colWidth = (svgWidth - 2 * xPadding) / Math.max(1, maxDepth);
+        nodesByDepth.forEach((colNodes, depth) => {
+            const x = xPadding + depth * colWidth;
+            const rowHeight = (svgHeight - 2 * yPadding) / Math.max(1, colNodes.length);
+            colNodes.forEach((node, i) => {
+                const y = yPadding + (i * rowHeight) + (rowHeight / 2);
+                kwTargetPositions.set(node.id, { x, y });
+            });
+        });
+    }
+
+    /**
+     * Animates the transition from the force layout to the K&W layout.
+     */
+    function applyKwLayout() {
+        simulation.stop();
+        precedenceChartNodes.on('.drag', null);
+
+        nodes.forEach(node => {
+            node.force_x = node.x;
+            node.force_y = node.y;
+        });
+
+        const t = svg.transition().duration(750).ease(d3.easeCubicOut);
+
+        precedenceChartNodes.transition(t)
+            .attrTween("transform", function (d) {
+                const endPos = kwTargetPositions.get(d.id);
+                d.x = endPos.x;
+                d.y = endPos.y;
+                const interpolateX = d3.interpolate(d.force_x, endPos.x);
+                const interpolateY = d3.interpolate(d.force_y, endPos.y);
+                return function (time) {
+                    return `translate(${interpolateX(time)}, ${interpolateY(time)})`;
+                };
+            });
+        link.transition(t)
+            .attrTween("x1", d => d3.interpolate(d.source.force_x, kwTargetPositions.get(d.source.id).x))
+            .attrTween("y1", d => d3.interpolate(d.source.force_y, kwTargetPositions.get(d.source.id).y))
+            .attrTween("x2", function (d) {
+                const i_sx = d3.interpolate(d.source.force_x, kwTargetPositions.get(d.source.id).x);
+                const i_sy = d3.interpolate(d.source.force_y, kwTargetPositions.get(d.source.id).y);
+                const i_tx = d3.interpolate(d.target.force_x, kwTargetPositions.get(d.target.id).x);
+                const i_ty = d3.interpolate(d.target.force_y, kwTargetPositions.get(d.target.id).y);
+                return time => getShortenedLinkEndpoint({ x: i_sx(time), y: i_sy(time) }, { x: i_tx(time), y: i_ty(time) }, d.target).x;
+            })
+            .attrTween("y2", function (d) {
+                const i_sx = d3.interpolate(d.source.force_x, kwTargetPositions.get(d.source.id).x);
+                const i_sy = d3.interpolate(d.source.force_y, kwTargetPositions.get(d.source.id).y);
+                const i_tx = d3.interpolate(d.target.force_x, kwTargetPositions.get(d.target.id).x);
+                const i_ty = d3.interpolate(d.target.force_y, kwTargetPositions.get(d.target.id).y);
+                return time => getShortenedLinkEndpoint({ x: i_sx(time), y: i_sy(time) }, { x: i_tx(time), y: i_ty(time) }, d.target).y;
+            });
+    }
+
+    /**
+     * Animates the transition from the K&W layout back to the force layout.
+     */
+    function removeKwLayout() {
+        const drag = d3.drag()
+            .on("start", (event, d) => { // Re-create drag behavior
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            })
+            .on("drag", (event, d) => {
+                d.fx = event.x;
+                d.fy = event.y;
+            })
+            .on("end", (event, d) => {
+                if (!event.active) simulation.alphaTarget(0);
+                if (!isKwLayoutActive) {
+                    d.fx = d.x;
+                    d.fy = d.y;
+                }
+            });
+
+        const t = svg.transition().duration(750).ease(d3.easeCubicOut);
+        precedenceChartNodes.transition(t)
+            .attr("transform", d => `translate(${d.force_x}, ${d.force_y})`);
+
+        link.transition(t)
+            .attrTween("x1", d => d3.interpolate(d.source.x, d.source.force_x))
+            .attrTween("y1", d => d3.interpolate(d.source.y, d.source.force_y))
+            .attrTween("x2", function (d) {
+                const i_sx = d3.interpolate(d.source.x, d.source.force_x);
+                const i_sy = d3.interpolate(d.source.y, d.source.force_y);
+                const i_tx = d3.interpolate(d.target.x, d.target.force_x);
+                const i_ty = d3.interpolate(d.target.y, d.target.force_y);
+                return time => getShortenedLinkEndpoint({ x: i_sx(time), y: i_sy(time) }, { x: i_tx(time), y: i_ty(time) }, d.target).x;
+            })
+            .attrTween("y2", function (d) {
+                const i_sx = d3.interpolate(d.source.x, d.source.force_x);
+                const i_sy = d3.interpolate(d.source.y, d.source.force_y);
+                const i_tx = d3.interpolate(d.target.x, d.target.force_x);
+                const i_ty = d3.interpolate(d.target.y, d.target.force_y);
+                return time => getShortenedLinkEndpoint({ x: i_sx(time), y: i_sy(time) }, { x: i_tx(time), y: i_ty(time) }, d.target).y;
+            })
+            .on("end", (d, i, elements) => {
+                if (i === elements.length - 1) {
+                    nodes.forEach(node => {
+                        node.x = node.force_x;
+                        node.y = node.force_y;
+                        node.fx = null;
+                        node.fy = null;
+                    });
+                    precedenceChartNodes.call(drag);
+                    simulation.alpha(0.5).restart();
+                }
+            });
+    }
+
+    /**
+     * Updates node/link colors based on precedence violations.
+     */
     function updatePrecedenceChartColors(invalidNodes) {
         if (!precedenceChartNodes) return;
-        // prefer the caller-provided invalidNodes; fall back to global set if not provided
         invalidNodes = invalidNodes && invalidNodes.size ? invalidNodes : (invalidPrecedenceNodes || new Set());
 
-        // Build element order map from left sidebar so we can identify swapped pairs
         const elementOrderMap = new Map();
         let orderIndex = 0;
         document.querySelectorAll('.element-row').forEach(row => {
@@ -52,9 +223,8 @@ const PrecedenceTab = (function () {
         const failureColor = getComputedStyle(root).getPropertyValue('--failure-color').trim();
         const accent = getComputedStyle(root).getPropertyValue('--accent').trim();
 
-        // Collect all links and identify violating links (source placed after target in the sidebar)
         const allLinks = d3.selectAll('.precedence-link');
-        allLinks.interrupt("blink"); // stop any prior blinking on links
+        allLinks.interrupt("blink");
 
         const violatingLinkKeys = new Set();
         allLinks.each(function (l) {
@@ -66,14 +236,12 @@ const PrecedenceTab = (function () {
             }
         });
 
-        // Set of receiving nodes (targets of violating links) - these should blink and be failure-colored
         const receivingNodeIds = new Set();
         violatingLinkKeys.forEach(k => {
             const parts = k.split('-').map(s => parseInt(s));
             receivingNodeIds.add(parts[1]);
         });
 
-        // Helper to blink a link selection (keeps color as failureColor, toggles width)
         function blinkLink(selection) {
             function loop() {
                 selection.transition("blink").duration(600)
@@ -89,21 +257,17 @@ const PrecedenceTab = (function () {
             loop();
         }
 
-        // Apply link styles:
         allLinks.each(function (l) {
             const sel = d3.select(this);
             const key = (l && l.source && l.target) ? `${l.source.id}-${l.target.id}` : null;
             if (key && violatingLinkKeys.has(key)) {
-                // start blinking (we interrupted earlier)
                 blinkLink(sel);
             } else if (l && (invalidNodes.has(l.source.id) || invalidNodes.has(l.target.id))) {
-                // a connected link to an invalid node but not the violating swapped arrow -> static error style
                 sel.transition().duration(300)
                     .attr('stroke', failureColor)
                     .attr('stroke-width', 3.5)
                     .attr('marker-end', 'url(#arrowhead-highlight)');
             } else {
-                // normal link
                 sel.transition().duration(300)
                     .attr('stroke', accent)
                     .attr('stroke-width', 2.5)
@@ -111,8 +275,6 @@ const PrecedenceTab = (function () {
             }
         });
 
-        // Now style nodes: receiving nodes blink + colored; other invalid nodes get static error styling; others restored.
-        // Interrupt any prior node blinking first
         precedenceChartNodes.selectAll('circle').interrupt("blink");
 
         precedenceChartNodes.selectAll('circle').each(function (d) {
@@ -120,8 +282,6 @@ const PrecedenceTab = (function () {
             const id = +d.id;
 
             if (receivingNodeIds.has(id)) {
-                // Blink the receiving node and keep colored failureColor
-                // ensure initial appearance is failure
                 circle.transition().duration(200)
                     .attr("stroke", failureColor)
                     .attr("stroke-width", 8)
@@ -131,18 +291,16 @@ const PrecedenceTab = (function () {
                     circle.transition("blink").duration(600)
                         .attr("stroke-width", 30)
                         .transition("blink").duration(600)
-                        .attr("stroke-width",10)
+                        .attr("stroke-width", 10)
                         .on("end", blinkCircle);
                 }
                 blinkCircle();
             } else if (invalidNodes.has(id)) {
-                // other invalid nodes: static error (no blink)
                 circle.transition().duration(300)
                     .attr("stroke", failureColor)
                     .attr("stroke-width", 6)
                     .style("fill", failureColor)
             } else {
-                // normal node
                 circle.transition().duration(500)
                     .attr("stroke", accent)
                     .attr("stroke-width", 1.5)
@@ -151,10 +309,11 @@ const PrecedenceTab = (function () {
         });
     }
 
+    /**
+     * Applies error styling to links involved in a precedence violation.
+     */
     function updatePrecedenceChartLinks(invalidNodes) {
         if (!precedenceChartNodes) return;
-        // Ensure invalidNodes is always a Set to avoid runtime errors when caller
-        // doesn't provide the argument.
         invalidNodes = invalidNodes || new Set();
         const allLinks = d3.select("#precedence-panel").selectAll('g > line');
         if (invalidNodes.size === 0) {
@@ -190,7 +349,12 @@ const PrecedenceTab = (function () {
                 .attr('marker-end', isHighlighted ? 'url(#arrowhead-highlight)' : 'url(#arrowhead)');
         });
     }
+
     // --- PUBLIC FUNCTIONS ---
+
+    /**
+     * Public method to update colors on the chart, e.g., on drag/drop.
+     */
     function update(invalidNodes) {
         if (!precedenceChartNodes) return;
         invalidNodes = invalidNodes || new Set();
@@ -198,44 +362,89 @@ const PrecedenceTab = (function () {
         updatePrecedenceChartLinks(invalidNodes);
     }
 
+    /**
+     * Public method to resize the SVG and update layouts.
+     */
     function resize() {
         if (!svg || !simulation) return;
-        const width = svg.node().parentElement.clientWidth;
-        const height = svg.node().parentElement.clientHeight;
-        svg.attr("viewBox", `0 0 ${width} ${height}`);
-        const zoomPane = svg.select(".zoom-pane");
-        zoomPane.attr("width", width).attr("height", height);
-        simulation.force("center", d3.forceCenter(width / 2, height / 2).strength(0.1));
-        simulation.alpha(0.3).restart();
 
-        // Update Task Flow (DAG) legend horizontal position
+        // 1. Get new dimensions and update module-level vars
+        svgWidth = svg.node().parentElement.clientWidth;
+        svgHeight = svg.node().parentElement.clientHeight;
+
+        // 2. Update SVG attributes
+        svg.attr("viewBox", `0 0 ${svgWidth} ${svgHeight}`);
+        const zoomPane = svg.select(".zoom-pane");
+        zoomPane.attr("width", svgWidth).attr("height", svgHeight);
+
+        // 3. Recalculate K&W positions
+        precomputeKwPositions();
+
+        // 4. Update the layout
+        if (isKwLayoutActive) {
+            // K&W is active, so re-apply layout immediately (no transition)
+            simulation.stop();
+            precedenceChartNodes.on('.drag', null);
+            precedenceChartNodes.attr("transform", d => {
+                const pos = kwTargetPositions.get(d.id);
+                if (pos) { // Guard against missing positions if data is stale
+                    d.x = pos.x; d.y = pos.y;
+                    return `translate(${pos.x}, ${pos.y})`;
+                }
+                return d3.select(this).attr("transform"); // Keep old position
+            });
+            link.each(function (d) {
+                const sourcePos = kwTargetPositions.get(d.source.id);
+                const targetPos = kwTargetPositions.get(d.target.id);
+                if (sourcePos && targetPos) { // Guard against missing positions
+                    const end = getShortenedLinkEndpoint(sourcePos, targetPos, d.target);
+                    d3.select(this)
+                        .attr("x1", sourcePos.x).attr("y1", sourcePos.y)
+                        .attr("x2", end.x).attr("y2", end.y);
+                }
+            });
+        } else {
+            // Force layout is active, just restart simulation
+            simulation.force("center", d3.forceCenter(svgWidth / 2, svgHeight / 2).strength(0.1));
+            simulation.alpha(0.3).restart();
+        }
+
+
+        // 5. Update Task Flow (DAG) legend horizontal position
         const dagLegend = svg.selectAll('g').filter(function () {
             const txt = this.querySelector('text');
             return txt && txt.textContent.trim() === 'Task Flow';
         });
         if (!dagLegend.empty()) {
             const legendWidth = 220; // matches createDagLegend
-            // preserve existing y from transform if present
             const transform = dagLegend.attr('transform') || '';
             const m = /translate\(\s*([^,\s]+)\s*,\s*([^)]+)\s*\)/.exec(transform);
             const curY = m ? m[2] : 20;
-            dagLegend.attr('transform', `translate(${width - legendWidth - 20}, ${curY})`);
+            dagLegend.attr('transform', `translate(${svgWidth - legendWidth - 20}, ${curY})`);
         }
     }
 
+    /**
+     * Public method to initially draw the chart.
+     */
     function draw(invalidNodes) {
-        let isKwLayoutActive = false;
-        let kwTargetPositions = new Map();
-        const nodes = PRECEDENCE_DATA.map(d => ({ id: d.id }));
-        const links = [];
+        // (Re)set module-level state
+        isKwLayoutActive = false;
+        kwTargetPositions.clear();
+        nodes = PRECEDENCE_DATA.map(d => ({ id: d.id }));
+        links = [];
         PRECEDENCE_DATA.forEach(d => {
             d.predecessors.forEach(pId => links.push({ source: pId, target: d.id }));
         });
+
         svg = d3.select("#precedence-panel");
         svg.selectAll("*").remove();
-        const width = document.getElementById('svg-container').clientWidth;
-        const height = document.getElementById('svg-container').clientHeight;
-        svg.attr("viewBox", `0 0 ${width} ${height}`);
+
+        // Set initial dimensions
+        svgWidth = document.getElementById('svg-container').clientWidth;
+        svgHeight = document.getElementById('svg-container').clientHeight;
+
+        svg.attr("viewBox", `0 0 ${svgWidth} ${svgHeight}`);
         svg.append('defs').selectAll('marker')
             .data(['arrowhead', 'arrowhead-highlight'])
             .join('marker')
@@ -248,173 +457,51 @@ const PrecedenceTab = (function () {
             .append('path')
             .attr('d', 'M0,-5L10,0L0,5')
             .attr('fill', d => d === 'arrowhead-highlight' ? getComputedStyle(root).getPropertyValue('--failure-color').trim() : getComputedStyle(root).getPropertyValue('--accent').trim());
+
         const zoomPane = svg.append("rect")
             .attr("class", "zoom-pane")
-            .attr("width", width).attr("height", height)
+            .attr("width", svgWidth).attr("height", svgHeight)
             .style("fill", "none")
             .style("pointer-events", "all");
+
         const mainGroup = svg.append("g");
         pertTooltip = createTooltip('pert-tooltip').style("position", "fixed");
 
         simulation = d3.forceSimulation(nodes)
             .force("link", d3.forceLink(links).id(d => d.id).distance(40))
             .force("charge", d3.forceManyBody().strength(-500))
-            .force("center", d3.forceCenter(width / 2, height / 2).strength(0.1))
+            .force("center", d3.forceCenter(svgWidth / 2, svgHeight / 2).strength(0.1))
             .force("collide", d3.forceCollide().radius(d => (d.r || 50) + 8).strength(1));
-        const link = mainGroup.append("g").selectAll("line").data(links).join("line")
-            .attr("class", "precedence-link")
-            .attr("marker-end", "url(#arrowhead)");
+
+        // Assign to module-level selection
+        link = mainGroup.append("g").selectAll("line").data(links).join("line")
+            .attr("class", "precedence-link");
+
         precedenceChartNodes = mainGroup.append("g").selectAll("g").data(nodes).join("g");
 
         const drag = d3.drag().on("start", dragstarted).on("drag", dragged).on("end", dragended);
         const CLAMP_PAD = 12;
         const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
         simulation.on("tick", () => {
             nodes.forEach(d => {
                 const r = (d.r || 12);
-                d.x = clamp(d.x, CLAMP_PAD + r, width - CLAMP_PAD - r);
-                d.y = clamp(d.y, CLAMP_PAD + r, height - CLAMP_PAD - r);
-                if (d.fx != null) d.fx = clamp(d.fx, CLAMP_PAD + r, width - CLAMP_PAD - r);
-                if (d.fy != null) d.fy = clamp(d.fy, CLAMP_PAD + r, height - CLAMP_PAD - r);
+                // Use module-level width/height for clamping
+                d.x = clamp(d.x, CLAMP_PAD + r, svgWidth - CLAMP_PAD - r);
+                d.y = clamp(d.y, CLAMP_PAD + r, svgHeight - CLAMP_PAD - r);
+                if (d.fx != null) d.fx = clamp(d.fx, CLAMP_PAD + r, svgWidth - CLAMP_PAD - r);
+                if (d.fy != null) d.fy = clamp(d.fy, CLAMP_PAD + r, svgHeight - CLAMP_PAD - r);
             });
             link.each(function (d) {
-                const targetRadius = (d.target.r || 12) + 3;
-                const dx = d.target.x - d.source.x;
-                const dy = d.target.y - d.source.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                let x2 = d.target.x, y2 = d.target.y;
-                if (distance > 0) {
-                    const ratio = (distance - targetRadius) / distance;
-                    x2 = d.source.x + dx * ratio;
-                    y2 = d.source.y + dy * ratio;
-                }
+                const end = getShortenedLinkEndpoint(d.source, d.target, d.target);
                 d3.select(this)
                     .attr("x1", d.source.x).attr("y1", d.source.y)
-                    .attr("x2", x2).attr("y2", y2);
+                    .attr("x2", end.x).attr("y2", end.y);
             });
             precedenceChartNodes.attr("transform", d => `translate(${d.x}, ${d.y})`);
         });
-        function getShortenedLinkEndpoint(sourcePos, targetPos, targetNode) {
-            const targetRadius = (targetNode.r || 12) + 3;
-            const dx = targetPos.x - sourcePos.x;
-            const dy = targetPos.y - sourcePos.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            let x2 = targetPos.x, y2 = targetPos.y;
-            if (distance > 0) {
-                const ratio = (distance - targetRadius) / distance;
-                x2 = sourcePos.x + dx * ratio;
-                y2 = sourcePos.y + dy * ratio;
-            }
-            return { x: x2, y: y2 };
-        }
 
-        function precomputeKwPositions() {
-            const predecessors = new Map(nodes.map(n => [n.id, links.filter(l => l.target.id === n.id).map(l => l.source)]));
-            const memo = new Map();
-            function getDepth(node) {
-                if (memo.has(node.id)) return memo.get(node.id);
-                const preds = predecessors.get(node.id);
-                if (!preds || preds.length === 0) { memo.set(node.id, 0); return 0; }
-                const depth = 1 + Math.max(...preds.map(p => getDepth(p)));
-                memo.set(node.id, depth);
-                return depth;
-            }
-            nodes.forEach(n => getDepth(n));
-            const nodesByDepth = new Map();
-            let maxDepth = 0;
-            nodes.forEach(node => {
-                const depth = memo.get(node.id) || 0;
-                if (!nodesByDepth.has(depth)) nodesByDepth.set(depth, []);
-                nodesByDepth.get(depth).push(node);
-                if (depth > maxDepth) maxDepth = depth;
-            });
-            const xPadding = 100, yPadding = 80;
-            const colWidth = (width - 2 * xPadding) / Math.max(1, maxDepth);
-            nodesByDepth.forEach((colNodes, depth) => {
-                const x = xPadding + depth * colWidth;
-                const rowHeight = (height - 2 * yPadding) / Math.max(1, colNodes.length);
-                colNodes.forEach((node, i) => {
-                    const y = yPadding + (i * rowHeight) + (rowHeight / 2);
-                    kwTargetPositions.set(node.id, { x, y });
-                });
-            });
-        }
 
-        function applyKwLayout() {
-            simulation.stop();
-            precedenceChartNodes.on('.drag', null);
-
-            nodes.forEach(node => {
-                node.force_x = node.x;
-                node.force_y = node.y;
-            });
-
-            const t = svg.transition().duration(750).ease(d3.easeCubicOut);
-
-            precedenceChartNodes.transition(t)
-                .attrTween("transform", function (d) {
-                    const endPos = kwTargetPositions.get(d.id);
-                    d.x = endPos.x;
-                    d.y = endPos.y;
-                    const interpolateX = d3.interpolate(d.force_x, endPos.x);
-                    const interpolateY = d3.interpolate(d.force_y, endPos.y);
-                    return function (time) {
-                        return `translate(${interpolateX(time)}, ${interpolateY(time)})`;
-                    };
-                });
-            link.transition(t)
-                .attrTween("x1", d => d3.interpolate(d.source.force_x, kwTargetPositions.get(d.source.id).x))
-                .attrTween("y1", d => d3.interpolate(d.source.force_y, kwTargetPositions.get(d.source.id).y))
-                .attrTween("x2", function (d) {
-                    const i_sx = d3.interpolate(d.source.force_x, kwTargetPositions.get(d.source.id).x);
-                    const i_sy = d3.interpolate(d.source.force_y, kwTargetPositions.get(d.source.id).y);
-                    const i_tx = d3.interpolate(d.target.force_x, kwTargetPositions.get(d.target.id).x);
-                    const i_ty = d3.interpolate(d.target.force_y, kwTargetPositions.get(d.target.id).y);
-                    return time => getShortenedLinkEndpoint({ x: i_sx(time), y: i_sy(time) }, { x: i_tx(time), y: i_ty(time) }, d.target).x;
-                })
-                .attrTween("y2", function (d) {
-                    const i_sx = d3.interpolate(d.source.force_x, kwTargetPositions.get(d.source.id).x);
-                    const i_sy = d3.interpolate(d.source.force_y, kwTargetPositions.get(d.source.id).y);
-                    const i_tx = d3.interpolate(d.target.force_x, kwTargetPositions.get(d.target.id).x);
-                    const i_ty = d3.interpolate(d.target.force_y, kwTargetPositions.get(d.target.id).y);
-                    return time => getShortenedLinkEndpoint({ x: i_sx(time), y: i_sy(time) }, { x: i_tx(time), y: i_ty(time) }, d.target).y;
-                });
-        }
-        function removeKwLayout() {
-            const t = svg.transition().duration(750).ease(d3.easeCubicOut);
-            precedenceChartNodes.transition(t)
-                .attr("transform", d => `translate(${d.force_x}, ${d.force_y})`);
-
-            link.transition(t)
-                .attrTween("x1", d => d3.interpolate(d.source.x, d.source.force_x))
-                .attrTween("y1", d => d3.interpolate(d.source.y, d.source.force_y))
-                .attrTween("x2", function (d) {
-                    const i_sx = d3.interpolate(d.source.x, d.source.force_x);
-                    const i_sy = d3.interpolate(d.source.y, d.source.force_y);
-                    const i_tx = d3.interpolate(d.target.x, d.target.force_x);
-                    const i_ty = d3.interpolate(d.target.y, d.target.force_y);
-                    return time => getShortenedLinkEndpoint({ x: i_sx(time), y: i_sy(time) }, { x: i_tx(time), y: i_ty(time) }, d.target).x;
-                })
-                .attrTween("y2", function (d) {
-                    const i_sx = d3.interpolate(d.source.x, d.source.force_x);
-                    const i_sy = d3.interpolate(d.source.y, d.source.force_y);
-                    const i_tx = d3.interpolate(d.target.x, d.target.force_x);
-                    const i_ty = d3.interpolate(d.target.y, d.target.force_y);
-                    return time => getShortenedLinkEndpoint({ x: i_sx(time), y: i_sy(time) }, { x: i_tx(time), y: i_ty(time) }, d.target).y;
-                })
-                .on("end", (d, i, elements) => {
-                    if (i === elements.length - 1) {
-                        nodes.forEach(node => {
-                            node.x = node.force_x;
-                            node.y = node.force_y;
-                            node.fx = null;
-                            node.fy = null;
-                        });
-                        precedenceChartNodes.call(drag);
-                        simulation.alpha(0.5).restart();
-                    }
-                });
-        }
         function renderPrecedenceLegend() {
             const legendPadding = 12;
             const swatch = { w: 10, h: 10 };
@@ -422,73 +509,73 @@ const PrecedenceTab = (function () {
             const topGap = 20, bottomGap = 2;
             const legendWidth = 150;
             const legendHeight = legendPadding * 2 + topGap + (swatch.h + rowGap) * 2 + bottomGap + 14;
-            const legendX = 20, legendY = height - legendHeight - 20;
+            // Use module-level height
+            const legendX = 20, legendY = svgHeight - legendHeight - 20;
 
             const g = svg.append("g")
-            .attr("id", "precedence-legend")
-            .attr("transform", `translate(${legendX}, ${legendY})`)
-            .style("pointer-events", "none");
+                .attr("id", "precedence-legend")
+                .attr("transform", `translate(${legendX}, ${legendY})`);
 
             g.append("rect")
-            .attr("width", legendWidth)
-            .attr("height", legendHeight)
-            .attr("rx", 5)
-            .classed("legend-box", true);
+                .attr("width", legendWidth)
+                .attr("height", legendHeight)
+                .attr("rx", 5)
+                .classed("legend-box", true);
 
             const centerX = legendWidth / 2;
             g.append("text")
-            .text("Build Ratios")
-            .attr("x", centerX)
-            .attr("y", 18)
-            .classed("legend-title", true);
+                .text("Build Ratios")
+                .attr("x", centerX)
+                .attr("y", 18)
+                .classed("legend-title", true);
 
             const itemsGrid = [
-            [
-                { label: "Super", color: PERT_PIE_COLORS.super },
-                { label: "Ultra", color: PERT_PIE_COLORS.ultra }
-            ],
-            [
-                { label: "Mega", color: PERT_PIE_COLORS.mega },
-                { label: "Idle", color: PERT_PIE_COLORS.idle }
-            ]
+                [
+                    { label: "Super", color: PERT_PIE_COLORS.super },
+                    { label: "Ultra", color: PERT_PIE_COLORS.ultra }
+                ],
+                [
+                    { label: "Mega", color: PERT_PIE_COLORS.mega },
+                    { label: "Idle", color: PERT_PIE_COLORS.idle }
+                ]
             ];
             const colWidth = (legendWidth - legendPadding * 2) / 2;
 
             itemsGrid.forEach((rowItems, rowIndex) => {
-            rowItems.forEach((item, colIndex) => {
-                const gx = legendPadding + colIndex * (colWidth + colGap);
-                const gy = legendPadding + topGap + rowIndex * (swatch.h + rowGap);
-                const row = g.append("g").attr("transform", `translate(${gx}, ${gy})`);
+                rowItems.forEach((item, colIndex) => {
+                    const gx = legendPadding + colIndex * (colWidth + colGap);
+                    const gy = legendPadding + topGap + rowIndex * (swatch.h + rowGap);
+                    const row = g.append("g").attr("transform", `translate(${gx}, ${gy})`);
 
-                row.append("rect")
-                .attr("width", swatch.w)
-                .attr("height", swatch.h)
-                .attr("fill", item.color)
-                .attr("stroke", getComputedStyle(root).getPropertyValue("--white").trim())
-                .attr("stroke-width", 1);
+                    row.append("rect")
+                        .attr("width", swatch.w)
+                        .attr("height", swatch.h)
+                        .attr("fill", item.color)
+                        .attr("stroke", getComputedStyle(root).getPropertyValue("--white").trim())
+                        .attr("stroke-width", 1);
 
-                row.append("text")
-                .text(item.label)
-                .attr("x", swatch.w + labelOffsetX)
-                .attr("y", swatch.h - 2)
-                .classed("legend-item-text", true);
-            });
+                    row.append("text")
+                        .text(item.label)
+                        .attr("x", swatch.w + labelOffsetX)
+                        .attr("y", swatch.h - 2)
+                        .classed("legend-item-text", true);
+                });
             });
 
             g.append("text")
-            .text("Node size = Labor time")
-            .attr("x", centerX)
-            .attr("y", legendHeight - legendPadding)
-            .attr("text-anchor", "middle")
-            .style("font-size", "12px")
-            .attr("fill", getComputedStyle(root).getPropertyValue("--accent").trim());
-        
+                .text("Node size = Labor time")
+                .attr("x", centerX)
+                .attr("y", legendHeight - legendPadding)
+                .attr("text-anchor", "middle")
+                .classed("legend-item-text", true);
+
         }
 
         function createDagLegend() {
             const legendWidth = 220;
             const legendHeight = 125;
-            const legendX = width - legendWidth - 20;
+            // Use module-level width
+            const legendX = svgWidth - legendWidth - 20;
             const legendY = 20;
             const g = svg.append('g').attr('transform', `translate(${legendX}, ${legendY})`);
             g.append('rect')
@@ -510,9 +597,8 @@ const PrecedenceTab = (function () {
                 .attr('y1', midY)
                 .attr('x2', endX - nodeRadius)
                 .attr('y2', midY)
-                .attr('stroke', getComputedStyle(root).getPropertyValue('--accent'))
-                .attr('stroke-width', 2)
-                .attr('marker-end', 'url(#arrowhead)');
+                .attr('class', 'dag-legend-arrow');
+
             const drawHollowPieNode = (container, label) => {
                 const pie = d3.pie().sort(null).value(d => d.value);
                 const arc = d3.arc().innerRadius(0).outerRadius(nodeRadius);
@@ -521,21 +607,20 @@ const PrecedenceTab = (function () {
                     { value: 25, color: PERT_PIE_COLORS.ultra }, { value: 25, color: PERT_PIE_COLORS.idle }
                 ];
                 container.selectAll('path.pie-slice')
-                    .data(pie(slices)).join('path').attr('class', 'pie-slice').attr('d', arc)
-                    .style('fill', d => d.data.color).style('stroke', PERT_PIE_STROKE).style('stroke-width', '0.9px');
-                const textNode = container.append('text').text(label).attr('text-anchor', 'middle').attr('dy', '0.35em').attr('fill', getComputedStyle(root).getPropertyValue('--accent')).style('font-weight', 'bold').style('font-size', '12px');
+                    .data(pie(slices)).join('path')
+                    .attr('class', 'pie-slice __pert_pie')
+                    .attr('d', arc)
+                    .style('fill', d => d.data.color);
 
-                container.insert('circle', 'text') // Insert circle behind text
+                const textNode = container.append('text')
+                    .text(label)
+                    .attr('class', 'dag-legend-node-text');
+
+                container.insert('circle', 'text')
                     .attr('class', '__pert_label_bg')
-                    .style('pointer-events', 'none')
-                    .attr('r', nodeRadius * 0.48)
-                    .attr('fill', getComputedStyle(root).getPropertyValue('--page-bg').trim())
-                    .attr('fill-opacity', 0.95)
-                    .attr('stroke', getComputedStyle(root).getPropertyValue('--accent').trim())
-                    .attr('stroke-opacity', 0.20)
-                    .attr('stroke-width', 1);
+                    .attr('r', nodeRadius * 0.48);
 
-                textNode.raise(); // Ensure text is on top of the new circle
+                textNode.raise();
             };
             const predecessorNode = diagram.append('g').attr('transform', `translate(${startX}, ${midY})`).style('cursor', 'pointer');
             drawHollowPieNode(predecessorNode, 'A');
@@ -549,18 +634,34 @@ const PrecedenceTab = (function () {
                     .style('max-width', '220px')
                     .html(
                         `<div class="tooltip-header" style="text-align: center;">Precedence</div>
-                         <div class="tooltip-row description" style="text-align: center; display: block;"<b>Predecessor</b> task (A) must be completed before <b>Successor</b> task (B) can begin.</div>`
+                         <div class="tooltip-row description" style="text-align: center; display: block;"<b>Predecessor</b> task (A) must be completed before <b>Successor</b> task (B) can begin.</div>`
                     );
             };
             const tooltipMove = (event) => pertTooltip.style('left', (event.clientX + 14) + 'px').style('top', (event.clientY + 14) + 'px');
             const tooltipHide = () => pertTooltip.style('opacity', 0);
             predecessorNode.on('mouseenter', tooltipHandler).on('mousemove', tooltipMove).on('mouseleave', tooltipHide);
             successorNode.on('mouseenter', tooltipHandler).on('mousemove', tooltipMove).on('mouseleave', tooltipHide);
+
             const switchUiGroup = g.append('g').style('cursor', 'pointer');
-            const switchLabel = switchUiGroup.append('text').text('K&W Diagram').attr('y', 15).style('font-size', '14px').style('font-weight', 'bold').attr('fill', getComputedStyle(root).getPropertyValue('--accent'));
+            const switchLabel = switchUiGroup.append('text')
+                .text('K&W Diagram')
+                .attr('y', 15)
+                .attr('class', 'dag-legend-switch-text');
+
             const switchGroup = switchUiGroup.append('g').attr('transform', 'translate(100, 0)');
-            switchGroup.append('rect').attr('width', 40).attr('height', 20).attr('rx', 10).attr('fill', '#ccc');
-            const switchHandle = switchGroup.append('circle').attr('cx', 10).attr('cy', 10).attr('r', 8).attr('fill', 'white');
+
+            // **FIX:** Reverted to inline fill attribute, removed CSS class
+            switchGroup.append('rect')
+                .attr('width', 40)
+                .attr('height', 20)
+                .attr('rx', 10)
+                .attr('fill', '#ccc');
+
+            const switchHandle = switchGroup.append('circle')
+                .attr('cx', 10)
+                .attr('cy', 10)
+                .attr('r', 8)
+                .attr('class', 'dag-legend-switch-handle');
 
             const switchBBox = switchUiGroup.node().getBBox();
             switchUiGroup.attr('transform', `translate(${(legendWidth - switchBBox.width) / 2}, 95)`);
@@ -572,7 +673,7 @@ const PrecedenceTab = (function () {
                     switchHandle.transition().attr('cx', 30);
                     applyKwLayout();
                 } else {
-                    switchGroup.select('rect').attr('fill', '#ccc');
+                    switchGroup.select('rect').attr('fill', '#ccc'); // Reset to default grey
                     switchHandle.transition().attr('cx', 10);
                     removeKwLayout();
                 }
@@ -580,9 +681,27 @@ const PrecedenceTab = (function () {
         }
 
         function getPertLaborTime(id) { const t = state?.taskData?.get?.(id)?.laborTime; return Number.isFinite(t) ? t : (PERT_LABOR_FALLBACK[id] || 0) }
+
         function drawPERTNodePiesOnce() {
             if (!precedenceChartNodes || precedenceChartNodes.empty()) return; const times = nodes.map(d => getPertLaborTime(+d.id)); if (!times.length) return; const rScale = d3.scaleLinear().domain(d3.extent(times)).range([14, 56]).nice(); const arc = d3.arc().innerRadius(0); const pie = d3.pie().sort(null).value(d => d.value); precedenceChartNodes.each(function (d) {
-                const g = d3.select(this); const id = +d.id; const r = rScale(getPertLaborTime(id)); d.r = r; g.select("circle").remove(); g.append("circle").attr("r", r).attr("fill", "transparent").style("pointer-events", "all"); const row = state.taskData.get(id); if (!row) return; const { elementTime: ET, Super: sup, Mega: meg, Ultra: ult } = row; const slices = [{ key: "super", value: ET * sup, color: PERT_PIE_COLORS.super }, { key: "mega", value: ET * meg, color: PERT_PIE_COLORS.mega }, { key: "ultra", value: ET * ult, color: PERT_PIE_COLORS.ultra }, { key: "idle", value: Math.max(0, ET * (1 - (sup + meg + ult))), color: PERT_PIE_COLORS.idle }].filter(s => s.value > 1e-6); const arcGen = arc.outerRadius(r); g.selectAll("path.__pert_pie").data(pie(slices)).join("path").attr("class", "__pert_pie").attr("d", arcGen).style("fill", a => a.data.color).style("stroke", PERT_PIE_STROKE).style("stroke-width", .9); g.selectAll("text").data([d]).join("text").text(d => d.id);
+                const g = d3.select(this); const id = +d.id; const r = rScale(getPertLaborTime(id)); d.r = r; g.select("circle").remove();
+
+                g.append("circle")
+                    .attr("r", r)
+                    .attr("class", "pert-node-hitbox");
+
+                const row = state.taskData.get(id); if (!row) return; const { elementTime: ET, Super: sup, Mega: meg, Ultra: ult } = row; const slices = [{ key: "super", value: ET * sup, color: PERT_PIE_COLORS.super }, { key: "mega", value: ET * meg, color: PERT_PIE_COLORS.mega }, { key: "ultra", value: ET * ult, color: PERT_PIE_COLORS.ultra }, { key: "idle", value: Math.max(0, ET * (1 - (sup + meg + ult))), color: PERT_PIE_COLORS.idle }].filter(s => s.value > 1e-6); const arcGen = arc.outerRadius(r);
+
+                g.selectAll("path.__pert_pie")
+                    .data(pie(slices)).join("path")
+                    .attr("class", "__pert_pie")
+                    .attr("d", arcGen)
+                    .style("fill", a => a.data.color);
+
+                g.selectAll("text.precedence-node-text")
+                    .data([d]).join("text")
+                    .attr("class", "precedence-node-text")
+                    .text(d => d.id);
 
                 g.on("mouseenter", event => {
                     const task = state.taskData.get(id);
@@ -591,25 +710,50 @@ const PrecedenceTab = (function () {
                         .style('max-width', '250px')
                         .html(
                             `<div class="tooltip-header">${"Element " + id}</div>
-                         <div class="tooltip-row description" style="display: block; text-align: center; margin-bottom: 4px;">${taskDescription}</div>
-                         <div class="tooltip-row"><span>Labor Time:</span> <b>${getPertLaborTime(id).toFixed(2)}</b></div>
-                         <div class="tooltip-row">Super: <b>${(sup * 100).toFixed(0)}%</b></div>
-                         <div class="tooltip-row">Ultra: <b>${(ult * 100).toFixed(0)}%</b></div>
-                         <div class="tooltip-row">Mega: <b>${(meg * 100).toFixed(0)}%</b></div>`
+                             <div class="tooltip-row description" style="display: block; text-align: center; margin-bottom: 4px;">${taskDescription}</div>
+                             <div class="tooltip-row"><span>Labor Time:</span> <b>${getPertLaborTime(id).toFixed(2)}</b></div>
+                             <div class="tooltip-row">Super: <b>${(sup * 100).toFixed(0)}%</b></div>
+                             <div class="tooltip-row">Ultra: <b>${(ult * 100).toFixed(0)}%</b></div>
+                             <div class="tooltip-row">Mega: <b>${(meg * 100).toFixed(0)}%</b></div>`
                         )
                 }).on("mousemove", event => { pertTooltip.style("left", event.clientX + 14 + "px").style("top", event.clientY + 14 + "px") })
                     .on("mouseleave", () => { pertTooltip.style("opacity", 0).style('max-width', null) });
             });
             addPERTLabelBackgrounds(); restylePERTNodeLabelsStrong()
-        } function addPERTLabelBackgrounds() { if (!precedenceChartNodes) return; precedenceChartNodes.each(function (d) { if (!d || d.id == null || !d.r) return; const g = d3.select(this); g.insert("circle", "text").attr("class", "__pert_label_bg").style("pointer-events", "none").attr("r", Math.max(11, d.r * .48)).attr("fill", getComputedStyle(root).getPropertyValue("--white").trim()).attr("fill-opacity", .95).attr("stroke", getComputedStyle(root).getPropertyValue("--accent").trim()).attr("stroke-opacity", .2).attr("stroke-width", 1) }) } function restylePERTNodeLabelsStrong() { if (!precedenceChartNodes) return; precedenceChartNodes.each(function (d) { if (!d || d.id == null || !d.r) return; const fs = Math.max(15, Math.min(26, d.r * .42)); d3.select(this).select("text").raise().attr("text-anchor", "middle").attr("dy", "0.35em").style("font-family", "sans-serif").style("font-weight", "800").style("font-size", fs + "px").style("fill", getComputedStyle(root).getPropertyValue("--accent").trim()).style("stroke", getComputedStyle(root).getPropertyValue("--white").trim()).style("stroke-width", "4px").style("paint-order", "stroke").style("pointer-events", "none") }) }
+        }
+
+        function addPERTLabelBackgrounds() {
+            if (!precedenceChartNodes) return;
+            precedenceChartNodes.each(function (d) {
+                if (!d || d.id == null || !d.r) return;
+                const g = d3.select(this);
+                g.insert("circle", "text")
+                    .attr("class", "__pert_label_bg")
+                    .attr("r", Math.max(11, d.r * .48));
+            })
+        }
+
+        function restylePERTNodeLabelsStrong() {
+            if (!precedenceChartNodes) return;
+            precedenceChartNodes.each(function (d) {
+                if (!d || d.id == null || !d.r) return;
+                const fs = Math.max(15, Math.min(26, d.r * .42));
+                d3.select(this).select("text")
+                    .raise()
+                    .style("font-size", fs + "px");
+            })
+        }
+
         const zoom = d3.zoom().scaleExtent([0.1, 8]).on("zoom", (event) => { mainGroup.attr("transform", event.transform); });
         svg.call(zoom);
         zoomPane.call(zoom);
         const DEFAULT_ZOOM = 0.95;
-        const tx = (width - width * DEFAULT_ZOOM) / 2;
-        const ty = (height - height * DEFAULT_ZOOM) / 2;
+        // Use module-level width/height
+        const tx = (svgWidth - svgWidth * DEFAULT_ZOOM) / 2;
+        const ty = (svgHeight - svgHeight * DEFAULT_ZOOM) / 2;
         const initialTransform = d3.zoomIdentity.translate(tx, ty).scale(DEFAULT_ZOOM);
         svg.call(zoom.transform, initialTransform);
+
         function dragstarted(event, d) {
             if (!event.active) simulation.alphaTarget(0.3).restart();
             d.fx = d.x;
@@ -628,12 +772,14 @@ const PrecedenceTab = (function () {
         }
         precedenceChartNodes.call(drag);
 
-        precomputeKwPositions();
+        precomputeKwPositions(); // Initial calculation
         renderPrecedenceLegend();
         createDagLegend();
         drawPERTNodePiesOnce();
         updatePrecedenceChartColors(invalidNodes);
         updatePrecedenceChartLinks(invalidNodes);
     }
+
+    // --- RETURN PUBLIC API ---
     return { draw, update, flatten, resize };
 })();
