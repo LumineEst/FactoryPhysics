@@ -9,6 +9,7 @@
 const ScheduleTab = (function () {
     // Info panel visibility state
     let infoPanelVisible = false;
+
     /**
      * @tab Schedule
      * Draws the animated Gantt chart for the production schedule.
@@ -38,6 +39,9 @@ const ScheduleTab = (function () {
 
         // Info panel visibility
         const isInfoVisible = infoPanelVisible;
+
+        // Root element for CSS custom properties
+        const root = document.documentElement;
 
         // --- SVG & DATA PREPARATION ---
         // Select the SVG container and clear any previous renderings.
@@ -130,6 +134,31 @@ const ScheduleTab = (function () {
             const total = durations.reduce((sum, value) => sum + value, 0);
             averageProcessTimes.set(modelId, total / durations.length);
         });
+
+        // Calculate quality yield for defective products
+        const opInputs = { dailyDemand: parseInt(dailyDemandInput.value, 10), opHours: parseFloat(opHoursInput.value), numEmployees: parseInt(numEmployeesInput.value, 10) };
+        const finInputs = { laborCost: parseFloat(laborCostInput.value) };
+        const results = calculateMetrics(opInputs, finInputs);
+        const qualityYield = results.qualityYield;
+
+        // Generate defect status for all products using the same random sequence
+        let defectStatus;
+        if (!window.sharedDefectData || window.sharedDefectData.dailyDemand !== opInputs.dailyDemand || window.sharedDefectData.qualityYield !== qualityYield) {
+            defectStatus = [];
+            for (let i = 0; i < opInputs.dailyDemand; i++) {
+                defectStatus.push(Math.random() > qualityYield);
+            }
+            window.sharedDefectData = { dailyDemand: opInputs.dailyDemand, qualityYield, defectStatus };
+        } else {
+            defectStatus = window.sharedDefectData.defectStatus;
+        }
+
+        // Determine defective products
+        const defectiveProducts = new Map();
+        unitSpans.forEach((span, uniqueId) => {
+            const index = parseInt(uniqueId.split('-')[1]);
+            defectiveProducts.set(uniqueId, defectStatus[index]);
+        });
         const formatMinutesToClock = (minutes) => {
             if (!isFinite(minutes) || minutes < 0) return "N/A";
             const totalSeconds = Math.max(0, Math.round(minutes * 60));
@@ -170,88 +199,6 @@ const ScheduleTab = (function () {
             .attr("stroke", getComputedStyle(root).getPropertyValue('--accent'))
             .attr("rx", 5)
             .style("pointer-events", "auto");
-
-/*        // Ensure the sidebar mask inside the HTML sidebar is created/updated so it moves with collapse
-        (function updateSidebarMask() {
-            const workstationList = document.getElementById('workstation-list');
-            const svgContainer = document.getElementById('svg-container');
-            if (!workstationList || !svgContainer) return;
-
-            const cs = getComputedStyle(workstationList);
-            if (cs.position === 'static') {
-                workstationList.style.position = 'relative';
-            }
-
-            // Create or get dedicated overlay container that always paints last
-            let overlay = workstationList.querySelector('.sidebar-overlay');
-            if (!overlay) {
-                overlay = document.createElement('div');
-                overlay.className = 'sidebar-overlay';
-                workstationList.appendChild(overlay);
-            }
-            // Ensure overlay is last child for paint order
-            if (overlay !== workstationList.lastElementChild) {
-                workstationList.appendChild(overlay);
-            }
-
-            // Create or get the mask inside the overlay
-            let mask = overlay.querySelector('.sidebar-mask');
-            if (!mask) {
-                mask = document.createElement('div');
-                mask.className = 'sidebar-mask';
-                overlay.appendChild(mask);
-            }
-
-            // rAF-coalesced scroll/resize updates for smoothness
-            let ticking = false;
-            let cachedSvgRect = null;
-            let cachedSidebarRect = null;
-            let lastKnownScrollTop = 0;
-
-            function readLayout() {
-                cachedSvgRect = svgContainer.getBoundingClientRect();
-                cachedSidebarRect = workstationList.getBoundingClientRect();
-                lastKnownScrollTop = workstationList.scrollTop;
-            }
-
-            function updateMask() {
-                const timelineYAbs = cachedSvgRect.top + cachedSvgRect.height * 0.93;
-                const topInSidebar = Math.max(0, (timelineYAbs - cachedSidebarRect.top) + lastKnownScrollTop);
-                const heightInSidebar = Math.max(0, workstationList.scrollHeight - topInSidebar);
-
-                mask.style.position = 'absolute';
-                mask.style.left = '0px';
-                mask.style.right = '0px';
-                mask.style.transform = `translateY(${topInSidebar}px)`; // GPU-friendly move
-                mask.style.width = '100%';
-                mask.style.height = `${heightInSidebar}px`;
-                mask.style.background = getComputedStyle(root).getPropertyValue('--white').trim();
-                mask.style.pointerEvents = 'none';
-                mask.style.zIndex = '1';
-                mask.style.willChange = 'transform, height';
-            }
-
-            function rAFUpdate() {
-                ticking = false;
-                readLayout();
-                updateMask();
-            }
-
-            function requestUpdate() {
-                if (!ticking) {
-                    ticking = true;
-                    requestAnimationFrame(rAFUpdate);
-                }
-            }
-
-            // Initial paint
-            readLayout();
-            updateMask();
-            // Listen and coalesce
-            workstationList.addEventListener('scroll', requestUpdate, { passive: true });
-            window.addEventListener('resize', requestUpdate);
-        })();
-*/
 
         // --- UI CONTROLS & DISPLAYS ---
         // Timer display for the simulation clock.
@@ -1187,7 +1134,7 @@ const ScheduleTab = (function () {
             .attr("class", "bar")
             .attr("y", d => elementGeometry.get(d.taskId)?.y || -100) // Set Y position based on element geometry map.
             .attr("height", d => elementGeometry.get(d.taskId)?.height || 0) // Set height similarly.
-            .attr("fill", d => modelColors(d.modelId)) // Set fill color based on product model.
+            .attr("fill", d => defectiveProducts.get(d.uniqueId) ? getComputedStyle(root).getPropertyValue('--failure-color').trim() : modelColors(d.modelId)) // Set fill color based on defect status or product model.
             .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim()).attr("stroke-width", 1).attr("rx", 2).attr("ry", 2) // Styling.
             .style("opacity", d => (activeProductFilters[d.modelId] ? 0.9 : 0.0)) // Set initial opacity based on filters.
             .style("display", d => (activeProductFilters[d.modelId] ? "block" : "none")) // Set initial display based on filters.
@@ -1202,12 +1149,13 @@ const ScheduleTab = (function () {
                 
                 // Populate and show tooltip.
                 scheduleTooltip.html(`
-                <div class="tooltip-header" style="color: ${modelColors(d.modelId)};">${productType} Refrigerator</div>
+                <div class="tooltip-header" style="color: ${defectiveProducts.get(d.uniqueId) ? getComputedStyle(root).getPropertyValue('--failure-color').trim() : modelColors(d.modelId)};">${productType} Refrigerator</div>
                 <div class="tooltip-row"><span>Element:</span> <strong>${d.taskId}</strong></div>
                 <div class="tooltip-row"><span>Workstation:</span> <strong>${d.workstationId}</strong></div>
                 <div class="tooltip-row"><span>Duration:</span> <strong>${duration}</strong></div>
                 <div class="tooltip-row"><span>Start:</span> <strong>${startTime}</strong></div>
                 <div class="tooltip-row"><span>End:</span> <strong>${endTime}</strong></div>
+                <div class="tooltip-row"><span>Defective:</span> <strong>${defectiveProducts.get(d.uniqueId) ? 'Yes' : 'No'}</strong></div>
             `).style("opacity", 1);
             })
             .on("mousemove", function (event) { // Update tooltip position.
@@ -1355,6 +1303,7 @@ const ScheduleTab = (function () {
             { label: "Super Product", color: getComputedStyle(root).getPropertyValue('--super-color') },
             { label: "Ultra Product", color: getComputedStyle(root).getPropertyValue('--ultra-color') },
             { label: "Mega Product", color: getComputedStyle(root).getPropertyValue('--mega-color') },
+            { label: "Defective Product", color: getComputedStyle(root).getPropertyValue('--failure-color') },
             { label: "Bottleneck WS", color: getComputedStyle(root).getPropertyValue('--failure-color'), type: "ws" },
             { label: "Utilization Bar", color: getComputedStyle(root).getPropertyValue('--primary'), type: "bar" }
         ];
