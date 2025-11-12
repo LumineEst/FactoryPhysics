@@ -168,7 +168,8 @@
         <h2>Factory Physics: Website Backend Mechanics</h2>
         <p>
             This document details the formulas and algorithms used to calculate the backend mechanics of the factory
-            physics simulation website. Hover over <strong data-tooltip="Key technical terms have tooltips like this!">highlighted key terms</strong> for
+            physics simulation website. Hover over <strong
+                data-tooltip="Key technical terms have tooltips like this!">highlighted key terms</strong> for
             definitions.
         </p>
 
@@ -179,14 +180,16 @@
         </p>
         <ul>
             <li>
-                <strong>Build Ratios:</strong> The fixed production mix for the <strong data-tooltip="An assembly line that produces multiple product variations sharing common steps.">
+                <strong>Build Ratios:</strong> The fixed production mix for the <strong
+                    data-tooltip="An assembly line that produces multiple product variations sharing common steps.">
                     mixed
                     assembly line
                 </strong> is 35% Super, 45% Ultra, and 20% Mega. Fixing this prevents calculations from
                 becoming too complex for a web browser.
             </li>
             <li>
-                <strong>Precedence Data:</strong> The required order of assembly <strong data-tooltip="Atomic tasks done by one person; cannot be shared or split.">elements</strong>
+                <strong>Precedence Data:</strong> The required order of assembly <strong
+                    data-tooltip="Atomic tasks done by one person; cannot be shared or split.">elements</strong>
                 (<code>PRECEDENCE_DATA</code>) is fixed, reflecting non-negotiable engineering and assembly logic based
                 on the physical requirements of building the refrigerators.
             </li>
@@ -507,11 +510,14 @@
             </li>
             <li>
                 <strong>Workstation Capacities & Configurations:</strong> For each potential number of employees
-                (<strong data-tooltip="A designated area where a specific set of assembly tasks (elements) are performed, typically by one operator.">workstations</strong>)
+                (<strong
+                    data-tooltip="A designated area where a specific set of assembly tasks (elements) are performed, typically by one operator.">workstations</strong>)
                 from 3 to 13, a near-optimal task assignment configuration is pre-defined in the code (derived from
-                <code>CONFIGS.csv</code>). These configurations were generated using a custom algorithm, <strong data-tooltip="Backpropagating Iterative Ranked Weights: Custom algorithm used to improve line balance by iteratively applying a reversed RPW method.">BIRW</strong>
+                <code>CONFIGS.csv</code>). These configurations were generated using a custom algorithm, <strong
+                    data-tooltip="Backpropagating Iterative Ranked Weights: Custom algorithm used to improve line balance by iteratively applying a reversed RPW method.">BIRW</strong>
                 (Backpropagating Iterative Ranked Weights). This algorithm refines an initial assignment from the
-                standard <strong data-tooltip="Ranked Positional Weights: Algorithm for assigning tasks to workstations based on task time and precedence constraints, often resulting in front-loaded imbalance.">RPW</strong>
+                standard <strong
+                    data-tooltip="Ranked Positional Weights: Algorithm for assigning tasks to workstations based on task time and precedence constraints, often resulting in front-loaded imbalance.">RPW</strong>
                 (Ranked Positional Weights) method. RPW tends to front-load tasks, leading to imbalance. BIRW addresses
                 this by:
                 <ol>
@@ -552,17 +558,20 @@
 
         <h4>1. Workstation Details & Bottleneck Identification</h4>
         <p>
-            The function first calls <code>calculateWorkstationDetails</code>. For the selected number of employees, this
+            The function first calls <code>calculateWorkstationDetails</code>. For the selected number of employees,
+            this
             sub-function determines:
         </p>
         <ul>
             <li>
                 <strong>
-                    Station <strong data-tooltip="The actual time it takes for one unit to be completed at the slowest workstation. This determines your line's true output rate.">
+                    Station <strong
+                        data-tooltip="The actual time it takes for one unit to be completed at the slowest workstation. This determines your line's true output rate.">
                         Cycle
                         Time
                     </strong> (min):
-                </strong> Calculated for each workstation by summing the <strong data-tooltip="The average time an operator spends on a task per unit, considering the mix of models being built and task requirements.">
+                </strong> Calculated for each workstation by summing the <strong
+                    data-tooltip="The average time an operator spends on a task per unit, considering the mix of models being built and task requirements.">
                     labor
                     time
                 </strong> (<code>laborTime</code>) of all tasks assigned to it. This represents the average
@@ -570,7 +579,8 @@
             </li>
             <li>
                 <strong>
-                    Line <strong data-tooltip="The single process or workstation that limits the overall output rate of the entire system.">Bottleneck</strong>
+                    Line <strong
+                        data-tooltip="The single process or workstation that limits the overall output rate of the entire system.">Bottleneck</strong>
                     Time (min):
                 </strong> The maximum Station Cycle Time found across all workstations. This value
                 dictates the absolute fastest rate the entire line can produce units.
@@ -587,7 +597,8 @@
 
         <h4>2. Conveyor Speed & Spacing (Physical Parameters)</h4>
         <p>
-            These are calculated to ensure smooth <strong data-tooltip="The movement of materials and products through the production process.">flow</strong> and
+            These are calculated to ensure smooth <strong
+                data-tooltip="The movement of materials and products through the production process.">flow</strong> and
             prevent starving the fastest workstation of work:
         </p>
         <ul>
@@ -604,13 +615,15 @@
         </ul>
 
         <h4>
-            3. Required <strong data-tooltip="The required pace (time per unit) of production needed to meet customer demand within the available operating time.">
+            3. Required <strong
+                data-tooltip="The required pace (time per unit) of production needed to meet customer demand within the available operating time.">
                 Takt
                 Time
             </strong> Calculation
         </h4>
         <p>
-            This determines the pace (minutes per unit) required to meet the user-set <code>dailyDemand</code> within the
+            This determines the pace (minutes per unit) required to meet the user-set <code>dailyDemand</code> within
+            the
             specified <code>opHours</code>. The formula correctly accounts for the initial time needed to fill the
             entire assembly line before the first unit is completed:
         </p>
@@ -626,14 +639,17 @@
         \[\text{Effective Cycle Time} = \max(\text{Required Takt Time, Bottleneck Time})\]
 
         <h4>
-            5. <strong data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>
-            & <strong data-tooltip="Work In Progress: The average number of incomplete products currently physically present on the assembly line.">WIP</strong>
+            5. <strong
+                data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>
+            & <strong
+                data-tooltip="Work In Progress: The average number of incomplete products currently physically present on the assembly line.">WIP</strong>
             Calculation (User-Visible KPIs)
         </h4>
         <ul>
             <li>
                 <strong>
-                    Actual <strong data-tooltip="The total time it takes for a single unit to travel from the start to the end of the assembly line.">
+                    Actual <strong
+                        data-tooltip="The total time it takes for a single unit to travel from the start to the end of the assembly line.">
                         Process
                         Time
                     </strong> (min):
@@ -644,24 +660,27 @@
             </li>
             <li>
                 <strong>
-                    <strong data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>
+                    <strong
+                        data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>
                     (Units per Day):
                 </strong> The total number of units the line can actually produce within the
                 operating hours. Calculated based on the "launch window" (total time minus the time for the first unit
                 to exit):
-                \[\text{Throughput}_{\text{Units/Day}} = \left\lfloor \frac{\text{Total Op Minutes} - \text{Actual Process Time}}{\text{Effective Cycle Time}} \right\rfloor + 1\]
-                (Throughput is 0 if Total Op Minutes < Actual Process Time).
-            </li>
+                \[\text{Throughput}_{\text{Units/Day}} = \left\lfloor \frac{\text{Total Op Minutes} - \text{Actual
+                Process Time}}{\text{Effective Cycle Time}} \right\rfloor + 1\]
+                (Throughput is 0 if Total Op Minutes < Actual Process Time). </li>
             <li>
                 <strong>
-                    <strong data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>
+                    <strong
+                        data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>
                     (Units per Hour):
                 </strong> Calculated for display in the UI based on the actual production achieved
                 over the *effective* production time (which might be less than opHours if demand is low).
             </li>
             <li>
                 <strong>
-                    <strong data-tooltip="Work In Progress: The average number of incomplete products currently physically present on the assembly line.">WIP</strong>
+                    <strong
+                        data-tooltip="Work In Progress: The average number of incomplete products currently physically present on the assembly line.">WIP</strong>
                     (Units):
                 </strong> The average number of units physically on the line at any given time. Displayed in
                 the UI.
@@ -673,10 +692,12 @@
         <ul>
             <li>
                 <strong>
-                    Average <strong data-tooltip="Percentage of total available operator time that is spent productively working on units.">Efficiency</strong>
+                    Average <strong
+                        data-tooltip="Percentage of total available operator time that is spent productively working on units.">Efficiency</strong>
                     (%):
                 </strong> Overall measure of labor utilization. Displayed in the UI.
-                \[\text{Avg. Efficiency} = \frac{\text{Throughput}_{\text{Units/Day}} \times \sum \text{Task Labor Times}}{\text{Num Employees} \times \text{Total Op Minutes}} \times 100\%\]
+                \[\text{Avg. Efficiency} = \frac{\text{Throughput}_{\text{Units/Day}} \times \sum \text{Task Labor
+                Times}}{\text{Num Employees} \times \text{Total Op Minutes}} \times 100\%\]
             </li>
             <li>
                 <strong>Total Idle Time (hrs):</strong> Total non-productive paid labor time across all employees per
@@ -685,7 +706,9 @@
                 (\text{Throughput}_{\text{Units/Day}} \times \sum \text{Task Labor Times}) \]
             </li>
             <li>
-                <strong data-tooltip="The percentage of time operators are idle specifically due to unequal workload distribution between workstations.">Balance Delay</strong> (%): Measures inefficiency specifically from unequal task distribution. Displayed in
+                <strong
+                    data-tooltip="The percentage of time operators are idle specifically due to unequal workload distribution between workstations.">Balance
+                    Delay</strong> (%): Measures inefficiency specifically from unequal task distribution. Displayed in
                 the UI.
                 <ol type="a" style="padding-left: 1.5rem; margin-top: 0.5rem;">
                     <li>
@@ -696,13 +719,15 @@
                 </ol>
             </li>
             <li>
-                <strong data-tooltip="The Coefficient of Variation (standard deviation / mean) of idle times across workstations. Measures how *evenly* the idle time (imbalance) is distributed. Lower is better.">
+                <strong
+                    data-tooltip="The Coefficient of Variation (standard deviation / mean) of idle times across workstations. Measures how *evenly* the idle time (imbalance) is distributed. Lower is better.">
                     Idle
                     Time CV (BD CV)
                 </strong> (%): Quantifies the *variation* in idle time between stations. A high CV
                 means some stations are very busy while others are very idle, even if the average Balance Delay isn't
                 terrible. Displayed in the UI.
-                \[ \text{Idle Time CV} = \left( \frac{\text{StdDev}(\text{Station Idle Times per Cycle})}{\text{Mean}(\text{Station Idle Times per Cycle})} \right) \times 100\% \]
+                \[ \text{Idle Time CV} = \left( \frac{\text{StdDev}(\text{Station Idle Times per
+                Cycle})}{\text{Mean}(\text{Station Idle Times per Cycle})} \right) \times 100\% \]
                 (Where Station Idle Time per Cycle = Bottleneck Time - Station Cycle Time).
             </li>
         </ul>
@@ -718,17 +743,20 @@
                 <code>BUILD_RATIOS</code>)
             </li>
             <li>
-                <strong data-tooltip="Cost Of Goods Sold: Variable costs (materials, direct labor) associated directly with producing goods."><code>Total COGS</code></strong>
+                <strong
+                    data-tooltip="Cost Of Goods Sold: Variable costs (materials, direct labor) associated directly with producing goods."><code>Total COGS</code></strong>
                 = Throughput × Weighted Avg. COGS (per model COGS × <code>BUILD_RATIOS</code>)
             </li>
             <li><code>Total Daily Labor Cost</code> = Num Employees × Op Hours × Labor Rate</li>
             <li>
-                <strong data-tooltip="Revenue minus COGS and direct Labor Cost. Profit generated directly from production before overheads."><code>Daily Gross Profit</code></strong>
+                <strong
+                    data-tooltip="Revenue minus COGS and direct Labor Cost. Profit generated directly from production before overheads."><code>Daily Gross Profit</code></strong>
                 ($): Displayed in the UI.
                 \[ \text{Gross Profit} = \text{Revenue} - \text{COGS} - \text{Labor Cost} \]
             </li>
             <li>
-                <strong data-tooltip="Gross Profit expressed as a percentage of total revenue. Measures profitability of production itself."><code>Gross Profit Margin</code></strong>
+                <strong
+                    data-tooltip="Gross Profit expressed as a percentage of total revenue. Measures profitability of production itself."><code>Gross Profit Margin</code></strong>
                 (%): Displayed in the UI.
                 \[ \text{Gross Profit Margin} = \left( \frac{\text{Gross Profit}}{\text{Revenue}} \right) \times 100\%
                 \]
@@ -753,7 +781,8 @@
         </ol>
 
         <h3>
-            Model-Mix Sequencing (MSSA / <strong data-tooltip="A lean manufacturing method (also called Heijunka) for leveling production by sequencing different product models in a repeating pattern to smooth demand on components and workload.">Heijunka</strong>)
+            Model-Mix Sequencing (MSSA / <strong
+                data-tooltip="A lean manufacturing method (also called Heijunka) for leveling production by sequencing different product models in a repeating pattern to smooth demand on components and workload.">Heijunka</strong>)
             (<code>generateProductionQueue</code>)
         </h3>
         <p>Used by the Layout and Schedule tabs to create a balanced production sequence for simulations:</p>
@@ -784,7 +813,8 @@
                 station's length on the conveyor. It's proportional to the station's share of the total line
                 <code>elementTime</code>:
                 \[\text{Travel Time}_{\text{station}} = \left( \frac{\sum \text{Element Time}_{\text{station}}}{\sum
-                \text{Element Time}_{\text{line}}} \right) \times \left( \frac{\text{Line Length}}{\text{Conveyor Speed}} \right)\]
+                \text{Element Time}_{\text{line}}} \right) \times \left( \frac{\text{Line Length}}{\text{Conveyor
+                Speed}} \right)\]
             </li>
             <li>
                 <strong>Task Start Time:</strong> Accurately models waiting scenarios (product waiting for worker, or
@@ -803,7 +833,8 @@
         </p>
 
         <h4>
-            <strong data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">
+            <strong
+                data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">
                 Free
                 Cash Flow (FCF)
             </strong> Calculation
@@ -819,19 +850,22 @@
                 \text{Depreciation}_t \]
             </li>
             <li>
-                Calculate <strong data-tooltip="Net Operating Profit After Tax. A measure of profitability that excludes debt financing effects.">
+                Calculate <strong
+                    data-tooltip="Net Operating Profit After Tax. A measure of profitability that excludes debt financing effects.">
                     Net
                     Operating Profit After Tax (NOPAT)
                 </strong>:
                 \[ \text{NOPAT}_t = \text{EBIT}_t \times (1 - \text{Tax Rate}) \]
             </li>
             <li>
-                Calculate <strong data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">
+                Calculate <strong
+                    data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">
                     Free
                     Cash Flow (FCF)
                 </strong>:
                 \[ \text{FCF}_t = \text{NOPAT}_t + \text{Depreciation}_t \]
-                (Depreciation is calculated using the selected <strong data-tooltip="Modified Accelerated Cost Recovery System. A US tax depreciation system specifying depreciation rates per year.">MACRS</strong>
+                (Depreciation is calculated using the selected <strong
+                    data-tooltip="Modified Accelerated Cost Recovery System. A US tax depreciation system specifying depreciation rates per year.">MACRS</strong>
                 schedule. In the final year \(n\), the after-tax Salvage Value is added: \( \text{FCF}_n \leftarrow
                 \text{FCF}_n + \text{Salvage Value} \times (1 - \text{Tax Rate}) \)). The Year 0 FCF is the negative
                 Initial Investment.
@@ -842,15 +876,18 @@
         <p>The FCF series (\(FCF_0, FCF_1, ..., FCF_n\)) is used to compute:</p>
         <ul>
             <li>
-                <strong data-tooltip="A project's total discounted future cash flows minus the initial investment. If positive, the project is expected to generate more value than its cost.">
+                <strong
+                    data-tooltip="A project's total discounted future cash flows minus the initial investment. If positive, the project is expected to generate more value than its cost.">
                     Net
                     Present Value (NPV)
-                </strong>: Discounts future FCFs back to present value using the <strong data-tooltip="Minimum Acceptable Rate of Return: The hurdle rate or required return an investor expects for undertaking the risk of an investment.">MARR</strong>.
+                </strong>: Discounts future FCFs back to present value using the <strong
+                    data-tooltip="Minimum Acceptable Rate of Return: The hurdle rate or required return an investor expects for undertaking the risk of an investment.">MARR</strong>.
                 A positive NPV suggests a potentially acceptable investment.
                 \[NPV = \sum_{t=0}^{n} \frac{FCF_t}{(1 + MARR)^t}\]
             </li>
             <li>
-                <strong data-tooltip="The discount rate (%) at which a project's Net Present Value (NPV) equals zero. Represents the project's effective rate of return. Higher is better.">
+                <strong
+                    data-tooltip="The discount rate (%) at which a project's Net Present Value (NPV) equals zero. Represents the project's effective rate of return. Higher is better.">
                     Internal
                     Rate of Return (IRR)
                 </strong> (%): The effective rate of return of the investment. It's the discount
@@ -858,7 +895,8 @@
                 rate range [low, high] until the NPV at the midpoint is close to zero).
             </li>
             <li>
-                <strong data-tooltip="The time (in years or days) required for an investment's cumulative positive cash inflows to equal the initial investment cost.">
+                <strong
+                    data-tooltip="The time (in years or days) required for an investment's cumulative positive cash inflows to equal the initial investment cost.">
                     Payback
                     Period
                 </strong> (Years/Days): Time until cumulative positive FCFs (\( \sum_{t=1}^{k} FCF_t \))
@@ -918,14 +956,18 @@
             <li>
                 <strong>Free Cash Flow Generation:</strong> With all costs established, the function
                 constructs a pro forma income statement for each year. It calculates revenue, subtracts all costs
-                (material, labor, scaled overheads, <strong data-tooltip="Total annual cost for transporting goods, derived from the Location Tab analysis.">freight</strong>),
+                (material, labor, scaled overheads, <strong
+                    data-tooltip="Total annual cost for transporting goods, derived from the Location Tab analysis.">freight</strong>),
                 and also deducts the non-cash tax depreciation expense using the 5-year Modified Accelerated Cost
-                Recovery System (<strong data-tooltip="Modified Accelerated Cost Recovery System. A US tax depreciation system specifying depreciation rates per year.">MACRS</strong>)
-                schedule. It then computes the <strong data-tooltip="Net Operating Profit After Tax. A measure of profitability that excludes debt financing effects.">
+                Recovery System (<strong
+                    data-tooltip="Modified Accelerated Cost Recovery System. A US tax depreciation system specifying depreciation rates per year.">MACRS</strong>)
+                schedule. It then computes the <strong
+                    data-tooltip="Net Operating Profit After Tax. A measure of profitability that excludes debt financing effects.">
                     Net
                     Operating Profit After Tax (NOPAT)
                 </strong> and correctly adds back the depreciation charge to
-                arrive at the <strong data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">
+                arrive at the <strong
+                    data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">
                     free
                     cash flow
                 </strong> for each period—the appropriate input for the NPV and IRR analyses.
@@ -953,7 +995,8 @@
 
         <h3>Facility Location Optimization (<code>LocationTab</code>)</h3>
         <p>
-            Finds the optimal factory location to minimize total annual transportation costs, solving the <strong data-tooltip="A classic optimization problem to find a single point that minimizes the weighted sum of distances to a set of destination points.">
+            Finds the optimal factory location to minimize total annual transportation costs, solving the <strong
+                data-tooltip="A classic optimization problem to find a single point that minimizes the weighted sum of distances to a set of destination points.">
                 Weber
                 Problem
             </strong> using calculated annual shipping costs as weights.
@@ -964,9 +1007,11 @@
             <li>
                 <strong>New (Greenfield):</strong> Iteratively finds the best *coordinate* using the Weiszfeld
                 algorithm, weighted by annual cost to each city:
-                \[\text{New Coordinate} = \frac{\sum_{i} \frac{\text{City Coordinate}_i \times \text{Annual Cost}_i}{\text{Distance}_i}}{\sum_{i} \frac{\text{Annual Cost}_i}{\text{Distance}_i}}\]
+                \[\text{New Coordinate} = \frac{\sum_{i} \frac{\text{City Coordinate}_i \times \text{Annual
+                Cost}_i}{\text{Distance}_i}}{\sum_{i} \frac{\text{Annual Cost}_i}{\text{Distance}_i}}\]
                 <p>
-                    Upon determining an optimal median value, all existing locations are then checked to see if any have a
+                    Upon determining an optimal median value, all existing locations are then checked to see if any have
+                    a
                     lower cost.
                 </p>
             </li>
@@ -981,22 +1026,25 @@
             <li>
                 <strong>Distances:</strong> Uses Great-Circle distance, calculated via the spherical law
                 of cosines:
-                \[ d = (3963.34-(13.35 \times \sin(\frac{|\phi1 - \phi2|}{2})) \times (\arccos(\sin(\phi_1)\sin(\phi_2) +
+                \[ d = (3963.34-(13.35 \times \sin(\frac{|\phi1 - \phi2|}{2})) \times (\arccos(\sin(\phi_1)\sin(\phi_2)
+                +
                 \cos(\phi_1)\cos(\phi_2)\cos(\Delta\lambda))) \]
                 <p style="margin-top:0.5rem; margin-bottom:0.5rem;">
                     Where \(\phi_1, \phi_2\) are the latitudes, and
                     \(\Delta\lambda\) is the difference in longitudes. This
                     distance is then adjusted by a Circuitry Factor (1.2 for > 250mi, 1.35 for < 250mi). Shipments under
-                    10 miles are considered local with zero transport cost.
-                </p>
+                        10 miles are considered local with zero transport cost. </p>
             </li>
             <li>
                 <strong>
-                    <strong data-tooltip="Full Truckload. Shipping method where an entire truck is dedicated to one shipment, typically cheaper per mile but requires a full load.">FTL</strong>
-                    vs. <strong data-tooltip="Less-Than-Truckload. Shipping method where multiple smaller shipments share space on the same truck, more flexible but typically more expensive per unit weight/distance.">LTL</strong>:
+                    <strong
+                        data-tooltip="Full Truckload. Shipping method where an entire truck is dedicated to one shipment, typically cheaper per mile but requires a full load.">FTL</strong>
+                    vs. <strong
+                        data-tooltip="Less-Than-Truckload. Shipping method where multiple smaller shipments share space on the same truck, more flexible but typically more expensive per unit weight/distance.">LTL</strong>:
                 </strong>
                 Conceptually, FTL reserves a whole truck, offering a lower cost per mile. This rate is dynamic and based
-                on the <strong data-tooltip="A measure of the average change in selling prices received by domestic producers for their output.">
+                on the <strong
+                    data-tooltip="A measure of the average change in selling prices received by domestic producers for their output.">
                     Producer
                     Price Index (PPI)
                 </strong>:
@@ -1007,7 +1055,8 @@
                         60
                         units
                     </strong>, based on refrigerator dimensions and stacking constraints (**21 Super, 27 Ultra,
-                    12 Mega**). The ratioed average weight per unit is assumed to be ~410 lbs. The model calculates the number
+                    12 Mega**). The ratioed average weight per unit is assumed to be ~410 lbs. The model calculates the
+                    number
                     of full 60-unit FTLs needed per shipment. For the remaining units (remainder), it compares the
                     calculated LTL cost vs. the cost of sending another FTL for just those units, then chooses the
                     minimum cost option for the remainder.
@@ -1018,11 +1067,13 @@
         <p style="margin-top:1rem;">This formula is dynamic and tied to economic conditions:</p>
         <ul style="margin-top:0.5rem; margin-bottom: 1rem;">
             <li>
-                <strong>PPI / FTL Rate:</strong> The <strong data-tooltip="A measure of the average change in selling prices received by domestic producers for their output.">
+                <strong>PPI / FTL Rate:</strong> The <strong
+                    data-tooltip="A measure of the average change in selling prices received by domestic producers for their output.">
                     Producer
                     Price Index (PPI)
-                </strong> links to the specific index for <a href="https://data.bls.gov/timeseries/PCU484121484121" target="_blank"
-                                                             rel="noopener noreferrer">Industry Code 484121</a> (General Freight Trucking, Long-Distance,
+                </strong> links to the specific index for <a href="https://data.bls.gov/timeseries/PCU484121484121"
+                    target="_blank" rel="noopener noreferrer">Industry Code 484121</a> (General Freight Trucking,
+                Long-Distance,
                 Truckload). This PPI value is used to calculate the <code>FTL Rate</code>, which anchors both FTL and
                 LTL cost calculations to current market conditions. The <code>102.7</code> term is a baseline PPI value
                 for a $2.00 normalization.
@@ -1042,24 +1093,24 @@
         </p>
 
         <svg class.="trailer-diagram" viewBox="0 0 550 150" preserveAspectRatio="xMidYMid meet"
-             xmlns="http://www.w3.org/2000/svg">
+            xmlns="http://www.w3.org/2000/svg">
 
             <rect x="10" y="10" width="530" height="100" rx="5" ry="5" fill="#e5e7e9" stroke="#37474f"
-                  stroke-width="4" />
+                stroke-width="4" />
 
             <g id="load-plan-content" transform="translate(2, 6)">
 
                 <rect x="10" y="52" width="220" height="50" fill="#f3de8a" stroke="#37474f" stroke-width="1" />
                 <text x="120" y="72" font-family="sans-serif" font-size="9" text-anchor="middle" fill="#333"
-                      font-weight="bold">Ultra</text>
+                    font-weight="bold">Ultra</text>
                 <text x="120" y="84" font-family="sans-serif" font-size="9" text-anchor="middle" fill="#333">
                     (18
                     units, 22 ft)
                 </text>
 
-                <rect x="10" y="12" width="210" height="40" fill="#8ac9f3" stroke="#37474f" stroke-width="1"/>
+                <rect x="10" y="12" width="210" height="40" fill="#8ac9f3" stroke="#37474f" stroke-width="1" />
                 <text x="115" y="30" font-family="sans-serif" font-size="9" text-anchor="middle" fill="#333"
-                      font-weight="bold">Super</text>
+                    font-weight="bold">Super</text>
                 <text x="115" y="42" font-family="sans-serif" font-size="9" text-anchor="middle" fill="#333">
                     (21
                     units, 21 ft)
@@ -1067,7 +1118,7 @@
 
                 <rect x="232" y="42" width="180" height="60" fill="#e98f85" stroke="#37474f" stroke-width="1" />
                 <text x="322" y="67" font-family="sans-serif" font-size="9" text-anchor="middle" fill="#333"
-                      font-weight="bold">Mega</text>
+                    font-weight="bold">Mega</text>
                 <text x="322" y="79" font-family="sans-serif" font-size="9" text-anchor="middle" fill="#333">
                     (12
                     units, 18 ft)
@@ -1075,7 +1126,7 @@
 
                 <rect x="414" y="52" width="110" height="50" fill="#f3de8a" stroke="#37474f" stroke-width="1" />
                 <text x="469" y="72" font-family="sans-serif" font-size="9" text-anchor="middle" fill="#333"
-                      font-weight="bold">Ultra</text>
+                    font-weight="bold">Ultra</text>
                 <text x="469" y="84" font-family="sans-serif" font-size="9" text-anchor="middle" fill="#333">
                     (9
                     units, 11 ft)
@@ -1083,7 +1134,7 @@
             </g>
 
             <g id="hitching-area">
-                <rect x="15" y="110" width="80" height="6" rx ="2" ry= "2" fill="#37474f"/>
+                <rect x="15" y="110" width="80" height="6" rx="2" ry="2" fill="#37474f" />
             </g>
 
             <g id="landing-gear">
@@ -1152,196 +1203,144 @@
 
         <h4>Shipping Strategy & Simulation (<code>simulation.worker.js</code>)</h4>
         <p>
-            The core logic for scheduling shipments and simulating daily inventory levels resides in a
-            separate <strong
+            The core logic for scheduling shipments and simulating inventory levels resides in a separate <strong
                 data-tooltip="A script running in the background, separate from the main browser thread, to perform computationally intensive tasks without freezing the user interface.">Web
-                Worker</strong> (<code>simulation.worker.js</code>). This prevents complex calculations from blocking
-            the user interface. The process involves two main functions: <code>findOptimalShipmentSchedule</code> and
+                Worker</strong> (<code>simulation.worker.js</code>). This prevents complex calculations
+            from blocking
+            the user interface. The process involves two main functions:
+            <code>findOptimalShipmentSchedule</code> and
             <code>performSimulation</code>.
         </p>
 
-                <h4>Shipment Scheduling (<code>findOptimalShipmentSchedule</code> & MILP with Heuristic)</h4>
+        <h4>Shipment Scheduling (<code>findOptimalShipmentSchedule</code> & MILP)</h4>
         <p>
             Before the daily simulation runs, an optimal shipment schedule is determined using <strong
                 data-tooltip="Mixed Integer Linear Programming: A mathematical optimization technique used to find the best outcome (e.g., minimum cost, maximum profit) in a model where some variables must be integers (often binary 0/1).">Mixed
-                Integer Linear Programming (MILP)</strong> combined with a heuristic for efficiency. MILP is a powerful
-            technique for solving problems with constraints where some decisions are discrete (like choosing which day
-            to start shipping).
+                Integer Linear Programming (MILP)</strong>.
         </p>
         <p>
-            The goal remains to **minimize the peak daily shipment volume (`Z`)** across the entire year,
-            subject to meeting the required shipment frequency for each city. This levels the workload on the warehouse
-            and transportation system. The model setup is modified by a heuristic for selecting candidate start days:
+            The goal is to **minimize the peak daily shipment volume (`Z`)** across the entire year, subject to meeting
+            the required shipment frequency for each city. This levels the workload on the warehouse and transportation
+            system.
         </p>
         <ul>
             <li>
                 <strong>Variables:</strong>
                 <ul>
-                    <li><code>Z</code>: A continuous variable representing the maximum number of
-                        units shipped on any single day (the value to be minimized).</li>
-                    <li><code>x<sub>city, startDay</sub></code>: A binary (0 or 1) variable for each
-                        city and a *selected subset* of potential starting days. It's 1 if the city's schedule *starts*
-                        on that day, and 0 otherwise.</li>
-                </ul>
-            </li>
-            <li>
-                <strong>Heuristic for Candidate Start Day Selection:</strong>
-                <ul>
-                    <li>
-                        <strong>Low Frequency (≤ 11 days):</strong> For cities with a shipment
-                        frequency at or below the <code>HIGH_FREQUENCY_THRESHOLD</code> (11 days), the solver considers
-                        *all* possible start days from 1 up to the frequency.
-                    </li>
-                    <li>
-                        <strong>High Frequency (> 11 days):</strong> For cities with longer
-                        frequencies, a heuristic is used to select a smaller, smarter set of candidate start days to
-                        reduce computational load:
-                        <ol>
-                            <li>Generate 11 initial candidates evenly spaced throughout the
-                                frequency cycle (e.g., `floor(i * freq / 11) + 1`).</li>
-                            <li>Score each candidate using
-                                <code>scoreCandidateStartDay</code>. This score reflects:
-                                <ul>
-                                    <li>Potential **clashes**: Sums the quantity of
-                                        shipments from *other* cities that would occur on the same days, assuming a
-                                        default start day for those other cities.</li>
-                                    <li>**Day-of-Week (DOW) distribution**:
-                                        Calculates the variance in how often shipments fall on each day of the week
-                                        (0-6). Lower variance (more even spread) is better.</li>
-                                    <li>The final score combines the clash score and
-                                        a weighted DOW variance (scaled by the city's shipment quantity). Lower scores
-                                        indicate days that are less likely to clash and distribute shipments more evenly
-                                        through the week.</li>
-                                </ul>
-                            </li>
-                            <li>Select the top <code>HEURISTIC_CANDIDATE_COUNT</code>
-                                (currently 7) candidates with the *lowest* scores. These are the only start days
-                                considered by the MILP solver for this high-frequency city.</li>
-                        </ol>
-                        This heuristic aims to "fill in the gaps" by preferring start days that
-                        avoid common clash days (especially with high-volume or weekly shipments) and spread the load
-                        across the week.
-                    </li>
+                    <li><code>Z</code>: A continuous variable representing the max number of units shipped on any
+                        single day (the value to be minimized).</li>
+                    <li><code>x<sub>city, startDay</sub></code>: A binary (0 or 1) variable for each city and each
+                        potential starting day (from 1 to <code>freq</code>). It's 1 if the city's schedule *starts* on
+                        that day, and 0 otherwise.</li>
                 </ul>
             </li>
             <li>
                 <strong>Constraints:</strong>
                 <ol>
                     <li>
-                        <strong>Start Day Selection:</strong> Each city must choose exactly one
-                        starting day from its *allowed candidate options*.
-                        \[ \sum_{\text{candidate startDay}} x_{\text{city, startDay}} = 1 \quad
+                        <strong>Start Day Selection:</strong> Each city must choose exactly one starting day from its
+                        allowed options.
+                        \[ \sum_{\text{startDay}=1}^{\text{freq}} x_{\text{city, startDay}} = 1
+                        \quad
                         (\forall \text{ city}) \]
                     </li>
                     <li>
-                        <strong>Daily Load Limit:</strong> For every day `t`, the total quantity
-                        of units scheduled (based on the chosen start days and frequencies) must not exceed `Z`.
+                        <strong>Daily Load Limit:</strong> For every day <code>t</code>, the total quantity of units
+                        scheduled (based on the chosen start days and frequencies) must not exceed <code>Z</code>.
                         \[ \sum_{\text{city}}
-                        \sum_{\substack{\text{chosen startDay } t}} (\text{Quantity}_{\text{city}} \times x_{\text{city, startDay}}) \le Z \quad (\forall \text{ day } t) \]
+                        \sum_{\substack{\text{chosen startDay } t}}
+                        (\text{Quantity}_{\text{city}} \times x_{\text{city, startDay}}) \le Z \quad (\forall \text{ day
+                        } t) \]
                     </li>
                 </ol>
             </li>
         </ul>
         <p>
-            This refined MILP model is formulated as a string and solved using the <strong
+            This MILP model is formulated as a string and solved using the <strong
                 data-tooltip="High Performance Optimization Software: An open-source solver for linear programming (LP), mixed-integer programming (MIP), and quadratic programming (QP) problems.">HiGHS</strong>
-            solver via WebAssembly. The heuristic significantly reduces the number of binary variables for
-            high-frequency cities, making optimization feasible within the browser while still aiming for a well-staggered, 
-            low-peak schedule. If the solver fails, a simple heuristic (starting each city on day 1) is
-            used as a fallback.
+            solver via WebAssembly. If the solver fails, a simple heuristic (starting each city on day 1) is used as a
+            fallback.
         </p>
 
         <h4>Daily Inventory Simulation (<code>performSimulation</code>)</h4>
         <p>
-            This function simulates the inventory flow day-by-day for a full year (365 days), incorporating
-            production, scheduled shipments, holding costs, and exception handling:
+            This function simulates the inventory flow day-by-day for a full year (365 days). It executes in multiple
+            passes to meet demand while minimizing inventory and exception costs.
+        </p>
+        <h4>Pass 1: Forward Simulation (Meet All Demand)</h4>
+        <p>
+            The first pass is a "safety" simulation that guarantees all demand is met by building inventory and using
+            overtime if necessary. It follows a 3-Tier logic:
         </p>
         <ol>
             <li>
-                <strong>Initialization:</strong> Creates an array representing 365 days, marking working
-                days based on the user's calendar selection. Sets initial inventory to zero (no starting buffer).
-                Calculates daily holding rate (`holdingCostRate / 365`) and average COGS per unit.
+                <strong>Target Production (Smoothing):</strong> On any given working day, the line's default
+                action is to produce the "desired" amount, defined by <code>targetDailyProduction</code>
+                (e.g., 180 units). This builds a smooth, predictable inventory level, preventing the massive
+                overproduction of building to max capacity every day.
             </li>
             <li>
-                <strong>Daily Loop (Day 0 to 364):</strong>
+                <strong>Flex-to-Max (No Cost):</strong> After Tier 1 production, the system
+                checks for shortfalls for that day's scheduled shipments. If a shortfall exists (e.g., a lumpy shipment
+                of 200 arrives but only 180 were built), the line will "flex" its production *on the current day* up to
+                its <code>maxStandardProduction</code> (e.g., 215) to cover the difference. This step does **not** incur
+                any exception cost.
+            </li>
+            <li>
+                <strong>Reactive OT (Costly):</strong> If the shortfall *still* exists after
+                Tier 2 (e.g., the shipment was 300 units), the simulation looks *backward* to previous working days. It
+                adds costly overtime to those days, increasing their <code>opHours</code> and <code>production</code>,
+                until the shortfall is met. This generates <code>exceptionCost</code> and `accumulatedExtraHours`.
+            </li>
+        </ol>
+        <p> This pass also handles first-week shipment deferrals and logs critical "Demand Conflict" errors
+            if a shipment is impossible to meet. The `actualShipments` and `actualShipmentDetails` from this "safe" pass
+            are saved as the mandatory shipment schedule for the optimization passes.
+        </p>
+
+        <h4>Pass 2: Optimization (Remove Unnecessary Inventory)</h4>
+        <p> After Pass 1, the simulation has a schedule that works but may contain significant "slack"
+            (excess inventory) and "overage" (production from OT). Step 7 runs a two-stage optimization to remove this
+            waste.
+        </p>
+        <ol>
+            <li>
+                <strong>Forward Pass: Slack Removal:</strong>
                 <ul>
-                    <li>
-                        <strong>Inventory Start:</strong> Carry over the previous day's ending
-                        inventory.
+                    <li>First, the simulation finds the "cushion" (<code>minSafeInventory</code>),
+                        which is the true minimum inventory level required at any point during the year to meet the
+                        shipment schedule from Pass 1.</li>
+                    <li>It then iterates *forward* from Day 0. On any "standard" (Tier 1) production
+                        day, it runs a "what-if" check (<code>runSafetyCheck</code>) to see if removing that *entire*
+                        day's production would *ever* cause the inventory to drop below the `minSafeInventory` cushion.
                     </li>
-                    <li>
-                        <strong>Production:</strong> If it's a working day (and not flagged as
-                        an exception/reduction day), add the `standardDailyProduction` and record `standardOpHours`.
-                        Inventory available becomes `inventoryStart + production`.
-                    </li>
-                    <li>
-                        <strong>Check Shipments:</strong> Look up the total units scheduled
-                        (`shipments`) for the current day based on the MILP output.
-                    </li>
-                    <li>
-                        <strong>First-Week Deferral:</strong> If within the first 7 days,
-                        inventory is insufficient for a scheduled shipment, the simulation attempts to defer the
-                        *entire* shipment to the next available *working day* within the next 7 days. If successful, the
-                        original day is marked, and the shipment is moved in the schedule data.
-                    </li>
-                    <li>
-                        <strong>Shortfall Detection (Exceptions):</strong> If, after potential
-                        deferral, the `inventoryAvailable` is still less than the `shipments` scheduled for *today*, a
-                        shortfall occurs.
-                        <ul>
-                            <li>The simulation flags the day (`demandMet = false`).</li>
-                            <li><strong>Overtime Lookback:</strong> It then iterates
-                                *backwards* from the previous day, searching for *working days* that haven't already
-                                been used for exceptions or planned reductions.</li>
-                            <li>For each suitable past day found, it calculates the maximum
-                                possible *additional* production achievable by increasing operating hours up to a limit
-                                (e.g., 1.5x standard hours, capped at 24h).</li>
-                            <li>It adds the necessary extra production (up to the max
-                                possible for that day) to cover the shortfall, increasing that past day's `production`
-                                and `opHours`.</li>
-                            <li>The past day is marked as an `isExceptionDay`, and the
-                                `exceptionCost` is calculated, including both the overtime premium (0.5x labor rate) and
-                                the *incremental* scaled overhead cost due to the longer hours. These extra hours are
-                                tracked (`accumulatedExtraHours`).</li>
-                            <li>This continues until the shortfall is covered or it runs out
-                                of past days to modify.</li>
-                            <li>If the shortfall *cannot* be covered by looking back, a
-                                critical "Demand Conflict" error is generated for the UI, but the simulation continues
-                                to record the failure state.</li>
-                        </ul>
-                    </li>
-                    <li>
-                        <strong>Fulfill Shipments:</strong> The `actualShipments` for the day
-                        are set to the minimum of (`inventoryAvailable` *after* any OT adjustments) and the `shipments`
-                        scheduled for today. `actualShipmentDetails` are populated proportionally based on what was
-                        scheduled vs. what could actually ship.
-                    </li>
-                    <li>
-                        <strong>Inventory End:</strong> Calculated as `inventoryAvailable -
-                        actualShipments`.
-                    </li>
-                    <li>
-                        <strong>Holding Cost:</strong> Calculated for the day based on the
-                        `inventoryEnd`, the average `COGS`, and the `dailyHoldingRate`.
-                        \[ \text{Holding Cost}_{\text{day}} = \max(0, \text{Inventory End}_{\text{day}}) \times \text{Average COGS} \times \text{Daily Holding Rate} \]
-                    </li>
+                    <li>If the check passes (it is safe), the day's production is permanently set to
+                        0, it's marked as a <code>isReductionDay</code>, and the inventory for the rest of the year is
+                        recalculated.</li>
+                    <li>This process removes slack inventory as early as possible, maximizing
+                        holding cost savings.</li>
                 </ul>
             </li>
             <li>
-                <strong>Offsetting Logic:</strong> After the 365-day loop, if any
-                `accumulatedExtraHours` were used for overtime, the simulation attempts to offset these by canceling
-                *future* standard working days. It iterates *backwards* from the end of the year. If canceling a
-                standard day (setting production/hours to 0) doesn't cause the simulated final inventory to drop below a
-                target (currently 0), the day is canceled, marked as `isReductionDay`, and its standard hours are
-                subtracted from the `hoursToOffset`. This continues until all OT hours are offset or no more days can be
-                safely canceled.
-            </li>
-            <li>
-                <strong>Results:</strong> The function returns the completed 365-day data array,
-                including inventory levels, actual shipments, holding costs, exception costs, and flags for each day. If
-                a critical demand conflict occurred, an error message is also returned.
+                <strong>Backward Pass: OT Offset:</strong>
+                <ul>
+                    <li>After slack is removed, the simulation iterates *backward*.
+                    </li>
+                    <li>It looks for any *remaining* standard production days (as total hours) that were not removed</li>
+                    <li>It runs another <code>runSafetyCheck</code> to see if removing this day is
+                        safe (checking against the final `targetEndInventory` of 0).</li>
+                    <li>If safe, the day is removed and marked as a <code>isReductionDay</code> to
+                        offset `accumulatedExtraHours`</li>
+                </ul>
             </li>
         </ol>
+
+        <h4>Pass 3: Final Recalculation</h4>
+        <p> Finally, the simulation does one last, fast pass to recalculate all <code>holdingCost</code>
+            values based on the new, optimized `inventoryEnd` levels for each day. The resulting `dailyData` array,
+            which now meets all demand with the minimum possible inventory and cost, is returned to the main
+            application.
+        </p>
     </div>
 </body>
 
