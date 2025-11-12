@@ -1,4 +1,25 @@
 const drawInvestmentPanel = (function () {
+
+    /**
+    * Utility function to delay execution of a function until after a certain time
+    * has passed since the last time it was invoked.
+    * @param {Function} func - The function to debounce.
+    * @param {number} wait - The delay in milliseconds.
+    * @returns {Function} The debounced function.
+    */
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const context = this;
+            const later = function () {
+                timeout = null;
+                func.apply(context, args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
     /**
      * @property {object} investmentState - Holds the persistent state for all
      * user-configurable inputs on the investment panel.
@@ -37,6 +58,9 @@ const drawInvestmentPanel = (function () {
     const Z_SCORE_P90 = 1.28155;
     const CI_Z_SCORES = { 90: 1.645, 95: 1.960, 99: 2.576 };
     let analysisDebounceTimer;
+
+    let lastAnalysisResults = null; // Caches the last financial calculation
+    let investmentTabListenersAttached = false;
 
     function formatNumberWithCommas(num) { return (num === null || num === undefined) ? '' : num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
     function parseFormattedNumber(str) { return (typeof str !== 'string') ? str : (parseFloat(str.replace(/,/g, '')) || 0); }
@@ -281,13 +305,24 @@ const drawInvestmentPanel = (function () {
             laborCost: parseFloat(laborCostInput.value), superSell: parseFloat(superSellInput.value), superCogs: parseFloat(superCogsInput.value),
             ultraSell: parseFloat(ultraSellInput.value), ultraCogs: parseFloat(ultraCogsInput.value), megaSell: parseFloat(megaSellInput.value), megaCogs: parseFloat(megaCogsInput.value),
         };
+
+        // Set defaults for any NaN values
+        finInputs.laborCost = isNaN(finInputs.laborCost) ? 25 : finInputs.laborCost;
+        finInputs.superSell = isNaN(finInputs.superSell) ? 100 : finInputs.superSell;
+        finInputs.superCogs = isNaN(finInputs.superCogs) ? 50 : finInputs.superCogs;
+        finInputs.ultraSell = isNaN(finInputs.ultraSell) ? 150 : finInputs.ultraSell;
+        finInputs.ultraCogs = isNaN(finInputs.ultraCogs) ? 75 : finInputs.ultraCogs;
+        finInputs.megaSell = isNaN(finInputs.megaSell) ? 200 : finInputs.megaSell;
+        finInputs.megaCogs = isNaN(finInputs.megaCogs) ? 100 : finInputs.megaCogs;
+
         const avgPrice = (finInputs.superSell * BUILD_RATIOS.super) + (finInputs.ultraSell * BUILD_RATIOS.ultra) + (finInputs.megaSell * BUILD_RATIOS.mega);
         let unitsToProduce = 0, configForReport = {}, initialInvestment = 0, equipmentCostForDepreciation = 0;
         const currentEmployees = parseInt(numEmployeesInput.value);
         const baseOpHours = parseFloat(opHoursInput.value);
 
         if (!runExpansionCase) {
-            const metrics = calculateMetrics({ dailyDemand: 9999, opHours: baseOpHours, numEmployees: currentEmployees }, {});
+            const dailyDemand = annualUnitDemand / workingDaysCount;
+            const metrics = calculateMetrics({ dailyDemand, opHours: baseOpHours, numEmployees: currentEmployees }, finInputs);
             const maxAnnualCapacity = metrics.throughputUnitsPerDay * workingDaysCount;
             unitsToProduce = Math.min(annualUnitDemand, maxAnnualCapacity);
             configForReport = { name: `${currentEmployees} Workers, ${baseOpHours} hrs/day`, empCount: currentEmployees, opHours: baseOpHours };
@@ -325,27 +360,81 @@ const drawInvestmentPanel = (function () {
         return { annualUnitDemand, requiredConfig: configForReport, metrics: { npv, irr, payback, initialInvestment }, cashFlows };
     }
 
+    /**
+     * Debounced resize handler.
+     * This function is called by the 'appResize' event. It redraws the
+     * results (scorecards and chart) using the *last cached financial data*
+     * without re-running the expensive financial analysis.
+     */
+    const handleInvestmentResize = debounce(() => {
+        // Only run if we have results and the panel is actually visible
+        if (lastAnalysisResults && document.getElementById('investment-panel').style.display === 'block') {
+            renderInvestmentResults(lastAnalysisResults);
+        }
+    }, 150); // 150ms debounce to prevent firing too rapidly
+
     function runFullAnalysis() {
+        let results;
+        try {
+            // 1. Run the expensive calculations first
+            results = Object.fromEntries(Object.entries({ 'P90 (Optimistic)': investmentState.p90Demand, 'P50 (Most Likely)': investmentState.p50Demand, 'P10 (Conservative)': investmentState.p10Demand }).map(([name, demand]) => [name, calculateFinancialScenario(demand)]));
 
-        const resultsDisplay = d3.select("#inv-results-display").style("display", "block");
-        const resultsColumn = d3.select(".inv-results-column");
-        resultsColumn.transition().duration(150).style("opacity", 0.5);
+            // 2. Cache the results
+            lastAnalysisResults = results;
 
-        setTimeout(() => {
-            try {
-                const results = Object.fromEntries(Object.entries({ 'P90 (Optimistic)': investmentState.p90Demand, 'P50 (Most Likely)': investmentState.p50Demand, 'P10 (Conservative)': investmentState.p10Demand }).map(([name, demand]) => [name, calculateFinancialScenario(demand)]));
-                d3.select("#inv-results-placeholder").style("display", "none");
-                renderInvestmentResults(results);
-                resultsColumn.transition().duration(250).style("opacity", 1);
-            } catch (error) {
-                console.error("Error during investment analysis:", error);
-                d3.select("#inv-results-placeholder").html(`<p class="error">An error occurred: ${error.message}</p>`).style("display", "block");
-                resultsColumn.style("opacity", 1);
+        } catch (error) {
+            console.error("Error during investment analysis:", error);
+            lastAnalysisResults = null;
+            return; // Stop if the math failed
+        }
+
+        // 3. Update the global sidebar metrics (ALWAYS)
+        try {
+            const p50Result = results['P50 (Most Likely)'];
+            // This is the global function from script.js
+            if (typeof updateFinancialSidebar === 'function') {
+                updateFinancialSidebar({ npv: p50Result.metrics.npv, irr: p50Result.metrics.irr, payback: p50Result.metrics.payback });
+            } else {
+                console.error("Global updateFinancialSidebar() function not found.");
             }
-        }, 50);
+        } catch (err) {
+            console.error('Failed to call updateFinancialSidebar:', err);
+        }
+
+        // 4. Update the internal tab UI (ONLY if the tab is active)
+        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'investment') {
+            const resultsDisplay = d3.select("#inv-results-display");
+            const resultsColumn = d3.select(".inv-results-column");
+
+            // Ensure elements exist before transitioning
+            if (resultsDisplay.empty() || resultsColumn.empty()) {
+                console.warn("Investment tab UI not found, skipping internal render.");
+                return;
+            }
+
+            resultsDisplay.style("display", "block");
+            resultsColumn.transition().duration(150).style("opacity", 0.5);
+
+            setTimeout(() => { // Keep the small delay for the opacity transition
+                d3.select("#inv-results-placeholder").style("display", "none");
+                renderInvestmentResults(results); // Pass in the results
+                resultsColumn.transition().duration(250).style("opacity", 1);
+            }, 50);
+        }
     }
 
+
     function findOptimalNPVConfig(annualUnitDemand, finInputs) {
+
+        // Set defaults for any NaN values
+        finInputs.laborCost = isNaN(finInputs.laborCost) ? 25 : finInputs.laborCost;
+        finInputs.superSell = isNaN(finInputs.superSell) ? 100 : finInputs.superSell;
+        finInputs.superCogs = isNaN(finInputs.superCogs) ? 50 : finInputs.superCogs;
+        finInputs.ultraSell = isNaN(finInputs.ultraSell) ? 150 : finInputs.ultraSell;
+        finInputs.ultraCogs = isNaN(finInputs.ultraCogs) ? 75 : finInputs.ultraCogs;
+        finInputs.megaSell = isNaN(finInputs.megaSell) ? 200 : finInputs.megaSell;
+        finInputs.megaCogs = isNaN(finInputs.megaCogs) ? 100 : finInputs.megaCogs;
+
         let maxNPV = -Infinity;
         let bestConfig = { emp: 0, hrs: 0 };
         const dailyDemand = Math.ceil(annualUnitDemand / investmentState.workingDays.length);
@@ -416,27 +505,78 @@ const drawInvestmentPanel = (function () {
     }
 
     function renderInvestmentResults(results) {
+        // This function is now resize-safe.
+        // It correctly re-calculates all dimensions based on the
+        // current state of the .inv-results-column element.
+
+        if (!results) {
+            console.warn("renderInvestmentResults called with no data.");
+            return;
+        }
+
         const p50Result = results['P50 (Most Likely)'];
+
         const scorecardData = [
-            { label: 'Net Present Value (NPV)', value: p50Result.metrics.npv.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }), isError: p50Result.metrics.npv < 0 },
-            { label: 'Internal Rate of Return (IRR)', value: isNaN(p50Result.metrics.irr) ? "No Return" : `${(p50Result.metrics.irr * 100).toFixed(1)}%`, isError: isNaN(p50Result.metrics.irr) },
-            { label: 'Payback Period', value: isFinite(p50Result.metrics.payback) ? `${Math.ceil(p50Result.metrics.payback * 365.2425)} Days` : "Net Loss", isError: !isFinite(p50Result.metrics.payback) }
+            {
+                label: 'Net Present Value (NPV)',
+                value: p50Result.metrics.npv.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }),
+                isError: p50Result.metrics.npv < 0,
+                tooltip: 'Used to determine the profitability of an investment by comparing the present value of future cash inflows to the initial investment.'
+            },
+            {
+                label: 'Internal Rate of Return (IRR)',
+                value: isNaN(p50Result.metrics.irr) ? "No Return" : `${(p50Result.metrics.irr * 100).toFixed(1)}%`,
+                isError: isNaN(p50Result.metrics.irr),
+                tooltip: 'Represents the annual rate of return an investment is expected to yield. Is the discount rate that makes the NPV of all cash flows from the investment equal to zero.'
+            },
+            {
+                label: 'Payback Period',
+                value: isFinite(p50Result.metrics.payback) ? `${Math.ceil(p50Result.metrics.payback * 365.2425)} Days` : "Net Loss",
+                isError: !isFinite(p50Result.metrics.payback),
+                tooltip: 'Length of time it takes for an investment to generate enough cash flow to recover its initial cost.'
+            }
         ];
 
+        const tooltip = createTooltip("inv-tooltip"); // Use the IIFE's helper
+
         const scorecards = d3.select(".inv-scorecard-container").html("").selectAll(".inv-scorecard").data(scorecardData).join("div").attr("class", "inv-scorecard");
+
         scorecards.append("div").attr("class", "inv-scorecard-label").text(d => d.label);
         scorecards.append("div").attr("class", "inv-scorecard-value").style("color", d => d.isError ? 'var(--failure-color)' : null).text(d => d.value);
+
+        // Attach event listeners to the scorecards selection
+        scorecards
+            .on("mouseover", function (event, d) {
+                tooltip.transition().duration(200).style("opacity", 1);
+                tooltip.html(`<div class="tooltip-row">${d.tooltip}</div>`)
+                    .style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+            })
+            .on("mousemove", function (event) {
+                tooltip.style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+            })
+            .on("mouseout", function () {
+                tooltip.transition().duration(500).style("opacity", 0);
+            });
 
         const chartContainer = d3.select(".inv-chart-container");
         chartContainer.html("");
         const chartNode = chartContainer.node();
         if (!chartNode) return;
         const scorecardHeight = 95;
-        const chartContainerHeight = d3.select('.inv-results-column').node().clientHeight - scorecardHeight - 15;
+
+        const parentColumn = d3.select('.inv-results-column').node();
+        if (!parentColumn) return; // Guard
+
+        const chartContainerHeight = parentColumn.clientHeight - scorecardHeight - 15;
         chartContainer.style('height', `${chartContainerHeight > 0 ? chartContainerHeight : 0}px`);
-        const margin = { top: 20, right: 30, bottom: 60, left: 80 };
+
+        const margin = { top: 20, right: 10, bottom: 80, left: 80 };
+
         const width = chartNode.getBoundingClientRect().width - margin.left - margin.right;
         const height = chartNode.getBoundingClientRect().height - margin.top - margin.bottom;
+
         if (width <= 0 || height <= 0) return;
 
         const chartSvg = chartContainer.append("svg").attr("viewBox", `0 0 ${width + margin.left + margin.right} ${height + margin.top + margin.bottom}`);
@@ -454,14 +594,14 @@ const drawInvestmentPanel = (function () {
         chartSvg.append("text").attr("class", "inv-axis-label").attr("text-anchor", "middle").attr("x", margin.left + width / 2).attr("y", height + margin.top + 40).text("Analysis Period (Years)").style("font-size", "16px").style("font-family", "Arial");
         chartSvg.append("text").attr("class", "inv-axis-label").attr("transform", "rotate(-90)").attr("text-anchor", "middle").attr("y", margin.left / 4).attr("x", -(margin.top + height / 2)).text("Cumulative Free Cash Flow").style("font-size", "16px").style("font-family", "Arial");
         chartG.append("line").attr("class", "inv-break-even").attr("x1", 0).attr("x2", width).attr("y1", y(0)).attr("y2", y(0));
-        const tooltip = createTooltip("inv-tooltip");;
+        const chartTooltip = createTooltip("inv-chart-tooltip"); // Use a different class for the chart tooltip
         chartG.selectAll(".inv-hitbox").data(cumulativeData).join("path").attr("class", "inv-hitbox").attr("d", d => line(d.values)).on("mouseover", (event, d) => {
-            tooltip.transition().duration(200).style("opacity", 1);
+            chartTooltip.transition().duration(200).style("opacity", 1);
             const scenarioResult = results[d.name];
             const FmtdIRR = isNaN(scenarioResult.metrics.irr) ? "No Return" : `${(scenarioResult.metrics.irr * 100).toFixed(1)}%`;
             const FmtdPayback = isFinite(scenarioResult.metrics.payback) ? `${Math.ceil(scenarioResult.metrics.payback * 365.2425)} Days` : "Net Loss";
-            tooltip.html(`<div class="tooltip-header">${d.name}</div><div class="tooltip-row"><span>NPV:</span> <strong>${scenarioResult.metrics.npv.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</strong></div><div class="tooltip-row"><span>IRR:</span> <strong>${FmtdIRR}</strong></div><div class="tooltip-row"><span>Payback:</span> <strong>${FmtdPayback}</strong></div><hr><div class="tooltip-row"><span>Config:</span> <strong>${scenarioResult.requiredConfig.name}</strong></div><div class="tooltip-row"><span>Annual Demand:</span> <strong>${scenarioResult.annualUnitDemand.toFixed(0).toLocaleString('en-US')} Units</strong></div>`);
-        }).on("mousemove", (event) => tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px")).on("mouseout", () => tooltip.transition().duration(500).style("opacity", 0));
+            chartTooltip.html(`<div class="tooltip-header">${d.name}</div><div class="tooltip-row"><span>NPV:</span> <strong>${scenarioResult.metrics.npv.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</strong></div><div class="tooltip-row"><span>IRR:</span> <strong>${FmtdIRR}</strong></div><div class="tooltip-row"><span>Payback:</span> <strong>${FmtdPayback}</strong></div><hr><div class="tooltip-row"><span>Config:</span> <strong>${scenarioResult.requiredConfig.name}</strong></div><div class="tooltip-row"><span>Annual Demand:</span> <strong>${scenarioResult.annualUnitDemand.toFixed(0).toLocaleString('en-US')} Units</strong></div>`);
+        }).on("mousemove", (event) => chartTooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px")).on("mouseout", () => chartTooltip.transition().duration(500).style("opacity", 0));
 
         // Centralized update: use script.js helper to update right-sidebar financial metrics
         try {
@@ -470,49 +610,7 @@ const drawInvestmentPanel = (function () {
             } else if (typeof window !== 'undefined' && typeof window.updateFinancialSidebar === 'function') {
                 window.updateFinancialSidebar({ npv: p50Result.metrics.npv, irr: p50Result.metrics.irr, payback: p50Result.metrics.payback });
             } else {
-                // Fallback: immediate DOM set if helper not present
-                const npvEl = document.getElementById('npvMetric');
-                const irrEl = document.getElementById('irrMetric');
-                const paybackEl = document.getElementById('paybackMetric');
-                if (npvEl) {
-                    if (hasAnimator && isFinite(npvVal) /* Removed startNpv !== npvVal check */) {
-                        // Correct order: element, endValue, duration, formatter
-                        animateValue(npvEl, npvVal, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }));
-                    } else {
-                        npvEl.textContent = npvVal.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-                        if (hasAnimator) npvEl._previousNumericValue = npvVal; // Store value if not animating
-                    }
-                }
-                if (irrEl) {
-                    if (irrIsValid) {
-                        if (hasAnimator /* Removed startIrr !== irrPercent check */) {
-                            // Correct order: element, endValue, duration, formatter
-                            animateValue(irrEl, irrPercent, 800, val => `${val.toFixed(1)}%`);
-                        } else {
-                            irrEl.textContent = `${(irr * 100).toFixed(1)}%`;
-                            if (hasAnimator) irrEl._previousNumericValue = irrPercent; // Store value if not animating
-                        }
-                    } else {
-                        irrEl.textContent = 'No Return';
-                        if (hasAnimator) irrEl._previousNumericValue = NaN; // Store NaN if invalid
-                    }
-                }
-
-                if (paybackEl) {
-                    if (paybackIsFinite) {
-                        if (hasAnimator /* Removed startPayback !== paybackDays check */) {
-                            // Correct order: element, endValue, duration, formatter
-                            animateValue(paybackEl, paybackDays, 800, val => `${Math.round(val)} Days`);
-                        } else {
-                            paybackEl.textContent = `${paybackDays} Days`;
-                            if (hasAnimator) paybackEl._previousNumericValue = paybackDays; // Store value if not animating
-                        }
-                    } else {
-                        paybackEl.textContent = 'Net Loss';
-                        if (hasAnimator) paybackEl._previousNumericValue = NaN; // Store NaN if invalid
-                    }
-                }
-
+                console.error('Global updateFinancialSidebar() function not found.');
             }
         } catch (err) {
             console.error('Failed to call updateFinancialSidebar:', err);
@@ -526,9 +624,20 @@ const drawInvestmentPanel = (function () {
         }
         createCalendarModalOnce();
 
+        // Ensure the resize listener is attached.
+        // This listens for the custom 'appResize' event dispatched by the main script.
+        window.removeEventListener('appResize', handleInvestmentResize); // Remove old one first
+        window.addEventListener('appResize', handleInvestmentResize);
+
         const svg = d3.select("#investment-panel");
         svg.selectAll("*").remove();
-        const container = svg.append("foreignObject").attr("width", "100%").attr("height", "100%").append("xhtml:div").attr("class", "inv-container");
+        const container = svg.append("foreignObject")
+            .attr("width", "100%")
+            .attr("height", "100%")
+            .append("xhtml:div")
+            .attr("class", "inv-container")
+            .style("overflow", "hidden"); // Prevent resize scrollbar flash
+
         const inputColumn = container.append("div").attr("class", "inv-input-column");
         inputColumn.append("h3").attr("class", "inv-column-title").text("Economic Parameters");
         const inputArea = inputColumn.append("div").attr("class", "inv-inputs");
@@ -570,8 +679,6 @@ const drawInvestmentPanel = (function () {
                     });
                 }
             } else {
-                // Do not throw an error if the working days input or label is intentionally missing.
-                // Log a warning with contextual info for debugging instead of an error.
                 const missingInput = container.select("#inv-workingDays").empty();
                 const missingLabel = container.select(`label[for="inv-workingDays"]`).empty();
                 console.warn(`inv-workingDays: input missing=${missingInput}, label missing=${missingLabel}`);
@@ -594,10 +701,7 @@ const drawInvestmentPanel = (function () {
                     'inv-cv': 'Coefficient of Variation: Ratio of STD to the mean, to normalize volatility across means.',
                     'inv-ciLevel': 'Confidence Interval: Probability that true annual demand falls within the calculated range to the right.',
                     'inv-p10Demand': 'P10 Demand: Conservative Forecast; there is a 10% Chance of demand being at least this low',
-                    'inv-p90Demand': 'P90 Demand: Optimistic Forecast; there is a 10% Chance of demand being at least this high.',
-                    'inv-npvmetric': 'Used to determine the profitability of an investment by comparing the present value of future cash inflows to the initial investment.',
-                    'inv-irrmetric': 'Represents the annual rate of return an investment is expected to yield. Is the discount rate that makes the NPV of all cash flows from the investment equal to zero.',
-                    'inv-paybackmetric': 'Length of time it takes for an investment to generate enough cash flow to recover its initial cost.'
+                    'inv-p90Demand': 'P90 Demand: Optimistic Forecast; there is a 10% Chance of demand being at least this high.'
                 };
 
                 const tooltip = createTooltip("inv-tooltip");
@@ -622,23 +726,19 @@ const drawInvestmentPanel = (function () {
                     }
                 }
             }, 10);
+            setTimeout(() => updateProbabilisticValues('mean'), 0);
         } catch (e) { inputArea.html('<p class="error">Could not load input form.</p>'); console.error(e); }
 
         container.append("div").attr("class", "inv-results-column").html(`<div id="inv-results-placeholder" style="display: none;"></div><div id="inv-results-display"><div class="inv-scorecard-container"></div><div class="inv-chart-container"></div></div>`);
 
-        // --- MODIFICATION HERE ---
-        // Get the total logistics cost (Shipping + Holding + Exception) from the LocationTab summary panel.
         const summaryCostEl = document.getElementById('summary-total-cost');
         if (summaryCostEl) {
             const costText = summaryCostEl.textContent;
             const parsedCost = parseFloat(costText.replace(/[$,]/g, '')) || 0;
-            // Use the parsed cost if it's a valid number, otherwise keep the default.
-            // Note: If no cities are added, this will be $0, which is correct.
             if (isFinite(parsedCost)) {
                 investmentState.freightExpense = parsedCost;
             }
         }
-        // --- END MODIFICATION ---
 
         Object.keys(investmentState).forEach(key => {
             if (key === 'workingDays' || key === 'currentYear' || key === 'isCalendarInitialized') return; // Skip
@@ -676,15 +776,11 @@ const drawInvestmentPanel = (function () {
             }
         });
 
-        // Attach the same commit/auto-commit and middle-drag behaviors used by the right-sidebar
-        // so that Economic Parameters inputs behave identically to right-sidebar textboxes.
         try {
             const invInputs = Array.from(container.node().querySelectorAll("input[data-type='currency'], input[type='number'], select")).filter(el => el && el.id !== 'inv-workingDays');
             if (invInputs.length) {
-                // Wire commit behavior: update investmentState and trigger analysis
                 attachCommitBehavior(invInputs, (id, value) => {
                     const key = id.replace('inv-', '');
-                    // Debug: log commits for currency fields which were reverting
                     try { console.debug && console.debug('INV COMMIT ->', id, value, 'key=', key); } catch (e) { }
                     if (key in investmentState) {
                         investmentState[key] = value;
@@ -698,7 +794,6 @@ const drawInvestmentPanel = (function () {
                     }
                 });
 
-                // Enable middle-drag / wheel interactions for numeric and currency inputs
                 invInputs.forEach(inp => {
                     if (inp.tagName.toLowerCase() === 'input') {
                         const isNumber = inp.type === 'number' || inp.type === 'range';
@@ -721,22 +816,32 @@ const drawInvestmentPanel = (function () {
         controlsArea.select(investmentState.runExpansionCase ? '#inv-expansionCaseBtn' : '#inv-baseCaseBtn').classed('active', true);
 
 
-        let investmentTabListenersAttached = false;
+        investmentTabListenersAttached = false;
         if (!investmentTabListenersAttached) {
-            const mainInputs = [dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput, superSellInput, superCogsInput, ultraSellInput, ultraCogsInput, megaSellInput, megaCogsInput];
+            const mainInputs = [
+                document.getElementById('dailyDemand'),
+                document.getElementById('opHours'),
+                document.getElementById('numEmployees'),
+                document.getElementById('laborCost'),
+                document.getElementById('superSell'),
+                document.getElementById('superCogs'),
+                document.getElementById('ultraSell'),
+                document.getElementById('ultraCogs'),
+                document.getElementById('megaSell'),
+                document.getElementById('megaCogs')
+            ];
             mainInputs.forEach(input => {
                 if (input) {
                     input.addEventListener('input', () => {
-                        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'investment') {
+                        if (investmentMetricsInitialized) {
                             updateProbabilisticValues('mean');
                         }
                     });
+                } else {
+                    console.warn("Investment Tab Listener Couldn't find a Main Input Element")
                 }
             });
             investmentTabListenersAttached = true;
         }
-
-        // Initial run
-        setTimeout(() => updateProbabilisticValues('mean'), 0);
     };
 })();
