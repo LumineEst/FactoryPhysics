@@ -23,6 +23,9 @@ const LayoutTab = (function () {
         // Get container dimensions *inside* draw/resize
         const { clientWidth: containerWidth, clientHeight: containerHeight } = document.getElementById('svg-container');
 
+        // Root element for CSS custom properties
+        const root = document.documentElement;
+
         if (!config || Object.keys(config).length === 0) {
             svg.append("text")
                 .attr("class", "layout-no-data-text") // Use CSS class
@@ -67,6 +70,19 @@ const LayoutTab = (function () {
         };
         const finInputs = { laborCost: parseFloat(laborCostInput.value) };
         const results = calculateMetrics(opInputs, finInputs);
+        const qualityYield = results.qualityYield;
+
+        // Generate defect status for all products using the same random sequence
+        let defectStatus;
+        if (!window.sharedDefectData || window.sharedDefectData.dailyDemand !== opInputs.dailyDemand || window.sharedDefectData.qualityYield !== qualityYield) {
+            defectStatus = [];
+            for (let i = 0; i < opInputs.dailyDemand; i++) {
+                defectStatus.push(Math.random() > qualityYield);
+            }
+            window.sharedDefectData = { dailyDemand: opInputs.dailyDemand, qualityYield, defectStatus };
+        } else {
+            defectStatus = window.sharedDefectData.defectStatus;
+        }
 
         // --- LAYOUT CONFIGURATION ---
         // Recalculate layout based on current dimensions
@@ -111,7 +127,7 @@ const LayoutTab = (function () {
             } else {
                 let startPt;
                 let endPt;
-                let out_dx;
+                let out_dx; 
                 let out_dy;
 
                 if (wsId <= numLeft) {
@@ -565,14 +581,15 @@ const LayoutTab = (function () {
             ],
             [
                 { label: "Mega", color: getComputedStyle(root).getPropertyValue('--mega-color').trim() },
-                { label: "Idle", color: getComputedStyle(root).getPropertyValue('--idle-color').trim() }
+                { label: "Idle", color: getComputedStyle(root).getPropertyValue('--idle-color').trim() },
+                { label: "Defective", color: getComputedStyle(root).getPropertyValue('--failure-color').trim() }
             ]
         ];
 
         const gridStartX = 15;
         const gridStartY = 45; // Start Y position for first row items
         const rowGap = 25;
-        const colGap = 75; // Horizontal gap between items in a row
+        const colGap = 50; // Horizontal gap between items in a row
 
         itemsGrid.forEach((rowItems, rowIndex) => {
             rowItems.forEach((item, colIndex) => {
@@ -732,7 +749,9 @@ const LayoutTab = (function () {
                 totalDurationMs: (ASSEMBLY_LINE_LENGTH / results.conveyorSpeed) * 1000 * 60,
                 launchDelayMs: (results.productSpacing / results.conveyorSpeed) * 1000 * 60,
                 binConfig, // Use recalculated binConfig
-                scale // Use recalculated scale
+                scale, // Use recalculated scale
+                qualityYield: qualityYield,
+                defectStatus: defectStatus
             };
 
             // --- Event Listeners ---
@@ -763,7 +782,11 @@ const LayoutTab = (function () {
                 const binCfg = layout.binConfig || (typeof binConfig !== 'undefined' ? binConfig : null);
                 for (let i = 0; i < queue.length; i++) {
                     const modelId = queue[i];
+                    const isDefective = defectStatus[i];
                     const element = createProductShape(g, modelId); // g might be wrong here if scale applied?
+                    if (isDefective) {
+                        element.attr('fill', getComputedStyle(root).getPropertyValue('--failure-color').trim());
+                    }
                     if (binCfg) { placeInBin(element, i, binCfg, svg); } // Pass svg
                     else { element && element.remove(); }
                 }
@@ -907,7 +930,7 @@ const LayoutTab = (function () {
      */
     function startSimulation(config) { /* ... Animation loop logic remains the same ... */
         stopAllSimulations();
-        let { svg, g, masterPathNode, productionQueue, totalDurationMs, launchDelayMs, binConfig, elementMap, scale } = config; // Added scale
+        let { svg, g, masterPathNode, productionQueue, totalDurationMs, launchDelayMs, binConfig, elementMap, scale, qualityYield, defectStatus } = config; // Added defectStatus
         if (!masterPathNode || totalDurationMs <= 0 || launchDelayMs <= 0) return;
 
         const now = performance.now();
@@ -949,7 +972,8 @@ const LayoutTab = (function () {
                 animationState.layout.productsOnLine.push({
                     modelId: modelId,
                     launchTime: animationState.layout.totalSimTimeMs,
-                    element: createProductShape(g, modelId) // Append to scaled group 'g'
+                    element: createProductShape(g, modelId), // Append to scaled group 'g'
+                    isDefective: defectStatus[animationState.layout.queueIndex]
                 });
                 animationState.layout.queueIndex++;
                 animationState.layout.nextLaunchTime += animationState.layout.launchDelayMs;
@@ -991,6 +1015,7 @@ const LayoutTab = (function () {
 
                     product.element.attr(
                         'fill',
+                        product.isDefective ? getComputedStyle(root).getPropertyValue('--failure-color').trim() :
                         (currentSegment && doesElementBuildModel(currentSegment.elementId, product.modelId))
                             ? getComputedStyle(root).getPropertyValue(shapeModelColorVar).trim()
                             : getComputedStyle(root).getPropertyValue('--idle-color').trim()
