@@ -64,7 +64,7 @@
                     </div>
                     <div class="input-group">
                         <label for="opHours">Operational Hours</label>
-                        <input type="number" id="opHours" value="15" step="0.25" min="1" max="24">
+                        <input type="number" id="opHours" value="17" step="0.25" min="1" max="24">
                     </div>
                     <div class="input-group">
                         <label for="numEmployees">Employees: <span id="employeeCountDisplay">8</span></label>
@@ -90,6 +90,17 @@
                         <input type="number" id="megaCogs" value="960" min="1">
                     </div>
                 </section>
+                <section class="control-section">
+                    <h4>Quality Inputs</h4>
+                    <div class="input-group">
+                        <label for="qualityYieldInput" id="qualityYieldLabel">Quality Yield (<span id="qualityYieldGoodsDisplay">---</span> Units)</label>
+                        <input type="number" id="qualityYieldInput" value="1.0" step="0.001" min="0" max="1.0">
+                    </div>
+                    <div class="input-group">
+                        <label for="qualityStDevPercentage">Coeff. of Variation (CV %): <span id="qualityStDevPercentageDisplay">15.0</span></label>
+                        <input type="range" id="qualityStDevPercentage" value="0.15" step="0.01" min="0.01" max="0.30">
+                    </div>
+                </section>
                 <hr>
                 <section class="demandStatus-section" style="margin-top:1.5rem;">
                     <div id="demandStatus" class="status"></div>
@@ -101,6 +112,7 @@
                         <span>Throughput:</span><strong id="throughput">0/hr</strong>
                         <span>Conveyor Speed:</span><strong id="conveyorSpeed">0 ft/min</strong>
                         <span>Product Spacing:</span><strong id="productSpacing">0 ft</strong>
+                        <span>Quality Yield:</span><strong id="qualityYield">100%</strong>
                     </div>
                 </section>
                 <section class="output-section">
@@ -117,10 +129,16 @@
                     <div class="output-grid">
                         <span>Gross Profit:</span><strong id="grossProfit">$0</strong>
                         <span>Profit Margin:</span><strong id="profitMargin">0%</strong>
-                        <span>Net Present Value (NPV):</span><strong id="npvMetric">$0</strong>
-                        <span>Internal Rate of Return (IRR):</span><strong id="irrMetric">—</strong>
-                        <span>Payback Period:</span><strong id="paybackMetric">—</strong>
+
+                        <span class="inv-metric">Net Present Value (NPV):</span><strong id="npvMetric" class="inv-metric">$0</strong>
+                        <span class="inv-metric">Internal Rate of Return (IRR):</span><strong id="irrMetric" class="inv-metric">—</strong>
+                        <span class="inv-metric">Payback Period:</span><strong id="paybackMetric" class="inv-metric">—</strong>
                     </div>
+                </section>
+                <section class="control-section">
+                    <h4>Save & Compare</h4>
+                    <button id="saveConfigBtn">Save configuration</button>
+                    <button id="compareBtn" class="current">Current Configuration</button>
                 </section>
             </div>
         </aside>
@@ -130,9 +148,10 @@
     <script src="Tabs/Schedule.js"></script> 
     <script src="Tabs/Profit.js"></script>
     <script src="Tabs/Efficiency.js"></script>
-    <script src="script.js" defer></script>
     <script src="Tabs/Precedence.js"></script> 
     <script src="Tabs/Investment.js"></script>
+    <script src="QualityYield.js"></script>
+    <script src="script.js"></script>
 </body>
 
 </html>
