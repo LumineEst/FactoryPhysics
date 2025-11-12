@@ -20,13 +20,16 @@ const LocationTab = (() => {
     let holdingChartMode = 'shipments'; // 'shipments' or 'inventory' for the bottom chart
     let isBottomRibbonOpen = false; // UI state for the bottom simulation panel
 
+    let _localWageStress = 0.0; // Local wage-based stress factor
+    let _currentWageDisplay = 'N/A'; // Current wage display text
+
     // --- Map & D3 State ---
     let mapInitialized = false; // Flag to prevent re-initializing the map
     let projection = null; // D3 geo projection
     let path = null; // D3 geo path generator
     let radiusScale = null; // D3 scale for city marker radius
     let continentalStatesFeatures = null; // GeoJSON features for US states
-    // Removed resizeObserver, handled globally now
+    let lastCheckedLocation = null;
 
     // --- Simulation State ---
     let simulationWorker = null; // Web Worker for running simulations
@@ -37,8 +40,16 @@ const LocationTab = (() => {
     let simulationPromiseReject = null; // for async/await handling of worker
     let isValidationRun = false; // Flag for simulation runs that shouldn't update global state
 
-    // --- Using GLOBAL createTooltip from script.js ---
-    // --- Using standard positioning pattern in mousemove events ---
+    // --- Filter and Brush state variables ---
+    let showOverageHighlight = true;
+    let showRemovedHighlight = true;
+    let brushSelection = null; // Holds the [Date, Date] selection
+
+    // --- New Constants for Responsive Layout ---
+    const TOP_PANEL_AREA_HEIGHT_RATIO = 0.1; // 15% of the main area height for controls
+    const SUMMARY_WIDTH_RATIO = 0.20; // Target width ratio for summary
+    const HORIZONTAL_GAP_RATIO = 0.02; // 2% horizontal gap
+    const MIN_CONTROLS_PIXEL_WIDTH = 600; // Minimum pixel width for the Controls Bar (to prevent wrapping)
 
     /**
      * Manages SVG layout, calculating positions and dimensions for all components.
@@ -52,9 +63,8 @@ const LocationTab = (() => {
         ribbonHeaderHeight: 30,
         ribbonContentHeight: 250,
         topPanelMargin: 5,
-        modalWidth: 500,
-        modalHeight: 350,
-        controlsHeight: 80,
+        modalWidth: 750,
+        modalHeight: 525,
 
         /**
          * Update the manager's state with new dimensions.
@@ -63,7 +73,6 @@ const LocationTab = (() => {
             this.svgWidth = width || 0;
             this.svgHeight = height || 0;
             this.isRibbonOpen = isRibbonOpen;
-            // console.log(`LayoutManager Updated: W=${this.svgWidth.toFixed(0)}, H=${this.svgHeight.toFixed(0)}, Ribbon=${this.isRibbonOpen}`); // Debug
         },
 
         /**
@@ -94,13 +103,26 @@ const LocationTab = (() => {
          * Get coordinates for the top-left controls panel.
          */
         getControlsRect() {
-            const x = this.svgWidth * 0.2;
-            const width = this.svgWidth * 0.4;
+            const mainArea = this.getMainAreaRect();
+            const rightAnchor = this.svgWidth * 0.6;
+            const leftMargin = this.svgWidth * HORIZONTAL_GAP_RATIO;
+
+            // Compute a safe max allowed width (may be small on narrow screens). Ensure it's >= 120px.
+            const maxAllowedWidth = Math.max(Math.floor(rightAnchor - leftMargin - this.topPanelMargin), 120);
+
+            // Use the configured minimum desired width but cap it to the available space.
+            let width = Math.min(MIN_CONTROLS_PIXEL_WIDTH, maxAllowedWidth);
+            width = Math.max(120, width); // enforce sensible lower bound
+
+            // Ensure x stays inside the svg bounds
+            const x = Math.max(leftMargin, Math.min(rightAnchor - width - this.topPanelMargin, Math.max(0, rightAnchor - width - this.topPanelMargin)));
+            const height = mainArea.height * TOP_PANEL_AREA_HEIGHT_RATIO;
+
             return {
                 x: x,
                 y: this.topPanelMargin,
                 width: width,
-                height: this.controlsHeight
+                height: Math.max(80, height) // Maintain a minimum sensible height
             };
         },
 
@@ -108,14 +130,26 @@ const LocationTab = (() => {
          * Get coordinates for the top-right summary panel.
          */
         getSummaryRect() {
-            const gap = 5;
-            const x = this.svgWidth * 0.6 + gap;
-            const width = this.svgWidth * 0.2 - gap;
-            const height = this.controlsHeight * 2.5;
+            const mainArea = this.getMainAreaRect();
+
+            // Determine available space to the right of the controls panel and use that to size the summary.
+            const controls = this.getControlsRect();
+            const gap = this.svgWidth * HORIZONTAL_GAP_RATIO;
+
+            // Start with a target width but cap it to the available space; keep sensible min width.
+            const targetWidth = Math.max(120, Math.floor(this.svgWidth * SUMMARY_WIDTH_RATIO));
+            const availableRight = Math.max(120, Math.floor(this.svgWidth - (controls.x + controls.width) - gap - this.topPanelMargin));
+            const width = Math.min(targetWidth, Math.max(120, availableRight));
+
+            // Prefer placing near the rightAnchor but ensure it doesn't overflow.
+            const preferredX = this.svgWidth * 0.6;
+            const x = Math.min(Math.max(preferredX, controls.x + controls.width + gap), Math.max(0, this.svgWidth - width - this.topPanelMargin));
+            const height = this.svgHeight * 0.22;
+
             return {
                 x: x,
                 y: this.topPanelMargin,
-                width: Math.max(50, width),
+                width: width - this.topPanelMargin,
                 height: height
             };
         },
@@ -139,7 +173,9 @@ const LocationTab = (() => {
          */
         getMapBounds() {
             const mainArea = this.getMainAreaRect();
-            const mapY = this.topPanelMargin + this.controlsHeight + this.topPanelMargin;
+            const controlRect = this.getControlsRect();;
+
+            const mapY = controlRect.y + controlRect.height + this.topPanelMargin;
             const mapHeight = Math.max(1, mainArea.height - mapY);
 
             return {
@@ -158,7 +194,6 @@ const LocationTab = (() => {
 
     /**
      * Calculates the great-circle distance (in miles) between two [lon, lat] coordinates.
-     * Uses the Haversine formula.
      */
     const greatCircleDistance = (coords1, coords2) => {
         if (!coords1 || !coords2) return 0;
@@ -187,7 +222,6 @@ const LocationTab = (() => {
 
     /**
      * Loads and parses the PPI.csv file.
-     * @returns {Promise<Array<{date: Date, value: number}>>} Sorted array of PPI data.
      */
     async function loadCsvBaselineData() {
         try {
@@ -218,9 +252,6 @@ const LocationTab = (() => {
 
     /**
      * Calculates the cost of a single LTL shipment.
-     * @param {number} distance - Road distance in miles.
-     * @param {number} shipmentWeightTons - Weight in tons.
-     * @returns {number} Estimated LTL cost.
      */
     const calculateLTLCost = (distance, shipmentWeightTons) => {
         const q = shipmentWeightTons;
@@ -230,42 +261,35 @@ const LocationTab = (() => {
         const numerator = (PPI * q * d) / 5.14;
         const denominator = (q ** (1 / 7) * d ** (15 / 29)) - 3.5;
 
-        if (denominator <= 0) return Infinity; // Avoid division by zero/negative
+        if (denominator <= 0) return Infinity;
         return numerator / denominator;
     };
 
     /**
      * Calculates the holding cost breakdown based on various inputs from other tabs.
-     * @returns {object} { capital, storage, service, risk, total }
      */
     function calculateHoldingCostBreakdown() {
-        // Get inputs from other tabs
         const marrEl = document.getElementById('inv-marr');
         const workingDaysEl = document.getElementById('inv-workingDays');
         const taxRateEl = document.getElementById('inv-taxRate');
 
-        // Provide defaults
         const marr = marrEl ? parseFloat(marrEl.value) || 12.0 : 12.0;
         const workingDays = workingDaysEl ? parseFloat(workingDaysEl.value) || 250 : 250;
         const taxRate = taxRateEl ? parseFloat(taxRateEl.value) || 25.0 : 25.0;
 
-        // Calculate components
         const capital = marr;
         const service = 5.0 + (5.0 * (workingDays / 365.0)) + (10.0 * (taxRate / 100.0));
 
-        // Dynamic storage & risk costs
         const cities = Array.from(cityData.values());
-        let storage = 7.0; // Default
-        let risk = 10.0;   // Default
+        let storage = 7.0; 
+        let risk = 10.0; 
 
         if (cities.length > 0 && optimalFactoryLocation) {
-            // Storage cost based on proximity
             const distances = cities.map(c => greatCircleDistance(optimalFactoryLocation, c.coordinates));
             const minDistance = Math.min(...distances);
             const storageScale = d3.scaleLinear().domain([50, 500]).range([10.0, 4.0]).clamp(true);
             storage = storageScale(minDistance);
 
-            // Risk cost based on average shipment frequency
             const avgFreq = d3.mean(cities, c => c.freq);
             if (avgFreq) {
                 const riskScale = d3.scalePow().exponent(2).domain([7, 60]).range([5.0, 15.0]).clamp(true);
@@ -279,14 +303,12 @@ const LocationTab = (() => {
 
     /**
      * Refreshes the holding cost input field with the new estimated breakdown.
-     * Stores the breakdown in data attributes for the tooltip.
      */
     function refreshHoldingCost() {
         const breakdown = calculateHoldingCostBreakdown();
         const input = d3.select("#loc-holding-cost-input");
         if (input.empty()) return;
 
-        // Only update if user hasn't manually changed it, or if it's the first run
         const currentVal = parseFloat(input.property("value"));
         const estimatedVal = parseFloat(input.attr("data-estimated-total") || 0);
 
@@ -294,7 +316,6 @@ const LocationTab = (() => {
             input.property("value", breakdown.total.toFixed(1));
         }
 
-        // Store breakdown in data attributes for the tooltip
         input.attr("data-estimated-total", breakdown.total.toFixed(1));
         input.attr("data-breakdown-capital", breakdown.capital.toFixed(2));
         input.attr("data-breakdown-storage", breakdown.storage.toFixed(2));
@@ -302,49 +323,43 @@ const LocationTab = (() => {
         input.attr("data-breakdown-risk", breakdown.risk.toFixed(2));
     }
 
-
     // -------------------------------------------------------------------------
     // Bottom Ribbon (Simulation) UI Handlers
     // -------------------------------------------------------------------------
 
-    /**
-     * Toggles the visibility of the bottom simulation ribbon.
-     */
+/**
+ * Toggles the visibility of the bottom simulation ribbon using a delayed redraw.
+ */
     function toggleBottomRibbon() {
         isBottomRibbonOpen = !isBottomRibbonOpen;
-        // console.log(`Toggling ribbon. New state: ${isBottomRibbonOpen ? 'Open' : 'Closed'}`); // Debug
+        const contentDiv = d3.select(".bottom-ribbon-content");
 
-        // Update map elements (resizes the map)
-        updateDynamicMapElements(); // Calls layoutManager.update internally
-
-        // Update UI elements
         d3.select(".bottom-ribbon-header-arrow")
             .html(isBottomRibbonOpen ? '▼' : '▲');
+        contentDiv.style("display", isBottomRibbonOpen ? "flex" : "none");
 
-        d3.select(".bottom-ribbon-content")
-            .style("display", isBottomRibbonOpen ? "flex" : "none");
+        updateDynamicMapElements();
 
-        // After transition, run simulation if needed
         setTimeout(() => {
-            if (isBottomRibbonOpen && !simulationResults && !isSimulationRunning && !simulationError) {
-                // If opening for the first time, run simulation
-                runDailyInventorySimulation().catch(e => console.warn("Initial sim run failed:", e));
-            } else if (isBottomRibbonOpen) {
-                // If data already exists, just redraw the chart
-                drawHoldingCostChart();
+            if (isBottomRibbonOpen) {
+                if (!simulationResults && !isSimulationRunning && !simulationError) {
+                    runDailyInventorySimulation().catch(e => console.warn("Initial sim run failed:", e));
+                } else {
+                    drawHoldingCostChart(true);
+                }
+            } else if (!isBottomRibbonOpen) {
+                drawHoldingCostChart(false);
             }
-        }, 310); // 310ms, just after 300ms CSS transition
+        }, 400);
     }
 
     /**
      * Updates the chart mode (Inventory vs. Shipments) and redraws the chart.
      */
     function updateHoldingChartMode() {
-        // Update button active state
         d3.select("#sim-inv-btn").classed('active', holdingChartMode === 'inventory');
         d3.select("#sim-ship-btn").classed('active', holdingChartMode === 'shipments');
 
-        // Update ribbon title
         d3.select(".bottom-ribbon-header-title").html(
             `Simulation: <strong>${holdingChartMode === 'inventory' ? 'Inventory' : 'Shipments'}</strong>`
         );
@@ -355,32 +370,65 @@ const LocationTab = (() => {
     }
 
     /**
+         * ASYNC HELPER
+         * Fetches the median wage for the current optimalFactoryLocation
+         * and updates the _localWageStress state.
+         * Takes the current labor cost as an argument.
+         * @param {number} currentLaborCost - The labor cost from the main UI.
+         * @returns {Promise<void>}
+         */
+    async function updateLocalWageStress(currentLaborCost) {
+        if (!optimalFactoryLocation) {
+            _localWageStress = 0;
+            // lastCheckedLocation is already null, no need to set
+            return;
+        }
+
+        // Location is the same, but we must re-calculate stress
+        // based on the new laborCost.
+        console.log("Recalculating wage stress with new labor cost...");
+
+        const [lon, lat] = optimalFactoryLocation;
+
+        const { medianHouseholdIncome, medianHourly, stress } = await getLocalWageAndStress(lat, lon, currentLaborCost);
+
+        if (Number.isFinite(medianHourly) && medianHourly > 0) {
+            _localWageStress = stress; // Update the stress
+
+            const displayEl = document.getElementById('loc-wage-display');
+            if (displayEl) {
+                const newValue = `$${medianHourly.toFixed(2)}/hr`;
+                _currentWageDisplay = newValue;
+                displayEl.textContent = newValue;
+            }
+        } else {
+            console.warn("getLocalWageAndStress returned N/A, preserving last known wage and stress.");
+        }
+    }
+
+    /**
      * Runs the facility location optimization algorithm.
-     * - 'New' mode uses a Weiszfeld algorithm (iterative geometric median)
-     * and then checks if an existing city site is better.
-     * - 'Existing' mode just checks all existing city sites (p-median).
+     * NOW ACCEPTS an options object { forceApiCall: boolean }
+     * Returns a Promise that resolves when the async wage stress calc is done.
      */
-    const runOptimization = () => {
+    const runOptimization = (options = {}) => {
         const cities = Array.from(cityData.values());
-        const ppiInput = d3.select("#loc-ppi-input").property("value");
+        const ppiInputEl = d3.select("#loc-ppi-input");
+        const ppiInput = ppiInputEl.empty() ? null : ppiInputEl.property("value");
         PPI = ppiInput ? parseFloat(ppiInput) : 170;
 
         if (optimizationMode === 'New') {
-            // --- 'New' (Greenfield) Optimization ---
             if (cities.length < 2) {
                 optimalFactoryLocation = null;
             } else {
-                // Step 1: Calculate monetary weight for each city
-                // (Cost per shipment per mile * shipments per year)
+                // ... (all the location-finding logic for 'New' mode) ...
                 cities.forEach(c => {
-                    // Use a dummy distance of 1 mile to get a "per mile" cost
                     const shipmentDetails = getShipmentDetails(null, c, 1);
                     const costPerShipmentPerMile = shipmentDetails ? shipmentDetails.costPerShipment : 0;
                     const shipmentsPerYear = 365.2425 / c.freq;
                     c.monetaryWeight = costPerShipmentPerMile * shipmentsPerYear;
                 });
 
-                // Step 2: Find the geometric center (initial guess)
                 let sumLon = 0, sumLat = 0, totalMonetaryWeight = 0;
                 cities.forEach(c => {
                     if (c.monetaryWeight && isFinite(c.monetaryWeight)) {
@@ -391,25 +439,22 @@ const LocationTab = (() => {
                 });
 
                 if (totalMonetaryWeight <= 0) {
-                    // Fallback to pure geometric center if weights are invalid
                     console.warn("Using geometric center (no valid monetary weights).");
                     sumLon = d3.sum(cities, c => c.coordinates[0]);
                     sumLat = d3.sum(cities, c => c.coordinates[1]);
                     totalMonetaryWeight = cities.length;
                     if (totalMonetaryWeight === 0) {
                         optimalFactoryLocation = null;
-                        return; // No cities, exit
+                        return Promise.resolve(); // Return a resolved promise
                     }
                 }
 
                 let currentLocation = [sumLon / totalMonetaryWeight, sumLat / totalMonetaryWeight];
 
-                // Step 3: Iteratively refine location (Weiszfeld algorithm)
                 for (let i = 0; i < 100; i++) {
                     let numLon = 0, numLat = 0, den = 0;
 
                     cities.forEach(city => {
-                        // Distance from current iteration's location
                         const d = Math.max(0.001, greatCircleDistance(currentLocation, city.coordinates));
                         if (city.monetaryWeight && isFinite(city.monetaryWeight)) {
                             numLon += (city.coordinates[0] * city.monetaryWeight) / d;
@@ -425,7 +470,6 @@ const LocationTab = (() => {
 
                     const nextLocation = [numLon / den, numLat / den];
 
-                    // Stop if convergence is reached
                     if (greatCircleDistance(currentLocation, nextLocation) < 0.1) {
                         currentLocation = nextLocation;
                         break;
@@ -433,8 +477,7 @@ const LocationTab = (() => {
                     currentLocation = nextLocation;
                 }
 
-                // Step 4: Compare the calculated "new" location cost vs. all "existing" city sites
-                const newMedianLocation = [+currentLocation[0].toFixed(3), +currentLocation[1].toFixed(3)];
+                const newMedianLocation = [+currentLocation[0].toFixed(2), +currentLocation[1].toFixed(2)];
                 let minCost = calculateTotalCost(newMedianLocation, cities);
                 let bestLocation = newMedianLocation;
 
@@ -453,7 +496,6 @@ const LocationTab = (() => {
                 optimalFactoryLocation = null;
             } else {
                 let bestLocation = null, minCost = Infinity;
-                // Find the city site that has the minimum total cost
                 for (const potentialSite of cities) {
                     const currentCost = calculateTotalCost(potentialSite.coordinates, cities);
                     if (currentCost < minCost) {
@@ -468,17 +510,49 @@ const LocationTab = (() => {
         // --- Update UI ---
         if (mapInitialized) {
             updateOptimalFactoryMarker();
-            updateConnectionLines();
+            setTimeout(() => updateConnectionLines(), 750);
         }
         updateSummaryPanel();
         refreshHoldingCost();
-    };
 
+        // --- Modified API Call Logic ---
+        // *** RETURN THE PROMISE ***
+        return new Promise((resolve) => {
+            setTimeout(async () => {
+                if (!optimalFactoryLocation) {
+                    // No location, reset stress and last checked location
+                    _localWageStress = 0;
+                    lastCheckedLocation = null;
+                    resolve(); // Resolve immediately
+                    return;
+                }
+
+                // *** MODIFIED SKIP LOGIC ***
+                // Only run the API call if the location has actually changed
+                if (lastCheckedLocation &&
+                    lastCheckedLocation[0] === optimalFactoryLocation[0] &&
+                    lastCheckedLocation[1] === optimalFactoryLocation[1]) {
+
+                    console.log("Skipping wage API call, location unchanged.");
+                    resolve(); // Resolve immediately
+                    return;
+                }
+
+                // Location is new, update the last checked location *before* the call
+                lastCheckedLocation = [...optimalFactoryLocation];
+
+                const currentLaborCost = parseFloat(document.getElementById('laborCost')?.value) || 25;
+
+                // Call the new helper function
+                await updateLocalWageStress(currentLaborCost);
+
+                resolve(); // Resolve after API call is done
+            }, 100);
+        });
+    };
+    
     /**
      * Runs the daily inventory simulation in the web worker.
-     * @param {object | null} validationParams - If provided, runs a "validation" sim
-     * that doesn't update the global state.
-     * @returns {Promise<object>} Promise that resolves with simulation results.
      */
     function runDailyInventorySimulation(validationParams = null) {
         return new Promise((resolve, reject) => {
@@ -499,13 +573,11 @@ const LocationTab = (() => {
                 return reject(new Error("Could not get simulation parameters."));
             }
 
-            // console.log(`WORKER: Posting simulation job (Validation: ${isValidationRun})...`); // Debug
             isSimulationRunning = true;
             if (!isValidationRun) {
-                simulationError = null; // Clear previous errors
+                simulationError = null;
             }
 
-            // Show loading state
             if (isBottomRibbonOpen) {
                 drawHoldingCostChart();
             }
@@ -516,7 +588,6 @@ const LocationTab = (() => {
 
     /**
      * Gathers all necessary parameters from the DOM to send to the simulation worker.
-     * @returns {object | null}
      */
     function getCurrentSimulationParams() {
         // Get working days schedule
@@ -556,6 +627,9 @@ const LocationTab = (() => {
         const ucInput = document.getElementById('ultraCogs');
         const mcInput = document.getElementById('megaCogs');
 
+        const dailyDemandEl = document.getElementById('dailyDemand');
+        const targetDailyProduction = (dailyDemandEl ? parseInt(dailyDemandEl.value) : 180) || 180;
+
         // Provide defaults for all parameters
         const standardOpHours = opHoursEl ? parseFloat(opHoursEl.value) || 15.0 : 15.0;
         const numEmployees = numEmployeesEl ? parseInt(numEmployeesEl.value) || 8 : 8;
@@ -569,11 +643,12 @@ const LocationTab = (() => {
 
         // Ensure global objects/functions exist, provide fallbacks
         const buildRatios = typeof BUILD_RATIOS !== 'undefined' ? BUILD_RATIOS : { super: 0.33, ultra: 0.33, mega: 0.34 };
+
         const capacityMetrics = typeof calculateMetrics === 'function'
-            ? calculateMetrics({ dailyDemand: 9999, opHours: standardOpHours, numEmployees }, {})
+            ? calculateMetrics({ dailyDemand: 9999, opHours: standardOpHours, numEmployees }, {}, true)
             : { throughputUnitsPerDay: standardOpHours * 10 }; // Simple fallback
 
-        const standardDailyProduction = Math.floor(capacityMetrics?.throughputUnitsPerDay || 0);
+        const maxStandardProduction = Math.floor(capacityMetrics?.throughputUnitsPerDay || 0);
         const cities = Array.from(cityData.values());
 
         return {
@@ -589,7 +664,8 @@ const LocationTab = (() => {
             ultraCogsVal,
             mcInputVal,
             buildRatios,
-            standardDailyProduction
+            targetDailyProduction,
+            maxStandardProduction
         };
     }
 
@@ -600,17 +676,22 @@ const LocationTab = (() => {
         const svg = d3.select("#ppi-chart-svg");
         svg.selectAll("*").remove();
 
-        // --- 1. Setup ---
-        const margin = { top: 20, right: 30, bottom: 40, left: 50 };
-        const modalWidth = 500;
-        const modalHeight = 280;
+        // *** Read size from layoutManager ***
+        const modalWidth = layoutManager.modalWidth;
+        // Subtract height for modal padding and title
+        const modalHeight = layoutManager.modalHeight - 70;
+        if (modalWidth <= 0 || modalHeight <= 0) return;
+
+        // *** Use the modal size for the viewBox ***
+        svg.attr("viewBox", `0 0 ${modalWidth} ${modalHeight}`);
+
+        const margin = { top: 20, right: 40, bottom: 40, left: 50 };
         const width = modalWidth - margin.left - margin.right;
         const height = modalHeight - margin.top - margin.bottom;
 
         const g = svg.append("g")
             .attr("transform", `translate(${margin.left},${margin.top})`);
 
-        // Use global tooltip
         const tooltip = createTooltip("ppi-tooltip");
 
         const errorText = g.append("text")
@@ -623,7 +704,7 @@ const LocationTab = (() => {
             .text("Loading...");
 
         try {
-            // --- 2. Load Data ---
+            // --- Load Data ---
             errorText.text("Loading baseline data...").style("display", null);
             let combinedData = await loadCsvBaselineData();
             if (combinedData.length === 0) throw new Error("Failed to load PPI data.");
@@ -633,7 +714,7 @@ const LocationTab = (() => {
             if (finalPpiData.length === 0) throw new Error("No PPI data available.");
             errorText.style("display", "none");
 
-            // --- 3. Define Scales ---
+            // --- Define Scales ---
             const maxDate = d3.max(finalPpiData, d => d.date);
             const domainMaxDate = new Date(maxDate.getFullYear(), maxDate.getMonth() + 1, 1);
             const x = d3.scaleTime()
@@ -652,7 +733,7 @@ const LocationTab = (() => {
             const bisectDate = d3.bisector(d => d.date).left;
             const formatDate = d3.timeFormat("%b %Y");
 
-            // --- 4. Draw Axes ---
+            // --- Draw Axes ---
             g.append("g").attr("class", "axis x-axis")
                 .attr("transform", `translate(0,${height})`)
                 .call(d3.axisBottom(x).ticks(d3.timeYear.every(3)).tickFormat(d3.timeFormat("%Y")))
@@ -666,7 +747,7 @@ const LocationTab = (() => {
                 .attr("fill", "var(--accent)").attr("transform", "rotate(-90)").attr("y", -40)
                 .attr("x", -height / 2).attr("text-anchor", "middle").text("Producer Price Index");
 
-            // --- 5. Draw Line ---
+            // --- Draw Line ---
             const line = d3.line()
                 .x(d => x(d.date))
                 .y(d => y(d.value))
@@ -677,7 +758,7 @@ const LocationTab = (() => {
                 .attr("class", "ppi-line")
                 .attr("d", line);
 
-            // --- 6. Tooltip Setup ---
+            // --- Tooltip Setup ---
             const focus = g.append("g")
                 .attr("class", "ppi-focus");
 
@@ -727,7 +808,7 @@ const LocationTab = (() => {
 
                 focus.attr("transform", `translate(${x(d.date)},${y(d.value)})`);
                 tooltip.html(`<strong>${formatDate(d.date)}</strong><div class="tooltip-row"><span>Price Index:</span> <span>${d.value.toFixed(2)}</span></div>`);
-                // Use standard tooltip positioning
+
                 tooltip.style("left", (event.pageX + 15) + "px")
                     .style("top", (event.pageY - 28) + "px");
             }
@@ -739,17 +820,17 @@ const LocationTab = (() => {
         }
     }
 
-    /**
-     * Draws the main simulation chart (Inventory or Shipments) in the bottom ribbon.
-     */
-    function drawHoldingCostChart() {
+/**
+ * Draws the main simulation chart (Inventory or Shipments) in the bottom ribbon.
+ * @param {boolean} animate - Flag to enable the smooth entrance animation.
+ */
+    function drawHoldingCostChart(animate = false) {
         const svg = d3.select("#holding-cost-chart-svg");
         svg.selectAll("*").remove();
 
         const metricsPlaceholder = d3.select("#metrics-placeholder-in-demand");
         metricsPlaceholder.html(""); // Clear old metrics
 
-        // Use global tooltip
         const tooltip = createTooltip("holding-cost-tooltip");
 
         const svgNode = svg.node();
@@ -757,24 +838,27 @@ const LocationTab = (() => {
         const svgContainer = svgNode.parentNode;
         if (!svgContainer) return;
 
-        // --- FIX: Get dimensions reliably ---
+        // --- Get dimensions ---
         let viewBoxWidth = 0;
         let viewBoxHeight = 0;
         try {
             const rect = svgContainer.getBoundingClientRect();
             viewBoxWidth = rect.width;
             viewBoxHeight = rect.height;
+
+            svg.attr("width", viewBoxWidth)
+                .attr("height", viewBoxHeight)
+                .attr("viewBox", `0 0 ${viewBoxWidth} ${viewBoxHeight}`);
+
         } catch (e) {
             console.error("Could not get bounding rect for chart container", e);
-            return; // Cannot proceed without dimensions
+            return;
         }
-        // --- END FIX ---
 
-
-        // --- 1. Handle Loading State ---
+        // --- Handle Loading State ---
         if (isSimulationRunning) {
             metricsPlaceholder.html(`<p class="loading sim-loading-text">Loading...</p>`);
-            if (viewBoxWidth > 0 && viewBoxHeight > 0) { // Only draw text if dimensions are valid
+            if (viewBoxWidth > 0 && viewBoxHeight > 0) {
                 svg.append("text")
                     .attr("x", viewBoxWidth / 2)
                     .attr("y", viewBoxHeight / 2)
@@ -784,18 +868,14 @@ const LocationTab = (() => {
             return;
         }
 
-        // --- 2. Determine Display State ---
+        // --- Determine Display State ---
         const isConflictError = simulationError && simulationError.startsWith("Demand Conflict");
         const hasValidResults = simulationResults && Array.isArray(simulationResults) && simulationResults.length > 0;
-
-        // State can be: CONFLICT, NO_RESULTS_OR_GENERAL_ERROR, VALID_RESULTS
         const displayState = isConflictError
             ? "CONFLICT"
             : (!hasValidResults ? "NO_RESULTS_OR_GENERAL_ERROR" : "VALID_RESULTS");
 
-        // console.log(`drawHoldingCostChart: Display State = ${displayState}, Conflict Msg Present: ${!!isConflictError}, Valid Results Present: ${hasValidResults}`); // Debug
-
-        // --- 3. Setup SVG and Margins ---
+        // --- Setup SVG and Margins ---
         if (viewBoxWidth <= 0 || viewBoxHeight <= 0) {
             console.warn("drawHoldingCostChart skipped: viewBox has no dimensions.", `W: ${viewBoxWidth}`, `H: ${viewBoxHeight}`);
             return;
@@ -809,12 +889,31 @@ const LocationTab = (() => {
             return;
         }
 
-        svg.attr("viewBox", `0 0 ${viewBoxWidth} ${viewBoxHeight}`);
         const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // *** Get inputs for tooltip/highlighting ***
+        const opHoursEl = document.getElementById('opHours');
+        const standardOpHours = opHoursEl ? parseFloat(opHoursEl.value) || 15.0 : 15.0;
+        const dailyDemandEl = document.getElementById('dailyDemand');
+        const targetDailyProduction = (dailyDemandEl ? parseInt(dailyDemandEl.value) : 180) || 180;
+        const numEmployeesEl = document.getElementById('numEmployees');
+        const numEmployees = numEmployeesEl ? parseInt(numEmployeesEl.value) || 8 : 8;
+        const failureColor = "var(--failure-color)";
+
+        // *** Get COGS for Inv. Valuation ***
+        const scInput = document.getElementById('superCogs');
+        const ucInput = document.getElementById('ultraCogs');
+        const mcInput = document.getElementById('megaCogs');
+        const superCogsVal = scInput ? parseFloat(scInput.value) : 375;
+        const ultraCogsVal = ucInput ? parseFloat(ucInput.value) : 590;
+        const mcInputVal = mcInput ? parseFloat(mcInput.value) : 960;
+        const buildRatios = typeof BUILD_RATIOS !== 'undefined' ? BUILD_RATIOS : { super: 0.33, ultra: 0.33, mega: 0.34 };
+        const avgCogs = (superCogsVal * buildRatios.super) + (ultraCogsVal * buildRatios.ultra) + (mcInputVal * buildRatios.mega);
 
         // Formatters
         const formatK = (n) => (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k';
         const formatInt = d3.format(",.0f");
+        const formatCurrency = (val) => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
         const year = new Date().getFullYear();
         const startDate = new Date(Date.UTC(year, 0, 1));
         const endDate = new Date(Date.UTC(year, 11, 31));
@@ -832,9 +931,24 @@ const LocationTab = (() => {
                 .text(labelText);
         };
 
-        // --- 4. Draw Empty Chart (if no results or general error) ---
+        // --- Calculate Default Line Ops ---
+        let defaultConveyorSpeed = 0;
+        if (typeof calculateMetrics === 'function' && targetDailyProduction > 0 && standardOpHours > 0) {
+            try {
+                const defaultMetrics = calculateMetrics({
+                    dailyDemand: Math.round(targetDailyProduction),
+                    opHours: standardOpHours,
+                    numEmployees: numEmployees
+                }, {});
+                if (defaultMetrics) {
+                    defaultConveyorSpeed = defaultMetrics.conveyorSpeed;
+                }
+            } catch (e) { console.warn("Failed to calc default metrics", e); }
+        }
+
+
+        // --- Draw Empty Chart (if no results or general error) ---
         if (displayState === "NO_RESULTS_OR_GENERAL_ERROR") {
-            // console.log("Drawing empty axes."); // Debug
             const x = d3.scaleTime().domain([startDate, endDate]).range([0, width]);
             drawMonthAxis(g, x, height);
             const defaultYDomain = [0, 100];
@@ -845,76 +959,208 @@ const LocationTab = (() => {
                     g.append("g").attr("class", "axis y-axis-left").call(d3.axisLeft(yLeft).tickFormat(formatK)),
                     "Inventory On Hand"
                 );
-                metricsPlaceholder.html(`<div class="summary-row"><span>Avg. Inventory:</span> <strong>-</strong></div> <div class="summary-row total"><span>Holding Costs:</span> <strong>-</strong></div>`);
+                metricsPlaceholder.append("div").attr('class', 'summary-row')
+                    .html(`<span>Avg. Inventory:</span><span><strong>-</strong></span>`);
+                metricsPlaceholder.append("div").attr('class', 'summary-row')
+                    .html(`<span>Inv. Valuation:</span><span><strong>-</strong></span>`);
+                metricsPlaceholder.append("div").attr('class', 'summary-row total')
+                    .html(`<span>Holding Costs:</span><span><strong>-</strong></span>`);
             } else {
                 const yLeftShip = d3.scaleLinear().domain(defaultYDomain).range([height, 0]).nice();
                 applyAxisLabelStyle(
                     g.append("g").attr("class", "axis y-axis-left").call(d3.axisLeft(yLeftShip).tickFormat(formatInt)),
                     "Units Delivered"
                 );
-                metricsPlaceholder.html("<p class='sim-placeholder-text'>Add a city to run simulation.</p>");
+                metricsPlaceholder.html(
+                    `<div class="summary-row filter-row"><label for="filter-overage"><input type="checkbox" id="filter-overage" checked> Overages:</label> <strong>-</strong></div>` +
+                    `<div class="summary-row filter-row"><label for="filter-removed"><input type="checkbox" id="filter-removed" checked> Days Removed:</label> <strong>-</strong></div>` +
+                    `<div class="summary-row total"><span>Exception Costs:</span> <strong>-</strong></div>`
+                );
+                metricsPlaceholder.select("#filter-overage").on("change", () => { });
+                metricsPlaceholder.select("#filter-removed").on("change", () => { });
             }
 
             if (simulationError && !isConflictError) {
                 g.append("text").attr("x", width / 2).attr("y", height / 2)
-                    .attr("text-anchor", "middle").attr("fill", "var(--failure-color)")
+                    .attr("text-anchor", "middle").attr("fill", failureColor)
                     .text("Simulation Error");
                 metricsPlaceholder.html(`<div class="summary-row error-message"><span class="sim-error-text">Sim Failed</span></div>`);
             }
             return;
         }
 
-        // --- 5. Draw Chart with Valid Results (or Conflict Overlay) ---
-        // console.log("Drawing chart content using simulationResults."); // Debug
+        // --- Draw Chart with Valid Results (or Conflict Overlay) ---
         const dailyData = simulationResults.map(d => ({ ...d, dateObj: new Date(d.date + 'T00:00:00Z') }));
 
-        // Calculate metrics
-        const avgInventory = d3.mean(dailyData, d => d.inventoryEnd) || 0;
-        const totalAnnualHoldingCost = d3.sum(dailyData, d => d.holdingCost);
-        const totalExceptionCost = d3.sum(dailyData, d => d.exceptionCost);
-        const exceptionsCount = d3.sum(dailyData, d => (d.isExceptionDay || d.isReductionDay) ? 1 : 0);
+        // --- Implement D3 Brush for data filtering ---
+        const x = d3.scaleTime().domain(d3.extent(dailyData, d => d.dateObj)).range([0, width]);
+        drawMonthAxis(g, x, height);
+
+        let metricData = dailyData;
+
+        const clipRect = g.append("defs").append("clipPath")
+            .attr("id", "clip-brush")
+            .append("rect")
+            .attr("x", 0).attr("y", 0)
+            .attr("width", width).attr("height", height);
+
+        const brush = d3.brushX()
+            .extent([[0, 0], [width, height]])
+            .on("end", onBrushEnd);
+
+        // The brush <g> element will capture all mouse events.
+        const brushG = g.append("g")
+            .attr("class", "brush")
+            .call(brush);
+
+        if (brushSelection && brushSelection[0] && brushSelection[1]) {
+            const pixelSelection = [x(brushSelection[0]), x(brushSelection[1])];
+            if (isFinite(pixelSelection[0]) && isFinite(pixelSelection[1])) {
+                clipRect.attr("x", pixelSelection[0]).attr("width", pixelSelection[1] - pixelSelection[0]);
+                metricData = dailyData.filter(d => d.dateObj >= brushSelection[0] && d.dateObj <= brushSelection[1]);
+                brushG.call(brush.move, pixelSelection);
+            }
+        }
+
+        // --- Calculate Metrics (based on metricData) ---
+        const avgInventory = d3.mean(metricData, d => d.inventoryEnd) || 0;
+        const totalAnnualHoldingCost = d3.sum(metricData, d => d.holdingCost);
+        const totalExceptionCost = d3.sum(metricData, d => d.exceptionCost);
+        const overageDays = d3.sum(metricData, d => d.isExceptionDay ? 1 : 0);
+        const removedDays = d3.sum(metricData, d => d.isReductionDay ? 1 : 0);
 
         // Update metrics panel
         if (holdingChartMode === 'inventory') {
+            const invValuation = avgInventory * avgCogs;
             metricsPlaceholder.append("div").attr('class', 'summary-row')
                 .html(`<span>Avg. Inventory:</span><span><strong>${formatInt(avgInventory)}</strong> units</span>`);
-            metricsPlaceholder.append("div").attr('class', 'summary-row total')
-                .html(`<span>Holding Costs:</span><span><strong>${totalAnnualHoldingCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</strong></span>`);
-        } else {
             metricsPlaceholder.append("div").attr('class', 'summary-row')
-                .html(`<span>Exceptions:</span><span><strong>${exceptionsCount.toLocaleString()}</strong> days</span>`);
+                .html(`<span>Inv. Valuation:</span><span><strong>${formatCurrency(invValuation)}</strong></span>`);
             metricsPlaceholder.append("div").attr('class', 'summary-row total')
-                .html(`<span>Exception Cost:</span><span><strong style="color: var(--failure-color);">${totalExceptionCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</strong></span>`);
+                .html(`<span>Holding Costs:</span><span><strong>${formatCurrency(totalAnnualHoldingCost)}</strong></span>`);
+        } else {
+            metricsPlaceholder.html(
+                `<div class="summary-row filter-row"><label for="filter-overage"><input type="checkbox" id="filter-overage" ${showOverageHighlight ? "checked" : ""}> Overages:</label> <strong>${overageDays} days</strong></div>` +
+                `<div class="summary-row filter-row"><label for="filter-removed"><input type="checkbox" id="filter-removed" ${showRemovedHighlight ? "checked" : ""}> Days Removed:</label> <strong>${removedDays}</strong></div>` +
+                `<div class="summary-row total"><span>Exception Costs:</span> <strong style="color: ${failureColor};">${formatCurrency(totalExceptionCost)}</strong></div>`
+            );
+
+            metricsPlaceholder.select("#filter-overage").on("change", function () {
+                showOverageHighlight = this.checked;
+                drawHoldingCostChart(); // Redraw
+            });
+            metricsPlaceholder.select("#filter-removed").on("change", function () {
+                showRemovedHighlight = this.checked;
+                drawHoldingCostChart(); // Redraw
+            });
         }
 
-        const x = d3.scaleTime().domain(d3.extent(dailyData, d => d.dateObj)).range([0, width]);
-
         if (holdingChartMode === 'inventory') {
-            // --- 5a. INVENTORY MODE (Area Chart) ---
+            // --- 7a. INVENTORY MODE (Area Chart) ---
             const yMin = d3.min(dailyData, d => d.inventoryEnd) ?? 0;
             const yMax = d3.max(dailyData, d => d.inventoryEnd) ?? 0;
             const yLeft = d3.scaleLinear().domain([Math.min(0, yMin), Math.max(10, yMax * 1.1)]).range([height, 0]).nice();
 
-            drawMonthAxis(g, x, height);
             applyAxisLabelStyle(
                 g.append("g").attr("class", "axis y-axis-left").call(d3.axisLeft(yLeft).tickFormat(formatK)),
                 "Inventory On Hand"
             );
 
+            // Area generator
             const area = d3.area()
                 .x(d => x(d.dateObj))
                 .y0(yLeft(0))
                 .y1(d => yLeft(d.inventoryEnd))
                 .curve(d3.curveStepAfter);
 
-            g.append("path").datum(dailyData).attr("class", "holding-cost-area").attr("d", area);
+            // --- Add Highlight Bars like Shipment Chart *** ---
+            const bandwidth = (width / 365) * 0.9;
 
-            // Tooltip
+            const highlightData = dailyData.filter(d =>
+                (showRemovedHighlight && d.isReductionDay) ||
+                (showOverageHighlight &&
+                    (d.isExceptionDay ||
+                        (d.isWorkingDay && !d.isReductionDay && d.production > 0.01 && Math.abs(d.production - targetDailyProduction) > 0.01)
+                    )
+                )
+            );
+
+            // --- Draw Dimmed Background Bars ---
+            g.selectAll(".exception-bg-bar-dimmed")
+                .data(highlightData, d => d.dateObj)
+                .join("rect")
+                .attr("class", "exception-bg-bar")
+                .attr("x", d => x(d.dateObj) - bandwidth / 2)
+                .attr("y", 0)
+                .attr("width", bandwidth)
+                .attr("height", height)
+                .attr("fill", failureColor)
+                .style("opacity", 0.2);
+
+            // --- Draw Clipped Highlight Bars ---
+            const highlightBars = g.selectAll(".exception-bg-bar")
+                .data(highlightData, d => d.dateObj)
+                .join("rect")
+                .attr("class", "exception-bg-bar")
+                .attr("x", d => x(d.dateObj) - bandwidth / 2)
+                .attr("y", 0)
+                .attr("width", bandwidth)
+                .attr("height", height)
+                .attr("fill", failureColor)
+                .style("opacity", 0.3)
+                .attr("clip-path", "url(#clip-brush)");
+
+            // --- Draw Dimmed Background Area ---
+            g.append("path")
+                .datum(dailyData)
+                .attr("class", "holding-cost-area")
+                .attr("d", area)
+                .style("opacity", 0.2);
+
+            // --- Draw Main Clipped Area ---
+            const areaPath = g.append("path")
+                .datum(dailyData)
+                .attr("class", "holding-cost-area")
+                .attr("clip-path", "url(#clip-brush)")
+                .attr("d", area);
+
+            // Animate on first load (if no brush)
+            if (animate && !brushSelection) {
+                const collapsedArea = d3.area()
+                    .x(d => x(d.dateObj))
+                    .y0(yLeft(0))
+                    .y1(yLeft(0))
+                    .curve(d3.curveStepAfter);
+
+                areaPath.attr("d", collapsedArea)
+                    .transition().duration(500).ease(d3.easeQuadOut)
+                    .attr("d", area);
+
+                // Animate highlight bars
+                highlightBars.attr("y", height)
+                    .attr("height", 0)
+                    .transition().duration(500).ease(d3.easeQuadOut)
+                    .attr("y", 0)
+                    .attr("height", height);
+            } else {
+                // No animation, just draw
+                highlightBars.attr("y", 0)
+                    .attr("height", height);
+            }
+
+            // --- Tooltip ---
             const bisectDate = d3.bisector(d => d.dateObj).left;
-            g.append("rect").attr("class", "overlay").attr("width", width).attr("height", height)
-                .on("mouseover", () => tooltip.style("opacity", 1))
-                .on("mouseout", () => tooltip.style("opacity", 0))
-                .on("mousemove", handleInventoryTooltip);
+
+            brushG 
+                .on("mouseover.tooltip", () => tooltip.style("opacity", 1))
+                .on("mouseout.tooltip", () => tooltip.style("opacity", 0))
+                .on("mousemove.tooltip", handleInventoryTooltip)
+                .on("contextmenu", (event) => { // Right-click to clear
+                    event.preventDefault();
+                    brushSelection = null;
+                    brush.move(brushG, null);
+                    drawHoldingCostChart();
+                });
 
             function handleInventoryTooltip(event) {
                 tooltip.style("opacity", 1);
@@ -929,27 +1175,83 @@ const LocationTab = (() => {
 
                 if (!d) return;
 
-                tooltip.html(`<strong>${d.date} (Day ${d.day + 1})</strong><div class="tooltip-row"><span>Inventory:</span> <span>${formatInt(d.inventoryEnd)}</span></div>`);
-                // Use standard tooltip positioning
+                // --- New Metric Calculations ---
+                const dailyProduction = d.production || 0;
+                let operationsHtml = "";
+
+                // --- Determine text styles ---
+                const prodStyle = (d.isWorkingDay && !d.isReductionDay && d.production > 0.01 && Math.abs(dailyProduction - targetDailyProduction) > 0.01)
+                    ? `color:${failureColor};` : '';
+                const hourStyle = d.isExceptionDay ? `color:${failureColor};` : '';
+
+                // Only show operations if the line actually ran
+                if (dailyProduction > 0.01 || (d.opHours > 0.01 && !d.isReductionDay)) {
+
+                    let opHoursForCalc = standardOpHours;
+                    if (d.isExceptionDay) {
+                        opHoursForCalc = d.opHours;
+                    }
+
+                    let conveyorSpeed = 'N/A';
+                    let conveyorSpeedStyle = '';
+
+                    if (typeof calculateMetrics === 'function' && opHoursForCalc > 0.01) {
+                        try {
+                            const opInputs = {
+                                dailyDemand: Math.round(dailyProduction),
+                                opHours: opHoursForCalc,
+                                numEmployees: numEmployees
+                            };
+                            const metrics = calculateMetrics(opInputs, {});
+
+                            if (metrics) {
+                                const actualConveyorSpeed = metrics.conveyorSpeed;
+                                conveyorSpeed = `${actualConveyorSpeed.toFixed(2)} ft/min`;
+                                if (Math.abs(actualConveyorSpeed - defaultConveyorSpeed) > 0.01) {
+                                    conveyorSpeedStyle = `color:${failureColor};`;
+                                }
+                            }
+                        } catch (e) {
+                            console.warn("Tooltip calculateMetrics failed:", e);
+                            conveyorSpeed = 'Calc Error';
+                            conveyorSpeedStyle = `color:${failureColor};`;
+                        }
+                    }
+
+                    // --- Build HTML ---
+                    operationsHtml =
+                        `<hr style='margin: 2px 0; border-top-color: #555;'>` +
+                        `<div class="tooltip-header">Operations</div>` +
+                        `<div class="tooltip-row"><span style="${hourStyle}">Op. Hours:</span> <span style="${hourStyle}">${(d.isExceptionDay ? d.opHours : standardOpHours).toFixed(2)} h</span></div>` +
+                        `<div class="tooltip-row"><span style="${conveyorSpeedStyle}">Conv. Speed:</span> <span style="${conveyorSpeedStyle}">${conveyorSpeed}</span></div>`;
+                }
+
+                tooltip.html(
+                    `<strong>${d.date} (Day ${d.day + 1})</strong>` +
+                    `<div class="tooltip-header">Inventory</div>` +
+                    `<div class="tooltip-row"><span style="${prodStyle}">Produced:</span> <span style="${prodStyle}">${formatInt(d.production)}</span></div>` +
+                    `<div class="tooltip-row"><span>End of Day:</span> <span>${formatInt(d.inventoryEnd)}</span></div>` +
+                    `${operationsHtml}`
+                );
+
                 tooltip.style("left", (event.pageX + 15) + "px")
                     .style("top", (event.pageY - 28) + "px");
             }
 
         } else {
-            // --- 5b. SHIPMENTS MODE (Stacked Bar Chart) ---
+            // --- SHIPMENTS MODE (Stacked Bar Chart) ---
             const xBand = d3.scaleBand().domain(d3.range(dailyData.length)).range([0, width]).padding(0.1);
             const bandwidth = xBand.bandwidth();
 
             const yMax = d3.max(dailyData, d => d.actualShipments) ?? 0;
             const yLeft = d3.scaleLinear().domain([0, Math.max(10, (yMax || 0) * 1.1)]).range([height, 0]).nice();
 
-            drawMonthAxis(g, x, height);
             applyAxisLabelStyle(
                 g.append("g").attr("class", "axis y-axis-left").call(d3.axisLeft(yLeft).tickFormat(formatInt)),
                 "Units Delivered"
             );
 
-            // Process data for stacking (highlighting selected city)
+            // Process data for stacking
             const chartData = dailyData.map(d => {
                 let selectedQty = 0;
                 let unselectedQty = 0;
@@ -964,29 +1266,49 @@ const LocationTab = (() => {
                 return { ...d, unselected: unselectedQty, selected: selectedQty, actualShipments: Number(d.actualShipments) || 0 };
             });
 
-            g.selectAll(".exception-bg-bar")
-                .data(chartData.filter(d => d.isExceptionDay || d.isReductionDay), d => d.dateObj) // Filter and key
+            // --- Draw Dimmed Exception Bars ---
+            g.selectAll(".exception-bg-bar-dimmed")
+                .data(chartData.filter(d => (showOverageHighlight && d.isExceptionDay) || (showRemovedHighlight && d.isReductionDay)), d => d.dateObj)
                 .join("rect")
                 .attr("class", "exception-bg-bar")
-                .attr("x", d => x(d.dateObj) - bandwidth / 2) // Use same x and width as bars
-                .attr("y", 0) // Top of the chart area
+                .attr("x", d => x(d.dateObj) - bandwidth / 2)
+                .attr("y", 0)
                 .attr("width", bandwidth)
-                .attr("height", height) // Full height of the chart area
-                .attr("fill", "var(--failure-color)")
-                .style("opacity", 0.5); // Faint background effect
+                .attr("height", height)
+                .attr("fill", failureColor)
+                .style("opacity", 0.2);
+
+            // --- Draw Clipped Exception Bars ---
+            g.selectAll(".exception-bg-bar")
+                .data(chartData.filter(d => (showOverageHighlight && d.isExceptionDay) || (showRemovedHighlight && d.isReductionDay)), d => d.dateObj)
+                .join("rect")
+                .attr("class", "exception-bg-bar")
+                .attr("x", d => x(d.dateObj) - bandwidth / 2)
+                .attr("y", 0)
+                .attr("width", bandwidth)
+                .attr("height", height)
+                .attr("fill", failureColor)
+                .style("opacity", 0.3)
+                .attr("clip-path", "url(#clip-brush)");
+
+
             const stackKeys = ["unselected", "selected"];
             const stack = d3.stack().keys(stackKeys);
             const stackedData = stack(chartData);
             const color = d3.scaleOrdinal().domain(stackKeys).range(["var(--primary)", "var(--secondary1)"]);
 
-            // Draw stacked bars
-            const layers = g.selectAll("g.layer").data(stackedData).join("g")
+            // --- Draw Dimmed Stacked Bars ---
+            const dimmedLayers = g.selectAll("g.layer-dimmed").data(stackedData).join("g")
                 .attr("class", d => d.key);
 
-            layers.selectAll("rect")
+            dimmedLayers.selectAll("rect")
                 .data(d => d)
                 .join("rect")
                 .attr("x", d => x(d.data.dateObj) - bandwidth / 2)
+                .attr("width", bandwidth)
+                .attr("fill", function (d) {
+                    return color(d3.select(this.parentNode).datum().key);
+                })
                 .attr("y", d => (isNaN(d[1]) ? yLeft(0) : yLeft(d[1])))
                 .attr("height", d => {
                     const y0 = isNaN(d[0]) ? 0 : d[0];
@@ -995,18 +1317,56 @@ const LocationTab = (() => {
                     const scaledY1 = yLeft(y1);
                     return (isNaN(scaledY0) || isNaN(scaledY1)) ? 0 : Math.max(0, scaledY0 - scaledY1);
                 })
+                .style("opacity", 0.2);
+
+            // --- Draw Clipped Stacked Bars ---
+            const layers = g.selectAll("g.layer").data(stackedData).join("g")
+                .attr("class", d => d.key)
+                .attr("clip-path", "url(#clip-brush)"); // Apply clip path
+
+            layers.selectAll("rect")
+                .data(d => d)
+                .join("rect")
+                .attr("x", d => x(d.data.dateObj) - bandwidth / 2)
                 .attr("width", bandwidth)
                 .attr("fill", function (d) {
                     return color(d3.select(this.parentNode).datum().key);
                 })
-                .style("cursor", "default");
+                .style("cursor", "default")
+                .call(rect => {
+                    const finalY = d => (isNaN(d[1]) ? yLeft(0) : yLeft(d[1]));
+                    const finalHeight = d => {
+                        const y0 = isNaN(d[0]) ? 0 : d[0];
+                        const y1 = isNaN(d[1]) ? y0 : d[1];
+                        const scaledY0 = yLeft(y0);
+                        const scaledY1 = yLeft(y1);
+                        return (isNaN(scaledY0) || isNaN(scaledY1)) ? 0 : Math.max(0, scaledY0 - scaledY1);
+                    };
+
+                    if (animate && !brushSelection) {
+                        rect.attr("y", height)
+                            .attr("height", 0)
+                            .transition().duration(500).ease(d3.easeQuadOut)
+                            .attr("y", finalY)
+                            .attr("height", finalHeight);
+                    } else {
+                        rect.attr("y", finalY)
+                            .attr("height", finalHeight);
+                    }
+                });
 
             // Tooltip
-            g.append("rect").attr("class", "overlay").attr("width", width).attr("height", height)
+            brushG
                 .style("cursor", "crosshair")
-                .on("mouseover", () => tooltip.style("opacity", 1))
-                .on("mouseout", () => tooltip.style("opacity", 0))
-                .on("mousemove", handleShipmentTooltip);
+                .on("mouseover.tooltip", () => tooltip.style("opacity", 1))
+                .on("mouseout.tooltip", () => tooltip.style("opacity", 0))
+                .on("mousemove.tooltip", handleShipmentTooltip)
+                .on("contextmenu", (event) => { // Right-click to clear
+                    event.preventDefault();
+                    brushSelection = null;
+                    brush.move(brushG, null); 
+                    drawHoldingCostChart(); 
+                });
 
             function handleShipmentTooltip(event) {
                 tooltip.style("opacity", 1);
@@ -1018,7 +1378,6 @@ const LocationTab = (() => {
                 const d = dailyData[index];
                 if (!d) return;
 
-                d3.select(event.currentTarget).style("cursor", "crosshair");
                 let detailsHtml = "";
 
                 // Actual Shipments
@@ -1032,7 +1391,7 @@ const LocationTab = (() => {
 
                 // Exception Details
                 if (d.isExceptionDay || d.isReductionDay) {
-                    detailsHtml += `<hr style='margin: 2px 0; border-top-color: #555;'><div class="tooltip-header" style="color: var(--failure-color);">Adjustments</div>`;
+                    detailsHtml += `<hr style='margin: 2px 0; border-top-color: #555;'><div class="tooltip-header" style="color: ${failureColor};">Adjustments</div>`;
                     if (d.exceptionDetails) {
                         const costMatch = d.exceptionDetails.match(/Cost: \$([\d,]+)/);
                         const costText = costMatch ? costMatch[1] : null;
@@ -1041,10 +1400,10 @@ const LocationTab = (() => {
                         if (costText) {
                             detailsHtml += `<div class="tooltip-row"><span>Cost:</span> <span>\$${costText}</span></div>`;
                         } else if (d.exceptionCost > 0) {
-                            detailsHtml += `<div class="tooltip-row"><span>Cost:</span> <span>${d.exceptionCost.toLocaleString('en-US', { style: 'currency', 'currency': 'USD', maximumFractionDigits: 0 })}</span></div>`;
+                            detailsHtml += `<div class="tooltip-row"><span>Cost:</span> <span>${formatCurrency(d.exceptionCost)}</span></div>`;
                         }
                     } else if (d.exceptionCost > 0) {
-                        detailsHtml += `<div class="tooltip-row"><span>Cost:</span> <span>${d.exceptionCost.toLocaleString('en-US', { style: 'currency', 'currency': 'USD', maximumFractionDigits: 0 })}</span></div>`;
+                        detailsHtml += `<div class="tooltip-row"><span>Cost:</span> <span>${formatCurrency(d.exceptionCost)}</span></div>`;
                     }
                 }
 
@@ -1053,16 +1412,30 @@ const LocationTab = (() => {
                     `<div class="tooltip-row"><span>Total Shipped:</span> <span>${formatInt(d.actualShipments || 0)}</span></div>` +
                     `${detailsHtml}`
                 );
-                // Use standard tooltip positioning
+
                 tooltip.style("left", (event.pageX + 15) + "px")
                     .style("top", (event.pageY - 28) + "px");
             }
         }
 
-        // --- 6. Draw Conflict Overlay (if needed) ---
+        // --- BRUSH HANDLER ---
+        function onBrushEnd(event) {
+            if (!event.sourceEvent) return;
+
+            const selection = event.selection;
+
+            if (selection) {
+                brushSelection = selection.map(x.invert);
+            } else {
+                brushSelection = null;
+            }
+
+            drawHoldingCostChart();
+        }
+
+        // --- Draw Conflict Overlay (if needed) ---
         if (displayState === "CONFLICT") {
             const rawConflictMessage = simulationError || "Unknown Conflict";
-            console.log("Adding conflict error overlay to chart.");
 
             // Faded background
             g.append("rect")
@@ -1108,16 +1481,14 @@ const LocationTab = (() => {
                 const nextMonth = d3.utcMonth.offset(d, 1);
                 const endPos = xScale(nextMonth < xScale.domain()[1] ? nextMonth : xScale.domain()[1]);
                 const startPos = xScale(d);
-                return (startPos + endPos) / 2; // Center label in the month
+                return (startPos + endPos) / 2;
             })
-            .attr("y", 15) // Position below the axis line
+            .attr("y", 15) 
             .attr("text-anchor", "middle")
             .attr("fill", "currentColor")
             .style("font-size", "12px")
             .text(d3.utcFormat("%b"));
     }
-
-    // REMOVED local positionTooltip function - use global pattern
 
     // -------------------------------------------------------------------------
     // Map Initialization & Update Functions
@@ -1131,7 +1502,7 @@ const LocationTab = (() => {
         if (mapInitialized) return;
         console.log("Initializing map...");
 
-        layoutManager.update(width, height, isBottomRibbonOpen);
+        layoutManager.update(width, height);
 
         // --- 1. Setup Projection and Defs ---
         projection = d3.geoAlbersUsa();
@@ -1152,8 +1523,7 @@ const LocationTab = (() => {
             .attr("d", "M0,-5L10,0L0,5")
             .attr("class", "arrowhead");
 
-        // --- 2. Setup Map Layers (Groups) ---
-        // Order matters for z-index
+        // --- Setup Map Layers (Groups) ---
         const mainMapGroup = svg.append("g").attr("class", "main-map-group");
 
         mainMapGroup.append("g")
@@ -1172,7 +1542,7 @@ const LocationTab = (() => {
         mainMapGroup.append("g").attr("class", "optimal-factory-container");
         mainMapGroup.append("g").attr("class", "city-markers");
 
-        // --- 3. Load GeoJSON and Draw States ---
+        // --- Load GeoJSON and Draw States ---
         d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json").then(us => {
             // Filter out AK (02) and HI (15)
             continentalStatesFeatures = topojson.feature(us, us.objects.states)
@@ -1210,11 +1580,10 @@ const LocationTab = (() => {
             return;
         }
 
-        // console.log(`updateDynamicMapElements: Using dimensions W: ${width.toFixed(0)}, H: ${height.toFixed(0)}`); // Debug
         const svg = d3.select("#location-panel");
-        layoutManager.update(width, height, isBottomRibbonOpen); // Update layout manager
+        layoutManager.update(width, height, isBottomRibbonOpen);
 
-        // --- 1. Update UI Panel Positions ---
+        // --- Update UI Panel Positions ---
         svg.select(".bottom-ribbon-bar")
             .attr("x", layoutManager.getRibbonRect().x)
             .attr("y", layoutManager.getRibbonRect().y)
@@ -1239,10 +1608,9 @@ const LocationTab = (() => {
             .attr("width", layoutManager.getModalRect().width)
             .attr("height", layoutManager.getModalRect().height);
 
-        // --- 2. Update Map Projection ---
+        // --- Update Map Projection ---
         if (mapInitialized && continentalStatesFeatures && projection && path) {
             const mapBounds = layoutManager.getMapBounds();
-            // console.log(`updateDynamicMapElements: Fitting map to [${mapBounds.width.toFixed(0)}, ${mapBounds.height.toFixed(0)}] at y=${mapBounds.y.toFixed(0)}`); // Debug
 
             if (mapBounds.width > 0 && mapBounds.height > 0) {
                 // Fit projection to the available map area
@@ -1254,17 +1622,13 @@ const LocationTab = (() => {
 
                 path.projection(projection);
 
-                // --- 3. Redraw/Update Map Elements ---
+                // --- Redraw/Update Map Elements ---
                 d3.select(".us-map").selectAll("path").attr("d", path);
-
-                // Update radius scale (domain might change, but range is fixed)
                 radiusScale = d3.scaleSqrt().domain([100, 100000]).range([4, 25]).clamp(true);
 
                 updateCityMarkers();
                 updateOptimalFactoryMarker();
                 updateConnectionLines();
-
-                // Chart redraw is handled by the main resize function if needed
 
             } else {
                 console.warn("updateDynamicMapElements skipped map update: mapBounds have zero dimensions.");
@@ -1276,11 +1640,11 @@ const LocationTab = (() => {
     };
 
     /**
-     * Main entry point. Draws the entire Location tab UI, initializes the map,
-     * and sets up the simulation worker.
-     */
+    * Main entry point. Draws the entire Location tab UI, initializes the map,
+    * and sets up the simulation worker.
+    */
     const draw = () => {
-        // --- 0. Pre-flight Checks ---
+
         const locationPanelElement = document.getElementById("location-panel");
         if (!locationPanelElement) {
             console.error("CRITICAL ERROR: SVG element #location-panel not found.");
@@ -1304,30 +1668,27 @@ const LocationTab = (() => {
 
         layoutManager.update(width, height, isBottomRibbonOpen); // Update layout manager FIRST
 
-        // --- 1. Initialize Map (if first time) ---
+        // --- Initialize Map (if first time) ---
         if (!mapInitialized) {
-            svg.selectAll("*").remove(); // Clear any previous state
-            d3.select("body").selectAll(".d3-tooltip").remove(); // Clear old tooltips
-            initializeMap(svg, width, height); // Pass dimensions
+            svg.selectAll("*").remove();
+            d3.select("body").selectAll(".ppi-tooltip, .holding-cost-tooltip, .factory-tooltip, .city-calc-tooltip, .holding-cost-breakdown-tooltip, .ppi-ribbon-tooltip").remove(); // Clear old tooltips
+            initializeMap(svg, width, height);
         }
 
-        // --- 2. Initialize Simulation Worker (if first time) ---
+        // --- Initialize Simulation Worker (if first time) ---
         if (!simulationWorker) {
             try {
                 simulationWorker = new Worker('simulation.worker.js');
 
-                // --- 2a. Worker Message Handler ---
+                // --- Worker Message Handler ---
                 simulationWorker.onmessage = (e) => {
                     const { type, results, message } = e.data;
-                    // console.log("Main received:", type, (isValidationRun ? "(Validation)" : "")); // Debug
                     isSimulationRunning = false;
 
                     if (type === 'complete') {
                         if (!isValidationRun) {
-                            // Store results for non-validation runs
                             simulationResults = results;
                             simulationError = null;
-                            // console.log("onmessage: Success - Stored new results."); // Debug
                         }
                         if (simulationPromiseResolve) simulationPromiseResolve(results);
 
@@ -1338,26 +1699,19 @@ const LocationTab = (() => {
                             console.error("Worker Error:", simulationError);
 
                             if (!isConflictError) {
-                                // Clear results on a general error
                                 simulationResults = null;
-                                // console.log("onmessage: Non-conflict error - Cleared simulationResults."); // Debug
-                            } else {
-                                // On conflict, keep old results to show chart + overlay
-                                // console.log("onmessage: Conflict error - PRESERVING current simulationResults state."); // Debug
                             }
                         }
                         if (simulationPromiseReject) simulationPromiseReject(new Error(message || "Worker error"));
                     }
 
-                    // Clean up promises
                     simulationPromiseResolve = null;
                     simulationPromiseReject = null;
 
-                    // Redraw chart with new state (results or error)
                     if (isBottomRibbonOpen) drawHoldingCostChart();
                 };
 
-                // --- 2b. Worker Error Handler ---
+                // --- Worker Error Handler ---
                 simulationWorker.onerror = (err) => {
                     console.error("Worker onerror:", err);
                     isSimulationRunning = false;
@@ -1389,10 +1743,10 @@ const LocationTab = (() => {
             }
         }
 
-        // --- 3. Draw UI Panels (using <foreignObject>) ---
+        // --- Draw UI Panels (using <foreignObject>) ---
         svg.selectAll("foreignObject").remove(); // Clear old UI
 
-        // --- 3a. Top-Left Controls (Add City) ---
+        // --- Top-Left Controls (Add City) ---
         const controlsRect = layoutManager.getControlsRect();
         const controls = svg.append("foreignObject")
             .attr("class", "location-controls-wrapper")
@@ -1423,15 +1777,15 @@ const LocationTab = (() => {
             .append("input").attr("type", "number").attr("id", "shipment-freq").attr("value", "7").attr("min", "1");
 
         controlsDiv.append("button").attr("class", "loc-control-btn").text("Add City")
-            .on("click", addCity);
+            .on("click", addCity); // This function is now async
         controlsDiv.append("button").attr("class", "loc-control-btn remove-all-btn").text("Remove All")
-            .on("click", removeAllCities);
+            .on("click", removeAllCities); // This function is now async
 
-        // --- 3b. City Info Box (hidden by default) ---
+        // --- City Info Box (hidden by default) ---
         const infoBox = svg.append("foreignObject")
             .attr("width", 200).attr("height", 120)
             .attr("class", "city-info-box")
-            .style("display", "none"); // Hidden
+            .style("display", "none");
 
         const infoDiv = infoBox.append("xhtml:div");
         infoDiv.append("h4").attr("id", "info-header");
@@ -1440,10 +1794,10 @@ const LocationTab = (() => {
         infoDiv.append("button").text("Remove City").attr("id", "info-remove-btn")
             .on("click", function () {
                 const cityToRemove = d3.select(this).attr("data-city-name");
-                removeCity(cityToRemove);
+                removeCity(cityToRemove); // This function is now async
             });
 
-        // --- 3c. Top-Right Summary Panel ---
+        // --- Top-Right Summary Panel ---
         const summaryRect = layoutManager.getSummaryRect();
         const summaryPanel = svg.append("foreignObject")
             .attr("class", "summary-panel-wrapper")
@@ -1455,24 +1809,29 @@ const LocationTab = (() => {
         const summaryDiv = summaryPanel.append("xhtml:div").attr("class", "summary-panel");
 
         const switchGroup = summaryDiv.append("div").attr("class", "inv-button-group");
+
+        // *** MODIFIED CLICK HANDLER ***
         switchGroup.append("button").attr("id", "loc-new-btn").text("New")
             .classed('active', optimizationMode === 'New')
-            .on('click', () => {
+            .on('click', async () => { // Make async
                 if (optimizationMode !== 'New') {
                     optimizationMode = 'New';
                     d3.select("#loc-new-btn").classed('active', true);
                     d3.select("#loc-existing-btn").classed('active', false);
-                    runOptimization();
+                    await runOptimization(); // Await
+                    if (typeof updateUI === 'function') updateUI(); // Force update
                 }
             });
+        // *** MODIFIED CLICK HANDLER ***
         switchGroup.append("button").attr("id", "loc-existing-btn").text("Existing")
             .classed('active', optimizationMode === 'Existing')
-            .on('click', () => {
+            .on('click', async () => { // Make async
                 if (optimizationMode !== 'Existing') {
                     optimizationMode = 'Existing';
                     d3.select("#loc-new-btn").classed('active', false);
                     d3.select("#loc-existing-btn").classed('active', true);
-                    runOptimization();
+                    await runOptimization(); // Await
+                    if (typeof updateUI === 'function') updateUI(); // Force update
                 }
             });
 
@@ -1482,26 +1841,9 @@ const LocationTab = (() => {
         summaryDiv.append("div").attr('class', 'summary-row').html(`<span># Shipments:</span><span id="summary-shipments">0</span>`);
         summaryDiv.append("div").attr('class', 'summary-row summary-total').html(`<span>Total Cost:</span><span id="summary-total-cost">$0</span>`);
         summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Avg Cost/U:</span><span id="summary-avg-cost">$0.00</span>`);
+        summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Local median wage:</span><span id="loc-wage-display">${_currentWageDisplay}</span>`);
 
-        // --- 3d. PPI Chart Modal (hidden by default) ---
-        const modalRect = layoutManager.getModalRect();
-        const ppiModal = svg.append("foreignObject")
-            .attr("id", "ppi-chart-modal")
-            .attr("x", modalRect.x)
-            .attr("y", modalRect.y)
-            .attr("width", modalRect.width)
-            .attr("height", modalRect.height)
-            .style("display", "none"); // Hidden
-
-        const ppiModalDiv = ppiModal.append("xhtml:div").attr("class", "modal-content ppi-modal-content");
-        ppiModalDiv.append("button").attr("class", "close-btn").html("&times;")
-            .on("click", () => d3.select("#ppi-chart-modal").style("display", "none"));
-        ppiModalDiv.append("h4").text("PPI: General Freight Trucking");
-        ppiModalDiv.append("svg").attr("id", "ppi-chart-svg")
-            .attr("viewBox", `0 0 500 280`) // Fixed viewBox for modal content
-            .attr("preserveAspectRatio", "xMidYMid meet");
-
-        // --- 3e. Bottom Ribbon ---
+        // --- Bottom Ribbon ---
         const ribbonRect = layoutManager.getRibbonRect();
         const ribbon = svg.append("foreignObject")
             .attr("class", "bottom-ribbon-bar")
@@ -1532,11 +1874,11 @@ const LocationTab = (() => {
         const holdingLabel = holdingGroup.append("label").attr("for", "loc-holding-cost-input").text("Annual Hold Cost (%)");
         holdingGroup.append("input").attr("type", "number").attr("id", "loc-holding-cost-input").attr("value", 25).attr("step", "0.1")
             .on("change", () => {
-                runOptimization(); // Recalculate summary
-                runDailyInventorySimulation().catch(e => console.warn("Sim failed after cost change:", e)); // Rerun sim
+                runOptimization();
+                runDailyInventorySimulation().catch(e => console.warn("Sim failed after cost change:", e));
             })
             .on("input", function () {
-                d3.select(this).attr("data-user-modified", "true"); // Mark as user-set
+                d3.select(this).attr("data-user-modified", "true");
             });
 
         // Use global tooltip
@@ -1554,21 +1896,82 @@ const LocationTab = (() => {
                 `Est. Breakdown:<br>Capital: ${breakdown.c}%<br>Storage: ${breakdown.s}%<br>Administative: ${breakdown.v}%<br>Risk: ${breakdown.r}%<hr>Total: ${breakdown.t}%`
             );
         })
-            .on("mousemove", (event) => breakdownTooltip // Use standard positioning
+            .on("mousemove", (event) => breakdownTooltip
                 .style("left", (event.pageX + 15) + "px")
                 .style("top", (event.pageY - 28) + "px")
             )
             .on("mouseout", () => breakdownTooltip.style("opacity", 0));
 
-
         const ppiGroup = costInputDiv.append("div").attr("class", "user-input-row");
-        ppiGroup.append("label").attr("for", "loc-ppi-input").text("Producer Price Index");
+        const ppiLabel = ppiGroup.append("label").attr("for", "loc-ppi-input").text("Producer Price Index");
+        const ppiTooltip = createTooltip('ppi-ribbon-tooltip');
+        ppiLabel.on("mouseover", (event) => {
+            ppiTooltip.style("opacity", 1).html(
+                `<strong>Producer Price Index (PPI)</strong><br>` +
+                `Measures the average change in selling prices received by domestic producers. This value directly scales all LTL (Less-Than-Truckload) and FTL (Full-Truckload) shipping costs.`
+            );
+        })
+            .on("mousemove", (event) => ppiTooltip
+                .style("left", (event.pageX + 15) + "px")
+                .style("top", (event.pageY - 28) + "px")
+            )
+            .on("mouseout", () => ppiTooltip.style("opacity", 0));
+
         ppiGroup.append("input").attr("type", "number").attr("id", "loc-ppi-input").attr("value", PPI).attr("step", "0.1")
             .on("change", function () {
                 PPI = +this.value;
-                runOptimization(); // PPI changes shipping costs
+                runOptimization();
             });
 
+        // Attach shared input behaviors (commit semantics, drag-to-change, ctrl-reset)
+        setTimeout(() => {
+            try {
+                const holdingEl = document.getElementById('loc-holding-cost-input');
+                const ppiEl = document.getElementById('loc-ppi-input');
+                const inputs = [holdingEl, ppiEl].filter(Boolean);
+
+                if (inputs.length) {
+                    attachCommitBehavior(inputs, (id, value) => {
+                        if (id === 'loc-holding-cost-input') {
+                            try { refreshHoldingCost(); } catch (e) { /* noop */ }
+                            try { runOptimization(); } catch (e) { /* noop */ }
+                            try { runDailyInventorySimulation().catch(e => console.warn("Sim failed after holding cost commit:", e)); } catch (e) { /* noop */ }
+                        } else if (id === 'loc-ppi-input') {
+                            PPI = value;
+                            try { runOptimization(); } catch (e) { /* noop */ }
+                        }
+                    });
+
+                    inputs.forEach(inp => {
+                        try { enableMiddleDragNumberInput(inp, 1, 1); } catch (e) { /* ignore if unavailable */ }
+
+                        inp.addEventListener('click', function (e) {
+                            if (e.ctrlKey) {
+                                const primaryColor = getComputedStyle(root).getPropertyValue('--primary').trim();
+                                if (this.id === 'loc-holding-cost-input') {
+                                    this.value = 39.9;
+                                    commitInput(this, (id, v) => {
+                                        try { refreshHoldingCost(); } catch (e) { }
+                                        try { runOptimization(); } catch (e) { }
+                                        try { runDailyInventorySimulation().catch(e => console.warn("Sim failed after holding cost ctrl reset:", e)); } catch (e) { }
+                                    });
+                                    this.style.backgroundColor = primaryColor;
+                                    setTimeout(() => { this.style.backgroundColor = ''; }, 200);
+                                } else if (this.id === 'loc-ppi-input') {
+                                    const defaultPpi = 170;
+                                    this.value = defaultPpi;
+                                    commitInput(this, (id, v) => { PPI = v; try { runOptimization(); } catch (e) { } });
+                                    this.style.backgroundColor = primaryColor;
+                                    setTimeout(() => { this.style.backgroundColor = ''; }, 200);
+                                }
+                            }
+                        });
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to attach cost input behaviors:', err);
+            }
+        }, 10);
         const buttonGroup = costInputDiv.append("div").attr("class", "user-input-buttons");
         buttonGroup.append("button").attr("class", "loc-control-btn").attr("id", "show-ppi-chart-btn").text("What is my PPI?")
             .on("click", () => {
@@ -1606,12 +2009,28 @@ const LocationTab = (() => {
         demandDiv.append("div").attr("class", "demand-bar-container")
             .append("div").attr("class", "demand-bar").attr("id", "demand-bar-fill").text("0%");
 
-        // --- 4. Define Nested Helper Functions ---
+
+        // --- PPI Chart Modal (hidden by default) ---
+        const modalRect = layoutManager.getModalRect();
+        const ppiModal = svg.append("foreignObject")
+            .attr("id", "ppi-chart-modal")
+            .attr("x", modalRect.x)
+            .attr("y", modalRect.y)
+            .attr("width", modalRect.width)
+            .attr("height", modalRect.height)
+            .style("display", "none"); // Hidden
+
+        const ppiModalDiv = ppiModal.append("xhtml:div").attr("class", "modal-content ppi-modal-content");
+        ppiModalDiv.append("button").attr("class", "close-btn").html("&times;")
+            .on("click", () => d3.select("#ppi-chart-modal").style("display", "none"));
+        ppiModalDiv.append("h4").text("PPI: General Freight Trucking");
+        ppiModalDiv.append("svg").attr("id", "ppi-chart-svg")
+            .attr("preserveAspectRatio", "xMidYMid meet");
 
         /**
          * Adds a city to the map from the control panel inputs.
          */
-        function addCity() {
+        async function addCity() { // *** MADE ASYNC ***
             const name = d3.select("#city-select").property("value");
             const qty = parseFloat(d3.select("#shipment-qty").property("value"));
             const freq = parseFloat(d3.select("#shipment-freq").property("value"));
@@ -1623,7 +2042,6 @@ const LocationTab = (() => {
                     return;
                 }
 
-                // Calculate annual demand based on working days from the forecast
                 const annualDemand = (qty / freq) * 365.2425;
 
                 cityData.set(name, {
@@ -1634,18 +2052,50 @@ const LocationTab = (() => {
                     freq
                 });
 
-                // Update everything
                 updateCityMarkers();
-                runOptimization();
+                await runOptimization(); // *** AWAIT ***
                 updateDemandCapacityBox();
                 refreshHoldingCost();
                 runDailyInventorySimulation().catch(e => console.warn("Sim failed after adding city:", e));
+
+                // *** NEW *** Force global UI update
+                if (typeof updateUI === 'function') {
+                    updateUI();
+                }
             } else {
                 console.warn("Invalid city/qty/freq.");
             }
         }
 
-        // --- 5. Initial Data Fetch and UI Updates ---
+        /**
+         * Removes a single city from the map and recalculates.
+         */
+        async function removeCity(cityName) { // *** MADE ASYNC ***
+            if (cityName && cityData.delete(cityName)) {
+                d3.select(".city-info-box").style("display", "none");
+
+                if (selectedCityName === cityName) {
+                    selectedCityName = null;
+                }
+
+                updateCityMarkers();
+                await runOptimization(); // *** AWAIT ***
+                updateDemandCapacityBox();
+                refreshHoldingCost();
+                runDailyInventorySimulation().catch(e => console.warn("Sim failed after city removal:", e));
+
+                if (isBottomRibbonOpen) drawHoldingCostChart();
+
+                // *** NEW *** Force global UI update
+                if (typeof updateUI === 'function') {
+                    updateUI();
+                }
+            } else {
+                console.warn("Attempted to remove non-existent city:", cityName);
+            }
+        }
+
+        // --- Initial Data Fetch and UI Updates ---
         fetchDemandData();
         refreshHoldingCost();
         updateDemandCapacityBox();
@@ -1654,12 +2104,12 @@ const LocationTab = (() => {
         // Update map elements only if initialized (prevents errors on first load)
         if (mapInitialized) {
             updateDynamicMapElements();
-            runOptimization(); // Rerun opt after potentially getting dimensions
+            runOptimization(); // This is fine to run without await on first draw
         }
 
         // Redraw simulation chart if ribbon is open
         if (isBottomRibbonOpen) {
-            setTimeout(drawHoldingCostChart, 50); // Draw chart just after UI renders
+            setTimeout(drawHoldingCostChart, 50);
         }
     };
 
@@ -1692,13 +2142,13 @@ const LocationTab = (() => {
                 console.error("Error parsing WD list:", e);
             }
         } else {
-            // Fallback if elements aren't ready (should not happen in prod)
+            // Fallback if elements aren't ready
             console.warn("Using estimated demand. Investment tab elements not found.");
             const daily = parseFloat(document.getElementById('dailyDemand')?.value || 180);
             workingDaysCount = 250;
             const std = 6750;
             p50 = daily * workingDaysCount;
-            const halfWidth = 1.28155 * std; // p90
+            const halfWidth = 1.28155 * std;
             p90 = p50 + halfWidth;
             p10 = Math.max(0, p50 - halfWidth);
 
@@ -1780,8 +2230,8 @@ const LocationTab = (() => {
             totalAllocatedDemand = cities.reduce((sum, city) => sum + city.annualDemand, 0);
 
             // Get location name
-            const lat = optimalFactoryLocation[1].toFixed(3);
-            const lon = optimalFactoryLocation[0].toFixed(3);
+            const lat = optimalFactoryLocation[1].toFixed(2);
+            const lon = optimalFactoryLocation[0].toFixed(2);
             // Check if location is an existing city
             const closestCity = cities.find(c => c.coordinates && optimalFactoryLocation &&
                 c.coordinates[0] === optimalFactoryLocation[0] &&
@@ -1813,8 +2263,6 @@ const LocationTab = (() => {
         d3.select("#summary-avg-cost").text(formatCurrencySmall(avgCostPerUnit));
     }
 
-    // REMOVED local createTooltip function - uses global one
-
     /**
      * Updates the optimal factory marker (the star) on the map.
      */
@@ -1822,11 +2270,8 @@ const LocationTab = (() => {
         if (!projection || !mapInitialized) return;
 
         const container = d3.select(".optimal-factory-container");
-        // Use global tooltip
         const tooltip = createTooltip('factory-tooltip');
         const data = optimalFactoryLocation ? [optimalFactoryLocation] : [];
-
-        // D3 data join
         const marker = container.selectAll(".optimal-factory-marker")
             .data(data);
 
@@ -1839,15 +2284,15 @@ const LocationTab = (() => {
         // Enter + Merge
         marker.enter().append("path")
             .attr("class", "optimal-factory-marker")
-            .attr("d", d3.symbol(d3.symbolStar, 400)) // 400px area
+            .attr("d", d3.symbol(d3.symbolStar, 400))
             .style("opacity", 0)
             .merge(marker)
             .on("mouseover", (event, d) => {
-                const lat = d[1].toFixed(3);
-                const lon = d[0].toFixed(3);
+                const lat = d[1].toFixed(2);
+                const lon = d[0].toFixed(2);
                 tooltip.style("opacity", 1).html(`Optimal Location:<br>${lat}°N, ${Math.abs(lon)}°W`);
             })
-            .on("mousemove", (event) => tooltip // Use standard positioning
+            .on("mousemove", (event) => tooltip
                 .style("left", (event.pageX + 15) + "px")
                 .style("top", (event.pageY - 28) + "px")
             )
@@ -1863,11 +2308,8 @@ const LocationTab = (() => {
     function updateCityMarkers() {
         if (!projection || !mapInitialized || !radiusScale) return;
 
-        // Use global tooltip
         const tooltip = createTooltip('city-calc-tooltip');
         const infoBox = d3.select(".city-info-box");
-
-        // D3 data join
         const markers = d3.select(".city-markers").selectAll(".city-marker")
             .data(Array.from(cityData.values()), d => d.name); // Keyed by name
 
@@ -1880,10 +2322,11 @@ const LocationTab = (() => {
         // Enter + Merge
         markers.enter().append("circle")
             .attr("class", "city-marker")
-            .attr("r", 0) // Start at 0 radius
-            .attr("transform", d => `translate(${projection(d.coordinates)})`) // Initial position
+            .attr("r", 0) 
+            .attr("transform", d => `translate(${projection(d.coordinates)})`)
             .merge(markers)
             .on("mouseover", (event, d) => {
+                
                 // --- MOUSEOVER TOOLTIP LOGIC ---
                 const details = getShipmentDetails(optimalFactoryLocation, d);
                 const costFormat = { style: 'currency', currency: 'USD', maximumFractionDigits: 0 };
@@ -1891,7 +2334,6 @@ const LocationTab = (() => {
                 if (!details || !optimalFactoryLocation) {
                     tooltip.style("opacity", 1)
                         .html(`<strong>${d.name}</strong><br>Calculating...`);
-                    // Use standard positioning
                     tooltip.style("left", (event.pageX + 15) + "px")
                         .style("top", (event.pageY - 28) + "px");
                     return;
@@ -1901,7 +2343,7 @@ const LocationTab = (() => {
                 const avgCostPerUnit = d.annualDemand > 0 ? (annualCost / d.annualDemand) : 0;
                 let shipmentDetailsHtml = "";
 
-                // Build shipment details HTML
+                // Build shipment details
                 if (details.remainderChoice === 'Local') {
                     shipmentDetailsHtml = `<div class="tooltip-row"><span>Shipment:</span> <span>Local (No Cost)</span></div>`;
                 } else if (details.remainderChoice === 'LTL') {
@@ -1915,13 +2357,12 @@ const LocationTab = (() => {
                     const totalFTLCost = details.costFTL + (details.remainderChoice === 'FTL' ? details.costRemainder : 0);
                     shipmentDetailsHtml = `<div class="tooltip-row"><span>FTL Trucks/Ship:</span> <span>${totalFTL}</span></div>` +
                         `<div class="tooltip-row"><span>FTL Cost/Ship:</span> <span>${totalFTLCost.toLocaleString('en-US', costFormat)}</span></div>`;
-
                     if (details.remainderUnits > 0 && details.remainderChoice !== 'FTL' && details.remainderChoice !== 'LTL' && details.remainderChoice !== 'Local') {
                         shipmentDetailsHtml += `<div class="tooltip-row" style="color: yellow;"><span>Warning:</span> <span>Remainder (${details.remainderUnits}u) cost error? Choice: ${details.remainderChoice}</span></div>`;
                     }
                 }
 
-                // Set final tooltip HTML
+                // Set tooltip summary
                 tooltip.style("opacity", 1).html(
                     `<div class="tooltip-header">${d.name} Details</div>` +
                     `<div class="tooltip-row"><span>Est. Road Dist:</span> <span>${details.roadDistance.toFixed(0)} mi</span></div>` +
@@ -1933,29 +2374,28 @@ const LocationTab = (() => {
                     `<div class="tooltip-row"><span>Avg Cost/Unit:</span> <span>${avgCostPerUnit.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span></div>`
                 );
             })
-            .on("mousemove", (event) => tooltip // Use standard positioning
+            .on("mousemove", (event) => tooltip 
                 .style("left", (event.pageX + 15) + "px")
                 .style("top", (event.pageY - 28) + "px")
             )
             .on("mouseout", () => tooltip.style("opacity", 0))
             .on("click", (event, d) => {
                 // --- CLICK HANDLER (INFO BOX) ---
-                event.stopPropagation(); // Prevent map click from firing
+                event.stopPropagation();
 
-                // Toggle selection
                 if (selectedCityName === d.name) {
                     selectedCityName = null;
                 } else {
                     selectedCityName = d.name;
                 }
-                updateCityMarkers(); // Redraw to show selection highlight
-                if (isBottomRibbonOpen) drawHoldingCostChart(); // Redraw chart to highlight city
+                updateCityMarkers(); 
+                if (isBottomRibbonOpen) drawHoldingCostChart();
 
                 if (!projection) return;
                 const projectedCoords = projection(d.coordinates);
                 if (!projectedCoords) return;
 
-                // --- 1. Populate Info Box ---
+                // --- Populate Info Box ---
                 const [x, y] = projectedCoords;
                 const annualCost = calculateTotalCostForCity(optimalFactoryLocation, d);
 
@@ -1964,14 +2404,13 @@ const LocationTab = (() => {
                 infoBox.select("#info-annual-cost").text(`Annual Cost: ${annualCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}`);
                 infoBox.select("#info-remove-btn").attr("data-city-name", d.name);
 
-                // --- 2. Position Info Box ---
+                // --- Position Info Box ---
                 const mainAreaRect = layoutManager.getMainAreaRect();
                 let infoX = x + 15;
                 let infoY = y - 15;
                 const infoBoxWidth = 200;
                 const infoBoxHeight = 120;
 
-                // Keep it on screen
                 if (infoX + infoBoxWidth > mainAreaRect.width) infoX = x - infoBoxWidth - 15;
                 if (infoY < 0) infoY = y + 15;
                 if (infoY + infoBoxHeight > mainAreaRect.height) {
@@ -1983,13 +2422,13 @@ const LocationTab = (() => {
                     .style("display", "block");
             })
             .on("contextmenu", (event, d) => {
-                event.preventDefault(); // Prevent right-click menu
+                event.preventDefault();
                 removeCity(d.name);
             })
-            .style("fill", d => (d.name === selectedCityName) ? "var(--secondary1)" : "var(--secondary2)") // Highlight selected
+            .style("fill", d => (d.name === selectedCityName) ? "var(--secondary1)" : "var(--secondary2)")
             .transition().duration(500)
-            .attr("r", d => radiusScale(d.annualDemand)) // Animate to size
-            .attr("transform", d => `translate(${projection(d.coordinates)})`); // Update position
+            .attr("r", d => radiusScale(d.annualDemand)) 
+            .attr("transform", d => `translate(${projection(d.coordinates)})`);
     }
 
     /**
@@ -1997,14 +2436,12 @@ const LocationTab = (() => {
      */
     function removeCity(cityName) {
         if (cityName && cityData.delete(cityName)) {
-            // console.log("Removing city:", cityName); // Debug
-            d3.select(".city-info-box").style("display", "none"); // Hide info box
+            d3.select(".city-info-box").style("display", "none");
 
             if (selectedCityName === cityName) {
                 selectedCityName = null;
             }
 
-            // Update everything
             updateCityMarkers();
             runOptimization();
             updateDemandCapacityBox();
@@ -2025,20 +2462,26 @@ const LocationTab = (() => {
 
         console.log("Removing all cities");
         cityData.clear();
-
-        // Reset UI
         d3.select(".city-info-box").style("display", "none");
         selectedCityName = null;
 
-        // Update everything
         updateCityMarkers();
-        runOptimization();
+        runOptimization(); // This will call the modified setTimeout and reset stress
         updateDemandCapacityBox();
         refreshHoldingCost();
 
-        // Clear simulation
         simulationResults = null;
         simulationError = null;
+
+        // *** NEW *** Reset UI display and state
+        _localWageStress = 0;
+        lastCheckedLocation = null;
+        _currentWageDisplay = 'N/A';
+        const displayEl = document.getElementById('loc-wage-display');
+        if (displayEl) {
+            displayEl.textContent = _currentWageDisplay;
+        }
+
         if (isBottomRibbonOpen) drawHoldingCostChart();
     }
 
@@ -2052,24 +2495,24 @@ const LocationTab = (() => {
         const cities = Array.from(cityData.values());
 
         // No factory or no cities, remove all lines
-        if (!optimalFactoryLocation || cities.length < 1) {
+        if (!optimalFactoryLocation || cities.length < 2) {
             lineGroup.selectAll(".connection-group").interrupt().remove();
             return;
         }
 
-        // --- 1. Setup Scales based on cost ---
+        // --- Setup Scales based on cost ---
         const costs = cities.map(city => calculateTotalCostForCity(optimalFactoryLocation, city));
         const maxCost = d3.max(costs);
         const widthScale = d3.scaleLinear().domain([0, maxCost || 1]).range([1, 8]).clamp(true); // Line width by cost
         const dashScale = d3.scaleLinear().domain([1, TRUCK_CAPACITY_UNITS * 3]).range([5, 30]).clamp(true); // Dash length by qty
         const gapScale = d3.scaleLinear().domain([1, 30]).range([15, 100]).clamp(true); // Gap length by freq
 
-        // --- 2. D3 Data Join ---
+        // --- D3 Data Join ---
         const groups = lineGroup.selectAll(".connection-group")
-            .data(cities, d => d.name); // Keyed by name
-
+            .data(cities, d => d.name); 
+            
         // Exit
-        groups.exit().selectAll(".connection-line").interrupt(); // Stop animation
+        groups.exit().selectAll(".connection-line").interrupt(); 
         groups.exit().remove();
 
         // Enter
@@ -2077,9 +2520,9 @@ const LocationTab = (() => {
             .attr("class", "connection-group");
 
         enterGroups.append("line").attr("class", "connection-line-bg"); // Solid background line
-        enterGroups.append("line").attr("class", "connection-line");    // Animated dashed line
+        enterGroups.append("line").attr("class", "connection-line"); // Animated dashed line
 
-        // --- 3. Update (Enter + Merge) ---
+        // --- Update (Enter + Merge) ---
         enterGroups.merge(groups).each(function (d) {
             const group = d3.select(this);
             const startPoint = projection(optimalFactoryLocation);
@@ -2091,7 +2534,7 @@ const LocationTab = (() => {
             }
 
             // Shorten line so it points to the edge of the circle, not the center
-            const radius = radiusScale(d.annualDemand) + 3; // +3px padding
+            const radius = radiusScale(d.annualDemand) + 3;
             const dx = endPoint[0] - startPoint[0];
             const dy = endPoint[1] - startPoint[1];
             const lineLength = Math.sqrt(dx * dx + dy * dy);
@@ -2123,25 +2566,61 @@ const LocationTab = (() => {
                 .attr("x1", startPoint[0]).attr("y1", startPoint[1])
                 .attr("x2", newEndPointX).attr("y2", newEndPointY)
                 .style("stroke-width", strokeWidth)
-                .attr("stroke-dasharray", `${dashScale(d.qty)} ${gapScale(d.freq)}`)
                 .attr("marker-end", "url(#arrowhead)");
 
-            // --- 4. Start/Restart Animation ---
-            animLine.interrupt(); // Stop any existing transition
+            // --- Start/Restart Animation ---
+            animLine.interrupt();
 
-            function repeatAnimation() {
-                if (!animLine.node()?.isConnected) return; // Stop if element is removed
+            // Calculate pixel length for animation
+            const pixelLength = Math.sqrt(dx * dx + dy * dy);
 
-                const totalLength = dashScale(d.qty) + gapScale(d.freq);
-                animLine.attr("stroke-dashoffset", totalLength)
-                    .transition()
-                    .ease(d3.easeLinear)
-                    .duration(Math.max(1, d.freq) * 100) // Duration based on freq
-                    .attr("stroke-dashoffset", 0)
-                    .on("end", repeatAnimation); // Loop
+            // Define dash pattern
+            const dashArray = `${dashScale(d.qty)} ${gapScale(d.freq)}`;
+            const dashTotal = dashScale(d.qty) + gapScale(d.freq);
+
+            // Dynamic growth duration
+            const growDuration = Math.max(800, Math.min(4000, pixelLength * 2));
+
+            // Initialize dashed line collapsed at start
+            animLine
+            .attr("stroke-dasharray", dashArray)
+            .attr("stroke-dashoffset", 0) // dash visible immediately
+            .attr("x2", startPoint[0])
+            .attr("y2", startPoint[1]);
+
+            // Compute target position
+            const targetX = newEndPointX;
+            const targetY = newEndPointY;
+
+            // Start simultaneous animations
+            animateLine(animLine, targetX, targetY, growDuration, dashTotal);
+
+            function animateLine(line, targetX, targetY, growDuration, dashTotal) {
+            // 1️⃣ Animate the line length (x2,y2 grows from start → end)
+            line
+                .transition("grow")
+                .duration(growDuration)
+                .attr("x2", targetX)
+                .attr("y2", targetY)
+                .on("end", function() {
+                // Continue dash motion once fully extended
+                repeatMotion(line, dashTotal);
+                });
+
+            // 2️⃣ Animate dash motion *concurrently* with length growth
+            repeatMotion(line, dashTotal);
             }
 
-            repeatAnimation();
+            function repeatMotion(line, dashTotal) {
+            if (!line.node()?.isConnected) return;
+            line
+                .attr("stroke-dashoffset", dashTotal)
+                .transition("move")
+                .ease(d3.easeLinear)
+                .duration(600)
+                .attr("stroke-dashoffset", 0)
+                .on("end", () => repeatMotion(line, dashTotal));
+            }
         });
     }
 
@@ -2202,7 +2681,7 @@ const LocationTab = (() => {
                 remainderChoice = (validLtlCost <= validFtlCost) ? "LTL" : "FTL";
             }
         } else {
-            remainderChoice = "None"; // No remainder
+            remainderChoice = "None";
         }
 
         return {
@@ -2247,33 +2726,94 @@ const LocationTab = (() => {
     }
 
     /**
-     * Resize function called by the global resize handler.
-     */
+        * Resize function called by the global resize handler.
+        */
     const resize = () => {
-        // console.log("LocationTab.resize() called."); // Debug
-        updateDynamicMapElements(); // This updates layoutManager and map elements
+        updateDynamicMapElements();
 
-        // --- FIX: Delay chart redraw until *next event loop task* after DOM update ---
-        requestAnimationFrame(() => {
-            // Further delay to ensure layout reflow is complete
-            setTimeout(() => {
-                if (isBottomRibbonOpen && document.querySelector('.tab-btn.active')?.dataset.tab === 'location') {
-                    // console.log("LocationTab.resize: Redrawing bottom chart after timeout in rAF."); // Debug
-                    try {
-                        drawHoldingCostChart();
-                    } catch (e) {
-                        console.error("Error redrawing holding cost chart on resize:", e);
-                    }
+        // Delay chart redraw slightly to ensure layout reflow is complete after map resize.
+        setTimeout(() => {
+            if (isBottomRibbonOpen && document.querySelector('.tab-btn.active')?.dataset.tab === 'location') {
+                try {
+                    drawHoldingCostChart();
+                } catch (e) {
+                    console.error("Error redrawing holding cost chart on resize:", e);
                 }
-            }, 0); // Timeout 0 pushes it to the next task queue
-        });
-        // --- END FIX ---
+            }
+        }, 400);
     };
+
+    /**
+     * Sets the cityData from saved configuration.
+     * @param {Array} dataArray - Array of [name, data] pairs.
+     */
+    const setCityData = (dataArray) => {
+        cityData.clear();
+        dataArray.forEach(([name, data]) => cityData.set(name, data));
+        updateCityMarkers();
+        runOptimization();
+        updateDemandCapacityBox();
+        refreshHoldingCost();
+        if (simulationWorker) {
+            runDailyInventorySimulation().catch(e => console.warn("Sim failed after loading cityData:", e));
+        }
+    };
+
+    /**
+     * Gets the city data as an array of [name, data] pairs.
+     * @returns {Array} Array of [name, data] pairs.
+     */
+    const getCityData = () => Array.from(cityData.entries());
+
+    /**
+         * Gets the current overtime stress factor based on simulation results.
+         * This uses a logistic function where the CV penalizes the input,
+         * which is then fed into a static, extended S-curve.
+         * @returns {number} Overtime stress factor (0-1).
+         */
+    const getOvertimeStress = () => {
+        if (!simulationResults || simulationResults.length === 0) return 0;
+
+        const N = simulationResults.length; // Total days
+
+        const k_exceptions = simulationResults.filter(d => d.isExceptionDay).length; // Exception days
+
+        if (k_exceptions === 0) return 0.0; // No exceptions, no stress
+
+        const measuredRatio = k_exceptions / N; 
+
+        // Get CV from the global stDevPercentage (defined in QualityYield.js)
+        const cv = window.stDevPercentage || 0.15;
+        const cv_clamped = Math.max(0.0, cv); // Clamp CV for safety
+
+        //    The CV penalizes the input by amplifying the measured ratio.
+        const effectiveRatio = measuredRatio * (1 + cv_clamped);
+
+        // Define the static, extended S-curve parameters
+        const k_steepness = 20; 
+        const x0_midpoint = 0.20;
+
+        // Calculate the stress using the Logistic function:
+        const stress = 1 / (1 + Math.exp(-k_steepness * (effectiveRatio - x0_midpoint)));
+
+        return stress;
+    };
+
+    // Expose functions globally
+    if (typeof window !== 'undefined') {
+        window.setCityData = setCityData;
+        window.getCityData = getCityData;
+    }
 
     // Return the public interface
     return {
         draw: draw,
-        resize: resize // Expose the resize function
+        resize: resize,
+        getCityData: getCityData,
+        getOvertimeStress: getOvertimeStress,
+        getLocalWageStress: () => _localWageStress,
+        runOptimization: runOptimization, // Expose full optimization
+        updateLocalWageStress: updateLocalWageStress // Expose stress-only update
     };
 
 })();
