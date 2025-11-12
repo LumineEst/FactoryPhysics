@@ -23,6 +23,15 @@ const EfficiencyTab = (function () {
         const finInputs = { laborCost: +laborCostInput.value };
         const results = calculateMetrics(opInputs, finInputs);
 
+        // --- PRE-CALCULATIONS FOR BLINKING ---
+        const bottleneckCycleTime = d3.max(results.workstations, d => d.cycleTime) || 0;
+        const normalStroke = getComputedStyle(root).getPropertyValue('--accent').trim(); // Accent color (The "normal" stroke)
+        const dangerStroke = getComputedStyle(root).getPropertyValue('--failure-color').trim(); // Failure color (Magenta)
+        const defaultPieBgFill = getComputedStyle(root).getPropertyValue('--white').trim(); // Pie Text Background default fill is WHITE
+        const normalStrokeWidth = 1.5;
+        const blinkStrokeWidth = 3.5;
+        // --- END PRE-CALCULATIONS ---
+
         // --- INITIAL SETUP ---
         const svg = d3.select("#efficiency-panel");
         const { clientWidth: panelWidth, clientHeight: panelHeight } = document.getElementById('svg-container');
@@ -135,16 +144,74 @@ const EfficiencyTab = (function () {
 
             const pieTextBg = pieGroup.selectAll("circle.pie-text-bg").data([null]).join("circle")
                 .attr("class", "pie-text-bg")
-                .attr("r", pieRadius * 0.33);
+                .attr("r", pieRadius * 0.33)
+                .attr("fill", defaultPieBgFill); // Set default fill here
 
             const pieText = pieGroup.selectAll("text.pie-text").data([productivePercentage]).join("text")
                 .attr("class", "pie-text")
                 .attr("dy", "0.35em")
                 .style("font-size", `${Math.max(Math.min(pieRadius * 0.2, rowHeight * 0.06), 8)}px`);
 
-            // ***** UPDATED animateValue CALL *****
             animateValue(pieText.node(), productivePercentage, isResize ? 0 : 800, val => `${val.toFixed(1)}%`);
             pieText.exit().remove();
+
+            const sliceSelection = pieGroup.selectAll("path.slice");
+            const pieTextBgSelection = pieGroup.selectAll("circle.pie-text-bg");
+
+            const bottleneckCycleTime = d3.max(results.workstations, d => d.cycleTime) || 0;
+            const isBottleneck = (ws.cycleTime || 0) === bottleneckCycleTime && bottleneckCycleTime > 0;
+
+            // Use the CSS class for blinking
+            sliceSelection.classed("bottleneck-pie-blink", isBottleneck);
+            pieTextBgSelection.classed("bottleneck-pie-blink", isBottleneck);
+
+            // Add hover/tooltips for pie slices
+            slicesMerged
+                .style("cursor", "pointer")
+                .on("mouseover", function (event, d) {
+                    // pop-out: translate slice outward along its centroid
+                    try {
+                        const centroid = arc.centroid(d);
+                        const angle = Math.atan2(centroid[1], centroid[0]);
+                        const offset = Math.max(pieRadius * 0.08, 6);
+                        const tx = Math.cos(angle) * offset;
+                        const ty = Math.sin(angle) * offset;
+                        d3.select(this).transition().duration(200).attr("transform", `translate(${tx},${ty})`);
+                    } catch (e) {
+                        // fallback: small scale
+                        d3.select(this).transition().duration(200).attr("transform", `scale(1.03)`);
+                    }
+                    tooltip.style("opacity", 1);
+                    const idleMinutesLocal = Math.max(0, totalOpMinutes - productiveMinutes);
+                    const content = `
+                        <div style="font-weight:bold; margin-bottom:5px; text-align:center; border-bottom:1px solid ${getComputedStyle(root).getPropertyValue('--white')}; padding-bottom:4px;">Workstation ${ws.id}</div>
+                        <strong>${d.label}:</strong> ${d.value.toFixed(1)}%<br>
+                        <strong>Productive Minutes:</strong> ${productiveMinutes.toFixed(1)} min<br>
+                        <strong>Idle Minutes:</strong> ${idleMinutesLocal.toFixed(1)} min
+                    `;
+                    tooltip.html(content)
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mousemove", (event) => {
+                    tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", function (event, d) {
+                    // revert transform
+                    d3.select(this).transition().duration(200).attr("transform", null);
+                    tooltip.style("opacity", 0);
+                });
+
+            // NO NEED FOR D3 TRANSITIONS HERE, CSS HANDLES IT
+            // You can keep the normal transitions for resize/initial draw if they are used elsewhere:
+            if (!isBottleneck) {
+                sliceSelection.transition().duration(isResize ? 0 : 500)
+                    .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim())
+                    .attr("stroke-width", 1.5);
+                pieTextBgSelection.transition().duration(isResize ? 0 : 500)
+                    .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim())
+                    .attr("stroke-width", 1.5);
+            }
         });
 
         // --- IDLE TIME CLOCKS ---
@@ -209,61 +276,17 @@ const EfficiencyTab = (function () {
             wsHand.exit().remove();
 
             const clockFace = clockGroup.select("circle.clock-face");
-            clockFace.interrupt("blink");
+            const clockPin = clockGroup.select("circle.clock-center-pin");
+
+            // Set clock face/pin initial colors (since CSS defaults are not using accent/danger)
+            clockFace.attr("stroke", normalStroke);
+            clockPin.attr("fill", normalStroke);
+
+            // --- IDLE TIME BLINKING LOGIC (CLOCK) ---
             if (idleHours > 12) {
-                function blink() {
-                    clockFace.transition("blink").duration(700)
-                        .attr("stroke", getComputedStyle(root).getPropertyValue('--failure-color').trim())
-                        .attr("stroke-width", 3.5)
-                        .transition("blink").duration(700)
-                        .attr("stroke-width", 1.5)
-                        .on("end", blink);
-                }
-                blink();
+                clockFace.classed("over-idle-clock-blink", true);
             } else {
-                clockFace.transition().duration(isResize ? 0 : 500)
-                    .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim())
-                    .attr("stroke-width", Math.max(clockRadius * 0.04, 1));
-            }
-
-            const pieGroup = d3.select(this).select("g.pie");
-            const sliceSelection = pieGroup.selectAll("path.slice");
-            const pieTextBgSelection = pieGroup.selectAll("circle.pie-text-bg");
-
-            sliceSelection.interrupt("blink");
-            pieTextBgSelection.interrupt("blink");
-
-            const bottleneckCycleTime = d3.max(results.workstations, d => d.cycleTime) || 0;
-            const normalStroke = getComputedStyle(root).getPropertyValue('--accent').trim();
-            const dangerStroke = getComputedStyle(root).getPropertyValue('--failure-color').trim();
-            const normalStrokeWidth = 1.5;
-            const blinkStrokeWidth = 3.5;
-
-            if ((ws.cycleTime || 0) === bottleneckCycleTime && bottleneckCycleTime > 0) {
-                function blinkSlices() {
-                    sliceSelection.transition("blink").duration(700)
-                        .attr("stroke", dangerStroke)
-                        .attr("stroke-width", blinkStrokeWidth)
-                        .transition("blink").duration(700)
-                        .attr("stroke", normalStroke)
-                        .attr("stroke-width", normalStrokeWidth)
-                        .on("end", blinkSlices);
-
-                    pieTextBgSelection.transition("blink").duration(700)
-                        .attr("stroke", dangerStroke)
-                        .attr("stroke-width", blinkStrokeWidth)
-                        .transition("blink").duration(700)
-                        .attr("stroke", normalStroke)
-                        .attr("stroke-width", normalStrokeWidth);
-                }
-                blinkSlices();
-            } else {
-                sliceSelection.transition().duration(isResize ? 0 : 500)
-                    .attr("stroke", normalStroke)
-                    .attr("stroke-width", normalStrokeWidth);
-                pieTextBgSelection.transition().duration(isResize ? 0 : 500)
-                    .attr("stroke", normalStroke)
-                    .attr("stroke-width", normalStrokeWidth);
+                clockFace.classed("over-idle-clock-blink", false);
             }
 
             const idleText = clockGroup.selectAll("text.clock-idle-text").data([idleHours]).join("text")
@@ -272,6 +295,24 @@ const EfficiencyTab = (function () {
                 .style("font-size", `${Math.max(Math.min(clockRadius * 0.4, rowHeight * 0.06), 10)}px`)
                 .text(d => `${d.toFixed(1)}h Idle`);
             idleText.exit().remove();
+
+            // Make clock interactive: show exact idle minutes/hours on hover
+            clockGroup.style("cursor", "default");
+            clockGroup.selectAll(".clock-face, .clock-hand, .clock-center-pin, .clock-idle-text")
+                .style("cursor", "pointer")
+                .on("mouseover", function (event) {
+                    tooltip.style("opacity", 1);
+                    const content = `
+                        <div style="font-weight:bold; margin-bottom:5px; text-align:center; border-bottom:1px solid ${getComputedStyle(root).getPropertyValue('--white')}; padding-bottom:4px;">Workstation ${ws.id} Idle Time</div>
+                        <strong>Idle Hours:</strong> ${idleHours.toFixed(1)} h<br>
+                        <strong>Idle Minutes:</strong> ${idleMinutes.toFixed(1)} min
+                    `;
+                    tooltip.html(content)
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mousemove", (event) => tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px"))
+                .on("mouseout", function () { tooltip.style("opacity", 0); });
         });
 
         // --- TOP ROW SUMMARY PANEL ---
@@ -338,8 +379,36 @@ const EfficiencyTab = (function () {
             .attr("dy", "0.35em")
             .style("font-size", `${Math.max(Math.min(pieRadius * 0.2, rowHeight * 0.06), 10)}px`);
 
-        // ***** UPDATED animateValue CALL *****
         animateValue(summaryPieText.node(), results.averageEfficiency, isResize ? 0 : 800, val => `${val.toFixed(1)}%`);
+
+        // Hover tooltip for summary pie
+        pieGroup.selectAll("path.summary-pie-slice")
+            .style("cursor", "pointer")
+            .on("mouseover", function (event, d) {
+                // pop-out summary slice
+                try {
+                    const centroid = arcLine.centroid(d);
+                    const angle = Math.atan2(centroid[1], centroid[0]);
+                    const offset = Math.max(pieRadius * 0.08, 6);
+                    const tx = Math.cos(angle) * offset;
+                    const ty = Math.sin(angle) * offset;
+                    d3.select(this).transition().duration(200).attr("transform", `translate(${tx},${ty})`);
+                } catch (e) {
+                    d3.select(this).transition().duration(200).attr("transform", `scale(1.03)`);
+                }
+                tooltip.style("opacity", 1);
+                const content = `
+                    <div style="font-weight:bold; margin-bottom:5px; text-align:center; border-bottom:1px solid ${getComputedStyle(root).getPropertyValue('--white')}; padding-bottom:4px;">Overall Efficiency</div>
+                    <strong>Average Efficiency:</strong> ${results.averageEfficiency.toFixed(1)}%<br>
+                    <strong>Total Idle Time:</strong> ${(results.totalIdleTime/60).toFixed(1)} h<br>
+                    <strong>Bottleneck Cycle Time:</strong> ${bottleneckCycleTime.toFixed(1)} min
+                `;
+                tooltip.html(content)
+                    .style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+            })
+            .on("mousemove", (event) => tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px"))
+            .on("mouseout", function () { d3.select(this).transition().duration(200).attr("transform", null); tooltip.style("opacity", 0); });
 
         // --- SUMMARY CHARTS (Box Plot & Bar Chart) ---
         const colWidth = summaryWidth / 3;
@@ -348,7 +417,7 @@ const EfficiencyTab = (function () {
         const chartAreaWidth = colWidth * 1.1;
         const labelFontSize = Math.min(summaryHeight * 0.06, 30);
         const labelSpacing = labelFontSize;
-        const idleValueOffset = Math.max(20, Math.round(labelFontSize * 2));
+        const textSpacing = labelFontSize * 1.75; // Dynamic spacing based on font size
         const chartContainerY = -summaryHeight / 2 + titleAreaHeight + chartAreaHeight / 2;
 
         // --- BOX PLOT (Balance Loss per Cycle) ---
@@ -358,7 +427,6 @@ const EfficiencyTab = (function () {
             .attr("class", "box-plot-group")
             .attr("transform", `translate(${-colWidth * 0.8}, ${chartContainerY})`);
 
-        const bottleneckCycleTime = d3.max(results.workstations, d => d.cycleTime) || 0;
         const idleTimesPerCycle = results.workstations.map(ws => bottleneckCycleTime - ws.cycleTime);
         const q1 = d3.quantile(idleTimesPerCycle, 0.25) || 0,
             median = d3.quantile(idleTimesPerCycle, 0.5) || 0,
@@ -426,7 +494,7 @@ const EfficiencyTab = (function () {
         const barChartMargin = { top: 10, right: 5, bottom: 35, left: 40 };
         const barChartInnerWidth = chartAreaWidth - barChartMargin.left - barChartMargin.right;
         const barChartInnerHeight = chartAreaHeight - barChartMargin.top - barChartMargin.bottom;
-
+        
         const barChartGroup = summary.selectAll("g.bar-chart-group").data([null]).join("g")
             .attr("class", "bar-chart-group")
             .attr("transform", `translate(${colWidth * 0.8 - chartAreaWidth / 2 + barChartMargin.left}, ${chartContainerY - chartAreaHeight / 2 + barChartMargin.top})`);
@@ -440,37 +508,66 @@ const EfficiencyTab = (function () {
             .domain([0, d3.max(results.workstations, d => d.dailyIdleTime) * 1.1 || 1])
             .range([barChartInnerHeight, 0]);
 
-        barChartGroup.selectAll(".bar-chart-axis.x-axis").data([null]).join("g")
-            .attr("class", "bar-chart-axis x-axis")
+        // X-axis for bar chart
+        barChartGroup.selectAll(".x-axis").data([null]).join("g")
+            .attr("class", "x-axis")
             .attr("transform", `translate(0, ${barChartInnerHeight})`)
             .call(d3.axisBottom(xBar).tickSizeOuter(0))
             .selectAll("text")
             .style("font-size", `${labelFontSize / 1.5}px`)
+            .style("font-weight", "600")
             .attr("transform", "rotate(-45)")
             .attr("text-anchor", "end")
             .attr("dx", "-0.8em")
             .attr("dy", "0.15em");
 
-        barChartGroup.selectAll(".bar-chart-axis.y-axis").data([null]).join("g")
-            .attr("class", "bar-chart-axis y-axis")
+        // Y-axis for bar chart
+        barChartGroup.selectAll(".y-axis").data([null]).join("g")
+            .attr("class", "y-axis")
             .call(d3.axisLeft(yBar).ticks(4).tickFormat(d => `${(d / 60).toFixed(1)}h`).tickSizeOuter(0))
             .selectAll("text")
-            .style("font-size", `${labelFontSize / 1.5}px`);
+            .style("font-size", `${labelFontSize / 1.5}px`)
+            .style("font-weight", "600");
 
-        const barSelection = barChartGroup.selectAll("rect.bar-chart-bar")
+        // Bar chart bars with sequential animation
+        const barSelection = barChartGroup.selectAll("rect.bar")
             .data(results.workstations, d => d.id);
 
-        const barsEnter = barSelection.enter().append("rect")
-            .attr("class", "bar-chart-bar")
+        const enterSelection = barSelection.enter().append("rect")
+            .attr("class", "bar")
             .attr("x", d => xBar(d.id))
             .attr("width", xBar.bandwidth())
             .attr("y", yBar(0))
             .attr("height", 0)
+            .style("fill", "url(#box-gradient)")
+            .attr("stroke", getComputedStyle(root).getPropertyValue('--accent'))
+            .attr("stroke-width", 1.8)
             .on("mouseover", function (event, d) {
                 tooltip.style("opacity", 1);
                 d3.select(this).style("opacity", 0.8);
             })
             .on("mousemove", function (event, d) {
+                const tooltipContent = `
+                    <div style="font-weight:bold; margin-bottom: 5px; text-align:center; border-bottom: 1px solid ${getComputedStyle(root).getPropertyValue('--white')}; padding-bottom: 4px;">Workstation ${d.id}</div>
+                    <strong>Daily Idle Time:</strong> ${(d.dailyIdleTime / 60).toFixed(1)} hours<br>
+                    <strong>Idle Time:</strong> ${d.dailyIdleTime.toFixed(1)} minutes<br>
+                    <strong>Efficiency:</strong> ${d.efficiency.toFixed(1)}%
+                `;
+                tooltip.html(tooltipContent)
+                    .style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+            })
+            .on("mouseout", function() {
+                tooltip.style("opacity", 0);
+                d3.select(this).style("opacity", 1);
+            });
+
+        const updateSelection = barSelection
+            .on("mouseover", function(event, d) {
+                tooltip.style("opacity", 1);
+                d3.select(this).style("opacity", 0.8);
+            })
+            .on("mousemove", function(event, d) {
                 const tooltipContent = `
                     <div style="font-weight:bold; margin-bottom: 5px; text-align:center; border-bottom: 1px solid ${getComputedStyle(root).getPropertyValue('--white')}; padding-bottom: 4px;">Workstation ${d.id}</div>
                     <strong>Daily Idle Time:</strong> ${(d.dailyIdleTime / 60).toFixed(2)} hours<br>
@@ -481,21 +578,64 @@ const EfficiencyTab = (function () {
                     .style("left", (event.pageX + 15) + "px")
                     .style("top", (event.pageY - 28) + "px");
             })
-            .on("mouseout", function () {
+            .on("mouseout", function() {
                 tooltip.style("opacity", 0);
                 d3.select(this).style("opacity", 1);
             });
 
-        barSelection.merge(barsEnter)
-            .transition().duration(isResize ? 0 : 500).ease(d3.easeQuadInOut)
+        const exitSelection = barSelection.exit();
+
+        // Proper enter/update/exit flow for bars so they don't reset on layout changes
+        // UPDATE existing bars (instant on resize)
+        barSelection
             .attr("x", d => xBar(d.id))
             .attr("width", xBar.bandwidth())
+            .transition().duration(isResize ? 0 : 500).ease(d3.easeQuadInOut)
             .attr("y", d => yBar(d.dailyIdleTime))
             .attr("height", d => barChartInnerHeight - yBar(d.dailyIdleTime));
 
-        barSelection.exit().remove();
+        // ENTER new bars (instant on resize)
+        const barsEnter = barSelection.enter().append("rect")
+            .attr("class", "bar")
+            .attr("x", d => xBar(d.id))
+            .attr("width", xBar.bandwidth())
+            // Start new bars at zero height so they animate from 0 on initial draw
+            .attr("y", yBar(0))
+            .attr("height", 0)
+            .style("fill", "url(#box-gradient)")
+            .attr("stroke", getComputedStyle(root).getPropertyValue('--accent'))
+            .attr("stroke-width", 1.8)
+            .on("mouseover", function(event, d) {
+                tooltip.style("opacity", 1);
+                d3.select(this).style("opacity", 0.8);
+            })
+            .on("mousemove", function(event, d) {
+                const tooltipContent = `
+                    <div style="font-weight:bold; margin-bottom: 5px; text-align:center; border-bottom: 1px solid ${getComputedStyle(root).getPropertyValue('--white')}; padding-bottom: 4px;">Workstation ${d.id}</div>
+                    <strong>Daily Idle Time:</strong> ${(d.dailyIdleTime / 60).toFixed(1)} hours<br>
+                    <strong>Idle Time:</strong> ${d.dailyIdleTime.toFixed(1)} minutes<br>
+                    <strong>Efficiency:</strong> ${d.efficiency.toFixed(1)}%
+                `;
+                tooltip.html(tooltipContent)
+                    .style("left", (event.pageX + 15) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+            })
+            .on("mouseout", function() {
+                tooltip.style("opacity", 0);
+                d3.select(this).style("opacity", 1);
+            });
+
+        // Animate entering bars up to their final height (instant on resize)
+        barsEnter.transition().duration(isResize ? 0 : 500).ease(d3.easeQuadInOut)
+            .attr("y", d => yBar(d.dailyIdleTime))
+            .attr("height", d => barChartInnerHeight - yBar(d.dailyIdleTime));
+
+        // EXIT removed bars: fade out then remove
+        exitSelection.remove();
 
         // --- SUMMARY LABELS ---
+
+        // Center Label Group
         const centerLabelGroup = summary.selectAll("g.center-label-group").data([results]).join("g")
             .attr("class", "center-label-group")
             .attr("transform", `translate(0, ${-summaryHeight / 2.35})`);
@@ -509,20 +649,21 @@ const EfficiencyTab = (function () {
             .attr("class", "total-idle-text-group")
             .attr("transform", `translate(0, ${labelSpacing})`);
 
-        totalIdleTextGroup.selectAll("text.summary-label").data(["Total Idle Time: "]).join("text")
-            .attr("class", "summary-label")
-            .attr("x", -idleValueOffset)
-            .style("font-size", `${labelFontSize}px`)
-            .text(d => d);
-
-        const idleTimeValue = totalIdleTextGroup.selectAll("text.summary-value").data([results]).join("text")
-            .attr("class", "summary-value")
-            .attr("x", idleValueOffset * 1.65)
+        const totalIdleText = totalIdleTextGroup.selectAll("text.summary-text").data([results]).join("text")
+            .attr("class", "summary-text")
+            .attr("x", 0)
             .style("font-size", `${labelFontSize}px`);
 
-        // ***** UPDATED animateValue CALL *****
-        animateValue(idleTimeValue.node(), results.totalIdleTime / 60, isResize ? 0 : 800, val => `${val.toFixed(1)}h`);
+        totalIdleText.selectAll("tspan.summary-label").data(["Total Idle Time: "]).join("tspan")
+            .attr("class", "summary-label")
+            .text(d => d);
 
+        const totalIdleValueTspan = totalIdleText.selectAll("tspan.summary-value").data([results]).join("tspan")
+            .attr("class", "summary-value");
+
+        animateValue(totalIdleValueTspan.node(), results.totalIdleTime / 60, isResize ? 0 : 800, val => `${val.toFixed(1)}h`);
+
+        // Left Box Plot Label Group
         const boxLabelGroup = summary.selectAll("g.box-label-group").data([results]).join("g")
             .attr("class", "box-label-group")
             .attr("transform", `translate(${-colWidth * 0.9}, ${-summaryHeight / 2.35})`);
@@ -536,20 +677,21 @@ const EfficiencyTab = (function () {
             .attr("class", "idle-time-cv-text-group")
             .attr("transform", `translate(0, ${labelSpacing})`);
 
-        idleTimeCVTextGroup.selectAll("text.summary-label").data(["Idle Time CV: "]).join("text")
-            .attr("class", "summary-label")
-            .attr("x", -idleValueOffset * 0.75)
-            .style("font-size", `${labelFontSize}px`)
-            .text(d => d);
-
-        const idleTimeCvValue = idleTimeCVTextGroup.selectAll("text.summary-value").data([results]).join("text")
-            .attr("class", "summary-value")
-            .attr("x", idleValueOffset * 1.75)
+        const cvText = idleTimeCVTextGroup.selectAll("text.summary-text").data([results]).join("text")
+            .attr("class", "summary-text")
+            .attr("x", 0)
             .style("font-size", `${labelFontSize}px`);
 
-        // ***** UPDATED animateValue CALL *****
-        animateValue(idleTimeCvValue.node(), results.idleTimeCv, isResize ? 0 : 800, val => `${val.toFixed(1)}%`);
+        cvText.selectAll("tspan.summary-label").data(["Idle Time CV: "]).join("tspan")
+            .attr("class", "summary-label")
+            .text(d => d);
 
+        const cvValueTspan = cvText.selectAll("tspan.summary-value").data([results]).join("tspan")
+            .attr("class", "summary-value");
+
+        animateValue(cvValueTspan.node(), results.idleTimeCv, isResize ? 0 : 800, val => `${val.toFixed(1)}%`);
+
+        // Right Bar Chart Label Group
         const barLabelGroup = summary.selectAll("g.bar-label-group").data([results]).join("g")
             .attr("class", "bar-label-group")
             .attr("transform", `translate(${colWidth * 0.9}, ${-summaryHeight / 2.35})`);
@@ -563,19 +705,19 @@ const EfficiencyTab = (function () {
             .attr("class", "balance-loss-text-group")
             .attr("transform", `translate(0, ${labelSpacing})`);
 
-        balanceLossTextGroup.selectAll("text.summary-label").data(["Workstation Balance Loss: "]).join("text")
-            .attr("class", "summary-label")
-            .attr("x", -idleValueOffset * 0.75)
-            .style("font-size", `${labelFontSize}px`)
-            .text(d => d);
-
-        const balanceDelayValue = balanceLossTextGroup.selectAll("text.summary-value").data([results]).join("text")
-            .attr("class", "summary-value")
-            .attr("x", idleValueOffset * 3.2)
+        const balanceText = balanceLossTextGroup.selectAll("text.summary-text").data([results]).join("text")
+            .attr("class", "summary-text")
+            .attr("x", 0)
             .style("font-size", `${labelFontSize}px`);
 
-        // ***** UPDATED animateValue CALL *****
-        animateValue(balanceDelayValue.node(), results.balanceDelay, isResize ? 0 : 800, val => `${val.toFixed(1)}%`);
+        balanceText.selectAll("tspan.summary-label").data(["Workstation Balance Loss: "]).join("tspan")
+            .attr("class", "summary-label")
+            .text(d => d);
+
+        const balanceValueTspan = balanceText.selectAll("tspan.summary-value").data([results]).join("tspan")
+            .attr("class", "summary-value");
+
+        animateValue(balanceValueTspan.node(), results.balanceDelay, isResize ? 0 : 800, val => `${val.toFixed(1)}%`);
     }
 
     /**
