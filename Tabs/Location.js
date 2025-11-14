@@ -281,8 +281,8 @@ const LocationTab = (() => {
         const service = 5.0 + (5.0 * (workingDays / 365.0)) + (10.0 * (taxRate / 100.0));
 
         const cities = Array.from(cityData.values());
-        let storage = 7.0; 
-        let risk = 10.0; 
+        let storage = 7.0;
+        let risk = 10.0;
 
         if (cities.length > 0 && optimalFactoryLocation) {
             const distances = cities.map(c => greatCircleDistance(optimalFactoryLocation, c.coordinates));
@@ -327,9 +327,9 @@ const LocationTab = (() => {
     // Bottom Ribbon (Simulation) UI Handlers
     // -------------------------------------------------------------------------
 
-/**
- * Toggles the visibility of the bottom simulation ribbon using a delayed redraw.
- */
+    /**
+     * Toggles the visibility of the bottom simulation ribbon using a delayed redraw.
+     */
     function toggleBottomRibbon() {
         isBottomRibbonOpen = !isBottomRibbonOpen;
         const contentDiv = d3.select(".bottom-ribbon-content");
@@ -370,22 +370,20 @@ const LocationTab = (() => {
     }
 
     /**
-         * ASYNC HELPER
-         * Fetches the median wage for the current optimalFactoryLocation
-         * and updates the _localWageStress state.
-         * Takes the current labor cost as an argument.
-         * @param {number} currentLaborCost - The labor cost from the main UI.
-         * @returns {Promise<void>}
-         */
+    * ASYNC HELPER
+    * Fetches the median wage for the current optimalFactoryLocation
+    * and updates the _localWageStress state.
+    * Takes the current labor cost as an argument.
+    * @param {number} currentLaborCost - The labor cost from the main UI.
+    * @returns {Promise<void>}
+    */
     async function updateLocalWageStress(currentLaborCost) {
         if (!optimalFactoryLocation) {
             _localWageStress = 0;
-            // lastCheckedLocation is already null, no need to set
             return;
         }
 
-        // Location is the same, but we must re-calculate stress
-        // based on the new laborCost.
+        // re-calculate stress based on the new laborCost.
         console.log("Recalculating wage stress with new labor cost...");
 
         const [lon, lat] = optimalFactoryLocation;
@@ -421,7 +419,6 @@ const LocationTab = (() => {
             if (cities.length < 2) {
                 optimalFactoryLocation = null;
             } else {
-                // ... (all the location-finding logic for 'New' mode) ...
                 cities.forEach(c => {
                     const shipmentDetails = getShipmentDetails(null, c, 1);
                     const costPerShipmentPerMile = shipmentDetails ? shipmentDetails.costPerShipment : 0;
@@ -445,7 +442,7 @@ const LocationTab = (() => {
                     totalMonetaryWeight = cities.length;
                     if (totalMonetaryWeight === 0) {
                         optimalFactoryLocation = null;
-                        return Promise.resolve(); // Return a resolved promise
+                        return Promise.resolve();
                     }
                 }
 
@@ -515,42 +512,37 @@ const LocationTab = (() => {
         updateSummaryPanel();
         refreshHoldingCost();
 
-        // --- Modified API Call Logic ---
-        // *** RETURN THE PROMISE ***
+        // --- API Call Logic ---
         return new Promise((resolve) => {
             setTimeout(async () => {
                 if (!optimalFactoryLocation) {
                     // No location, reset stress and last checked location
                     _localWageStress = 0;
                     lastCheckedLocation = null;
-                    resolve(); // Resolve immediately
+                    resolve();
                     return;
                 }
 
-                // *** MODIFIED SKIP LOGIC ***
                 // Only run the API call if the location has actually changed
                 if (lastCheckedLocation &&
                     lastCheckedLocation[0] === optimalFactoryLocation[0] &&
                     lastCheckedLocation[1] === optimalFactoryLocation[1]) {
 
                     console.log("Skipping wage API call, location unchanged.");
-                    resolve(); // Resolve immediately
+                    resolve();
                     return;
                 }
 
-                // Location is new, update the last checked location *before* the call
+                // Location is new, update the last checked location before the call
                 lastCheckedLocation = [...optimalFactoryLocation];
-
                 const currentLaborCost = parseFloat(document.getElementById('laborCost')?.value) || 25;
 
-                // Call the new helper function
                 await updateLocalWageStress(currentLaborCost);
-
-                resolve(); // Resolve after API call is done
+                resolve();
             }, 100);
         });
     };
-    
+
     /**
      * Runs the daily inventory simulation in the web worker.
      */
@@ -820,10 +812,10 @@ const LocationTab = (() => {
         }
     }
 
-/**
- * Draws the main simulation chart (Inventory or Shipments) in the bottom ribbon.
- * @param {boolean} animate - Flag to enable the smooth entrance animation.
- */
+    /**
+     * Draws the main simulation chart (Inventory or Shipments) in the bottom ribbon.
+     * @param {boolean} animate - Flag to enable the smooth entrance animation.
+     */
     function drawHoldingCostChart(animate = false) {
         const svg = d3.select("#holding-cost-chart-svg");
         svg.selectAll("*").remove();
@@ -1151,7 +1143,7 @@ const LocationTab = (() => {
             // --- Tooltip ---
             const bisectDate = d3.bisector(d => d.dateObj).left;
 
-            brushG 
+            brushG
                 .on("mouseover.tooltip", () => tooltip.style("opacity", 1))
                 .on("mouseout.tooltip", () => tooltip.style("opacity", 0))
                 .on("mousemove.tooltip", handleInventoryTooltip)
@@ -1364,8 +1356,8 @@ const LocationTab = (() => {
                 .on("contextmenu", (event) => { // Right-click to clear
                     event.preventDefault();
                     brushSelection = null;
-                    brush.move(brushG, null); 
-                    drawHoldingCostChart(); 
+                    brush.move(brushG, null);
+                    drawHoldingCostChart();
                 });
 
             function handleShipmentTooltip(event) {
@@ -1483,7 +1475,7 @@ const LocationTab = (() => {
                 const startPos = xScale(d);
                 return (startPos + endPos) / 2;
             })
-            .attr("y", 15) 
+            .attr("y", 15)
             .attr("text-anchor", "middle")
             .attr("fill", "currentColor")
             .style("font-size", "12px")
@@ -1777,9 +1769,9 @@ const LocationTab = (() => {
             .append("input").attr("type", "number").attr("id", "shipment-freq").attr("value", "7").attr("min", "1");
 
         controlsDiv.append("button").attr("class", "loc-control-btn").text("Add City")
-            .on("click", addCity); // This function is now async
+            .on("click", addCity);
         controlsDiv.append("button").attr("class", "loc-control-btn remove-all-btn").text("Remove All")
-            .on("click", removeAllCities); // This function is now async
+            .on("click", removeAllCities);
 
         // --- City Info Box (hidden by default) ---
         const infoBox = svg.append("foreignObject")
@@ -1794,7 +1786,7 @@ const LocationTab = (() => {
         infoDiv.append("button").text("Remove City").attr("id", "info-remove-btn")
             .on("click", function () {
                 const cityToRemove = d3.select(this).attr("data-city-name");
-                removeCity(cityToRemove); // This function is now async
+                removeCity(cityToRemove);
             });
 
         // --- Top-Right Summary Panel ---
@@ -1810,28 +1802,28 @@ const LocationTab = (() => {
 
         const switchGroup = summaryDiv.append("div").attr("class", "inv-button-group");
 
-        // *** MODIFIED CLICK HANDLER ***
+
         switchGroup.append("button").attr("id", "loc-new-btn").text("New")
             .classed('active', optimizationMode === 'New')
-            .on('click', async () => { // Make async
+            .on('click', async () => {
                 if (optimizationMode !== 'New') {
                     optimizationMode = 'New';
                     d3.select("#loc-new-btn").classed('active', true);
                     d3.select("#loc-existing-btn").classed('active', false);
-                    await runOptimization(); // Await
-                    if (typeof updateUI === 'function') updateUI(); // Force update
+                    await runOptimization();
+                    if (typeof updateUI === 'function') updateUI();
                 }
             });
-        // *** MODIFIED CLICK HANDLER ***
+
         switchGroup.append("button").attr("id", "loc-existing-btn").text("Existing")
             .classed('active', optimizationMode === 'Existing')
-            .on('click', async () => { // Make async
+            .on('click', async () => {
                 if (optimizationMode !== 'Existing') {
                     optimizationMode = 'Existing';
                     d3.select("#loc-new-btn").classed('active', false);
                     d3.select("#loc-existing-btn").classed('active', true);
-                    await runOptimization(); // Await
-                    if (typeof updateUI === 'function') updateUI(); // Force update
+                    await runOptimization();
+                    if (typeof updateUI === 'function') updateUI();
                 }
             });
 
@@ -2030,7 +2022,7 @@ const LocationTab = (() => {
         /**
          * Adds a city to the map from the control panel inputs.
          */
-        async function addCity() { // *** MADE ASYNC ***
+        async function addCity() {
             const name = d3.select("#city-select").property("value");
             const qty = parseFloat(d3.select("#shipment-qty").property("value"));
             const freq = parseFloat(d3.select("#shipment-freq").property("value"));
@@ -2053,12 +2045,11 @@ const LocationTab = (() => {
                 });
 
                 updateCityMarkers();
-                await runOptimization(); // *** AWAIT ***
+                await runOptimization();
                 updateDemandCapacityBox();
                 refreshHoldingCost();
                 runDailyInventorySimulation().catch(e => console.warn("Sim failed after adding city:", e));
 
-                // *** NEW *** Force global UI update
                 if (typeof updateUI === 'function') {
                     updateUI();
                 }
@@ -2070,7 +2061,7 @@ const LocationTab = (() => {
         /**
          * Removes a single city from the map and recalculates.
          */
-        async function removeCity(cityName) { // *** MADE ASYNC ***
+        async function removeCity(cityName) {
             if (cityName && cityData.delete(cityName)) {
                 d3.select(".city-info-box").style("display", "none");
 
@@ -2079,14 +2070,13 @@ const LocationTab = (() => {
                 }
 
                 updateCityMarkers();
-                await runOptimization(); // *** AWAIT ***
+                await runOptimization();
                 updateDemandCapacityBox();
                 refreshHoldingCost();
                 runDailyInventorySimulation().catch(e => console.warn("Sim failed after city removal:", e));
 
                 if (isBottomRibbonOpen) drawHoldingCostChart();
 
-                // *** NEW *** Force global UI update
                 if (typeof updateUI === 'function') {
                     updateUI();
                 }
@@ -2104,7 +2094,7 @@ const LocationTab = (() => {
         // Update map elements only if initialized (prevents errors on first load)
         if (mapInitialized) {
             updateDynamicMapElements();
-            runOptimization(); // This is fine to run without await on first draw
+            runOptimization();
         }
 
         // Redraw simulation chart if ribbon is open
@@ -2322,11 +2312,11 @@ const LocationTab = (() => {
         // Enter + Merge
         markers.enter().append("circle")
             .attr("class", "city-marker")
-            .attr("r", 0) 
+            .attr("r", 0)
             .attr("transform", d => `translate(${projection(d.coordinates)})`)
             .merge(markers)
             .on("mouseover", (event, d) => {
-                
+
                 // --- MOUSEOVER TOOLTIP LOGIC ---
                 const details = getShipmentDetails(optimalFactoryLocation, d);
                 const costFormat = { style: 'currency', currency: 'USD', maximumFractionDigits: 0 };
@@ -2374,7 +2364,7 @@ const LocationTab = (() => {
                     `<div class="tooltip-row"><span>Avg Cost/Unit:</span> <span>${avgCostPerUnit.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</span></div>`
                 );
             })
-            .on("mousemove", (event) => tooltip 
+            .on("mousemove", (event) => tooltip
                 .style("left", (event.pageX + 15) + "px")
                 .style("top", (event.pageY - 28) + "px")
             )
@@ -2388,7 +2378,7 @@ const LocationTab = (() => {
                 } else {
                     selectedCityName = d.name;
                 }
-                updateCityMarkers(); 
+                updateCityMarkers();
                 if (isBottomRibbonOpen) drawHoldingCostChart();
 
                 if (!projection) return;
@@ -2427,7 +2417,7 @@ const LocationTab = (() => {
             })
             .style("fill", d => (d.name === selectedCityName) ? "var(--secondary1)" : "var(--secondary2)")
             .transition().duration(500)
-            .attr("r", d => radiusScale(d.annualDemand)) 
+            .attr("r", d => radiusScale(d.annualDemand))
             .attr("transform", d => `translate(${projection(d.coordinates)})`);
     }
 
@@ -2466,14 +2456,12 @@ const LocationTab = (() => {
         selectedCityName = null;
 
         updateCityMarkers();
-        runOptimization(); // This will call the modified setTimeout and reset stress
+        runOptimization();
         updateDemandCapacityBox();
         refreshHoldingCost();
 
         simulationResults = null;
         simulationError = null;
-
-        // *** NEW *** Reset UI display and state
         _localWageStress = 0;
         lastCheckedLocation = null;
         _currentWageDisplay = 'N/A';
@@ -2509,10 +2497,10 @@ const LocationTab = (() => {
 
         // --- D3 Data Join ---
         const groups = lineGroup.selectAll(".connection-group")
-            .data(cities, d => d.name); 
-            
+            .data(cities, d => d.name);
+
         // Exit
-        groups.exit().selectAll(".connection-line").interrupt(); 
+        groups.exit().selectAll(".connection-line").interrupt();
         groups.exit().remove();
 
         // Enter
@@ -2583,10 +2571,10 @@ const LocationTab = (() => {
 
             // Initialize dashed line collapsed at start
             animLine
-            .attr("stroke-dasharray", dashArray)
-            .attr("stroke-dashoffset", 0) // dash visible immediately
-            .attr("x2", startPoint[0])
-            .attr("y2", startPoint[1]);
+                .attr("stroke-dasharray", dashArray)
+                .attr("stroke-dashoffset", 0) // dash visible immediately
+                .attr("x2", startPoint[0])
+                .attr("y2", startPoint[1]);
 
             // Compute target position
             const targetX = newEndPointX;
@@ -2596,30 +2584,30 @@ const LocationTab = (() => {
             animateLine(animLine, targetX, targetY, growDuration, dashTotal);
 
             function animateLine(line, targetX, targetY, growDuration, dashTotal) {
-            // 1️⃣ Animate the line length (x2,y2 grows from start → end)
-            line
-                .transition("grow")
-                .duration(growDuration)
-                .attr("x2", targetX)
-                .attr("y2", targetY)
-                .on("end", function() {
-                // Continue dash motion once fully extended
-                repeatMotion(line, dashTotal);
-                });
+                // 1️⃣ Animate the line length (x2,y2 grows from start → end)
+                line
+                    .transition("grow")
+                    .duration(growDuration)
+                    .attr("x2", targetX)
+                    .attr("y2", targetY)
+                    .on("end", function () {
+                        // Continue dash motion once fully extended
+                        repeatMotion(line, dashTotal);
+                    });
 
-            // 2️⃣ Animate dash motion *concurrently* with length growth
-            repeatMotion(line, dashTotal);
+                // 2️⃣ Animate dash motion *concurrently* with length growth
+                repeatMotion(line, dashTotal);
             }
 
             function repeatMotion(line, dashTotal) {
-            if (!line.node()?.isConnected) return;
-            line
-                .attr("stroke-dashoffset", dashTotal)
-                .transition("move")
-                .ease(d3.easeLinear)
-                .duration(600)
-                .attr("stroke-dashoffset", 0)
-                .on("end", () => repeatMotion(line, dashTotal));
+                if (!line.node()?.isConnected) return;
+                line
+                    .attr("stroke-dashoffset", dashTotal)
+                    .transition("move")
+                    .ease(d3.easeLinear)
+                    .duration(600)
+                    .attr("stroke-dashoffset", 0)
+                    .on("end", () => repeatMotion(line, dashTotal));
             }
         });
     }
@@ -2726,8 +2714,8 @@ const LocationTab = (() => {
     }
 
     /**
-        * Resize function called by the global resize handler.
-        */
+     * Resize function called by the global resize handler.
+     */
     const resize = () => {
         updateDynamicMapElements();
 
@@ -2766,11 +2754,10 @@ const LocationTab = (() => {
     const getCityData = () => Array.from(cityData.entries());
 
     /**
-         * Gets the current overtime stress factor based on simulation results.
-         * This uses a logistic function where the CV penalizes the input,
-         * which is then fed into a static, extended S-curve.
-         * @returns {number} Overtime stress factor (0-1).
-         */
+     * Gets the current overtime stress factor based on simulation results.
+     * This uses a logistic function where the CV penalizes the input
+     * @returns {number} Overtime stress factor (0-1).
+     */
     const getOvertimeStress = () => {
         if (!simulationResults || simulationResults.length === 0) return 0;
 
@@ -2780,7 +2767,7 @@ const LocationTab = (() => {
 
         if (k_exceptions === 0) return 0.0; // No exceptions, no stress
 
-        const measuredRatio = k_exceptions / N; 
+        const measuredRatio = k_exceptions / N;
 
         // Get CV from the global stDevPercentage (defined in QualityYield.js)
         const cv = window.stDevPercentage || 0.15;
@@ -2790,7 +2777,7 @@ const LocationTab = (() => {
         const effectiveRatio = measuredRatio * (1 + cv_clamped);
 
         // Define the static, extended S-curve parameters
-        const k_steepness = 20; 
+        const k_steepness = 20;
         const x0_midpoint = 0.20;
 
         // Calculate the stress using the Logistic function:
@@ -2812,8 +2799,8 @@ const LocationTab = (() => {
         getCityData: getCityData,
         getOvertimeStress: getOvertimeStress,
         getLocalWageStress: () => _localWageStress,
-        runOptimization: runOptimization, // Expose full optimization
-        updateLocalWageStress: updateLocalWageStress // Expose stress-only update
+        runOptimization: runOptimization,
+        updateLocalWageStress: updateLocalWageStress
     };
 
 })();
