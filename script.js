@@ -2030,89 +2030,128 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
             return {
                 wip: 0, throughputUnitsPerHour: 0, conveyorSpeed: 0,
                 effectiveCycleTime: Infinity,
-                totalUnitsProduced: 0, qualityYield: 1.0
+                totalUnitsProduced: 0, qualityYield: 1.0,
+                productionTarget: productionTarget
             };
         }
 
-        let requiredTaktTime;
-        const demandIntervals = productionTarget > 1 ? productionTarget - 1 : 0;
-        const throughputTimeAsIntervals = ASSEMBLY_LINE_LENGTH / productSpacing;
-        if (productionTarget <= 1) {
-            requiredTaktTime = Infinity;
-        } else {
-            const totalIntervals = demandIntervals + throughputTimeAsIntervals;
-            requiredTaktTime = fullTotalOpMinutes / totalIntervals;
+        // --- THIS IS THE FIX ---
+
+        // 1. Calculate the line's true physical maximum production
+        const bottleneckThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckCycleTime;
+        const bottleneckLaunchWindow = fullTotalOpMinutes - bottleneckThroughputTime;
+
+        let physicalMaxUnits = 0;
+        if (bottleneckLaunchWindow > 0) {
+            physicalMaxUnits = Math.round(bottleneckLaunchWindow / bottleneckCycleTime) + 1;
+        } else if (fullTotalOpMinutes >= bottleneckThroughputTime) {
+            physicalMaxUnits = 1; // Can produce just one unit if opHours exactly equals throughput time
         }
 
-        const meetsTakt = bottleneckCycleTime <= requiredTaktTime;
-        const effectiveCycleTime = meetsTakt ? requiredTaktTime : bottleneckCycleTime;
-        const cycleTimeToUseForSpeedCalc = isFinite(effectiveCycleTime) ? effectiveCycleTime : bottleneckCycleTime;
-        const conveyorSpeed = productSpacing / cycleTimeToUseForSpeedCalc;
+        // 2. Determine if the line is paced by demand or by the bottleneck
+        let effectiveCycleTime;
+        let totalUnitsProduced;
+
+        if (productionTarget > physicalMaxUnits) {
+            // We are bottlenecked. We can't make what was asked.
+            effectiveCycleTime = bottleneckCycleTime;
+            totalUnitsProduced = physicalMaxUnits;
+        } else {
+            // We can make what was asked. The line is paced by demand.
+            // Calculate the takt time required to hit the target.
+            const demandIntervals = productionTarget > 1 ? productionTarget - 1 : 0;
+            const throughputTimeAsIntervals = ASSEMBLY_LINE_LENGTH / productSpacing;
+            const totalIntervals = demandIntervals + throughputTimeAsIntervals;
+
+            if (productionTarget <= 1) {
+                effectiveCycleTime = bottleneckCycleTime; // Use bottleneck if only making one
+            } else {
+                effectiveCycleTime = fullTotalOpMinutes / totalIntervals;
+            }
+
+            totalUnitsProduced = productionTarget;
+        }
+
+        // 3. Calculate all other metrics based on the *final* effectiveCycleTime
+        const conveyorSpeed = productSpacing / effectiveCycleTime;
+        const wip = ASSEMBLY_LINE_LENGTH / productSpacing;
         const actualThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * effectiveCycleTime;
 
-        let totalUnitsProduced;
-        if (fullTotalOpMinutes < actualThroughputTime) {
-            totalUnitsProduced = 0;
-        } else if (productionTarget <= 1) {
-            totalUnitsProduced = 1;
-        } else {
-            const launchWindowMinutes = fullTotalOpMinutes - actualThroughputTime;
-            totalUnitsProduced = Math.round(launchWindowMinutes / effectiveCycleTime) + 1;
-        }
-
-        const wip = ASSEMBLY_LINE_LENGTH / productSpacing;
         let actualProductionMinutes;
-        if (productionTarget <= 0) {
+        if (totalUnitsProduced <= 0) {
             actualProductionMinutes = 0;
-        } else if (productionTarget === 1) {
+        } else if (totalUnitsProduced === 1) {
             actualProductionMinutes = actualThroughputTime;
         } else {
+            const demandIntervals = totalUnitsProduced - 1;
             actualProductionMinutes = effectiveCycleTime * (demandIntervals) + actualThroughputTime;
         }
 
         const throughputUnitsPerHour = actualProductionMinutes > 0 ? (totalUnitsProduced / actualProductionMinutes) * 60 : 0;
 
-        const qualityYield = getQualityYield(effectiveCycleTime, conveyorSpeed);
+        // --- END OF FIX ---
+
+        const qualityYield = 1.0; // Placeholder, as the outer loop handles this
 
         return {
             wip, throughputUnitsPerHour, conveyorSpeed,
-            effectiveCycleTime, totalUnitsProduced, qualityYield
+            effectiveCycleTime, totalUnitsProduced, qualityYield,
+            productionTarget // Return the target
         };
     };
 
-    // --- Main Calculation Logic (FIXED TWO-PASS SYSTEM) ---
+    // --- Main Calculation Logic (FIXED ITERATIVE SYSTEM) ---
 
     // op.dailyDemand is the "Target Sales Demand" (e.g., 180)
     const targetSalesDemand = op.dailyDemand;
+    let currentProductionTarget = targetSalesDemand; // Start by trying to produce the sales target
+    let finalPassResults = null;
+    let finalQualityYield = 1.0;
+    let goodUnitsProduced = 0;
 
-    // PASS 1: Run calculation with Target Sales Demand to get a provisional quality yield
-    // This gives us an *estimate* of the yield based on a Takt Time for 180 units.
-    const pass1 = calculateThroughput(targetSalesDemand);
-    const provisionalQualityYield = pass1.qualityYield;
+    const maxIterations = 5; // Prevent infinite loops
 
-    // Determine the *actual* number of units we must produce to meet sales
-    // (e.g., 180 / 0.9 = 200)
-    const requiredProductionTotal = (provisionalQualityYield > 0)
-        ? Math.ceil(targetSalesDemand / provisionalQualityYield)
-        : targetSalesDemand * 2; // Failsafe for 0% yield
+    for (let i = 0; i < maxIterations; i++) {
+        // 1. Run simulation with the current total production target
+        finalPassResults = calculateThroughput(currentProductionTarget);
 
-    // PASS 2: Run calculation again with the *true* production target (e.g., 200)
-    // This calculates the *real* Takt Time and *real* stress.
-    const pass2 = calculateThroughput(requiredProductionTotal);
+        // 2. Get the *actual* yield at this production level
+        finalQualityYield = getQualityYield(finalPassResults.effectiveCycleTime, finalPassResults.conveyorSpeed);
 
-    // Destructure with new names to avoid "already declared" error
+        // 3. Find out how many *good* units we *actually* made
+        // finalPassResults.totalUnitsProduced is the *actual* total number built
+        goodUnitsProduced = finalPassResults.totalUnitsProduced * finalQualityYield;
+
+        // 4. Check for completion
+        if (goodUnitsProduced >= targetSalesDemand || finalQualityYield <= 0.001) {
+            // We made enough, or we have 0 yield and can't improve.
+            break;
+        }
+
+        // 5. If we failed, calculate a *new, higher* production target
+        const newProductionTarget = Math.ceil(targetSalesDemand / finalQualityYield);
+
+        // 6. Check for convergence (e.g., newTarget=190, oldTarget=190)
+        if (newProductionTarget === finalPassResults.productionTarget) {
+            // We're stuck, break the loop
+            break;
+        }
+
+        // 7. Set new target for the next loop
+        currentProductionTarget = newProductionTarget;
+    }
+
+    // --- After the loop, all metrics are based on the *last* run (`finalPassResults`) ---
+
     const {
         wip: finalWip,
         throughputUnitsPerHour: finalThroughputPerHour,
         conveyorSpeed: finalConveyorSpeed,
         effectiveCycleTime: finalEffectiveCycleTime,
-        totalUnitsProduced: finalTotalUnitsProduced // This is the total number built
-    } = pass2;
+        totalUnitsProduced: finalTotalUnitsProduced // This is the total *actually* built
+    } = finalPassResults;
 
-    // Get the final, most accurate quality yield based on the true Takt Time of Pass 2
-    const finalQualityYield = getQualityYield(pass2.effectiveCycleTime, pass2.conveyorSpeed);
-
-    // Calculate final metrics using Pass 2 data
+    // --- Calculate final metrics using Pass 2 data ---
     let totalWorkstationCycleTime = 0;
     wsDetails.workstations.forEach(ws => {
         totalWorkstationCycleTime += ws.cycleTime;
@@ -2137,15 +2176,12 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
     const idleTimeCv = idleMean > 0 ? (stdDev / idleMean) * 100 : 0;
 
     // Calculate revenue based on *good* units, costs based on *total* units
-    // *** FIX 1: Use Math.round() for discrete units ***
-    // This fixes the 179.8 vs 180 bug.
-    const effectiveGoodUnits = Math.round(finalTotalUnitsProduced * finalQualityYield);
+    // Use the `goodUnitsProduced` from our loop, and round it for the final number
+    const effectiveGoodUnits = Math.round(goodUnitsProduced);
     const effectiveHourlyUnits = finalThroughputPerHour * finalQualityYield;
 
-    // *** FIX 2: Check !skipQualityYield before updating the DOM ***
-    // This stops the profit calculator from updating the UI label
     if (qualityYieldGoodsDisplay && !skipQualityYield) {
-        // This now shows the *total* units produced, as requested
+        // This now shows the *total* units produced
         qualityYieldGoodsDisplay.textContent = finalTotalUnitsProduced;
     }
 
@@ -2155,7 +2191,7 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
     const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost;
     const grossProfitMargin = totalRevenue > 0 ? (dailyGrossProfit / totalRevenue) * 100 : 0;
 
-    // --- FINAL DEMAND CHECK (THE FIX) ---
+    // --- FINAL DEMAND CHECK ---
     // Compare the *rounded* good units to the *sales target*
     const effectiveMeetsDemand = effectiveGoodUnits >= targetSalesDemand;
 
@@ -2163,7 +2199,7 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
         wip: finalWip,
         throughputUnitsPerHour: effectiveHourlyUnits,
         conveyorSpeed: finalConveyorSpeed,
-        productSpacing: productSpacing, // Use the original 'productSpacing'
+        productSpacing: productSpacing,
         dailyGrossProfit,
         grossProfitMargin,
         meetsDemand: effectiveMeetsDemand,
