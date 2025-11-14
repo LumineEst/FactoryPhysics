@@ -1,11 +1,7 @@
 /**
- * Quality Yield Module (Refactored for v8)
+ * Quality Yield Module
  *
  * This module calculates a *stress breakdown* based on four factors.
- * It no longer determines the final yield, but provides the components
- * for the UI to calculate a default yield.
- *
- * Includes new console logs for debugging.
  */
 
 // The only global adjustable parameter. Defaults to 15%.
@@ -20,19 +16,15 @@ function calculateStressForModel(elementTimes, taktTime, stDevPercentage) {
         return 0; // No tasks for this model, so no stress
     }
 
-    // 1. Calculate the mean total time for this model
+    // Calculate the mean total time for this model
     const workstationMeanTime = elementTimes.reduce((sum, t) => sum + t, 0);
 
-    // 2. Calculate the total workstation variance for this model
-    // Variance = (StDev)^2 = (elementTime * stDevPercentage)^2
-    // The variance of a sum of independent variables is the sum of their variances.
+    // Calculate the total workstation stDev for this model
     const workstationVariance = elementTimes.reduce((sum, t) => {
         const taskStDev = t * stDevPercentage;
         const taskVariance = taskStDev * taskStDev;
         return sum + taskVariance;
     }, 0);
-
-    // 3. Calculate workstation standard deviation
     const workstationStDev = Math.sqrt(workstationVariance);
 
     if (!isFinite(workstationStDev) || workstationStDev <= 0) {
@@ -40,11 +32,8 @@ function calculateStressForModel(elementTimes, taktTime, stDevPercentage) {
         return (workstationMeanTime > taktTime) ? 1.0 : 0.0;
     }
 
-    // 4. Calculate probability of exceeding takt time
-    // This is the "prob(workstationMeanTime > taktTime)"
+    // Calculate probability of exceeding takt time
     const z = (taktTime - workstationMeanTime) / workstationStDev;
-
-    // One-tailed probability P(X > taktTime)
     const probOverage = 1 - normalCDF(z);
 
     return Math.min(1, Math.max(0, probOverage));
@@ -103,7 +92,7 @@ function normalCDF(z) {
  *
  * @param {number} stDevPercentage - Standard deviation as a percentage of mean (e.g., 0.1)
  * @param {number} conveyorSpeed - Conveyor speed in ft/min
- * @param {Array} workstationDetails - Array of workstation objects (NEW FORMAT)
+ * @param {Array} workstationDetails - Array of workstation objects
  * @param {number} taktTime - Required takt time in minutes
  * @param {number} overtimeStress - Overtime stress factor (0-1)
  * @param {number} wageStress - Local wage stress factor (0-1)
@@ -111,8 +100,7 @@ function normalCDF(z) {
  * @returns {Object} A breakdown of quality loss.
  */
 function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, workstationDetails, taktTime, overtimeStress, wageStress, buildRatios) {
-    // --- Hard-coded constants ---
-    const MAX_CONVEYOR_SPEED = 15; // ft/min
+    const MAX_CONVEYOR_SPEED = 15;
 
     // --- Input Validation ---
     if (!isFinite(stDevPercentage) || stDevPercentage < 0) { stDevPercentage = 0; }
@@ -125,26 +113,26 @@ function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, worksta
 
     // --- Calculate individual stress factors ---
 
-    // 1. Workstation Stress (Probabilistic, State-Based)
+    // Workstation Stress (Probabilistic, State-Based)
     const workstationStress = calculateWorkstationStress(workstationDetails, taktTime, stDevPercentage, buildRatios);
     console.log(`[Quality] 1. Workstation Stress (Raw): ${workstationStress.toFixed(4)}`);
 
 
-    // 2. Conveyor Fatigue (Probabilistic)
+    // Conveyor Fatigue (Probabilistic)
     let conveyorFatigue = 0;
     const speedStDev = conveyorSpeed * stDevPercentage;
     let z_speed = Infinity; // For logging
 
     if (speedStDev > 0) {
         z_speed = (MAX_CONVEYOR_SPEED - conveyorSpeed) / speedStDev;
-        conveyorFatigue = 1 - normalCDF(z_speed); // P(Speed > 15)
+        conveyorFatigue = 1 - normalCDF(z_speed);
     } else if (conveyorSpeed > MAX_CONVEYOR_SPEED) {
         conveyorFatigue = 1; // If mean is already over max, stress is 1
     }
     console.log(`[Quality] 2. Conveyor Fatigue (Raw): ${conveyorFatigue.toFixed(4)} (Mean: ${conveyorSpeed.toFixed(2)}, Z: ${z_speed.toFixed(2)}, P(X > 15))`);
 
 
-    // 3. Overtime Stress (from Location tab)
+    // Overtime Stress (from Location tab)
     const overtimeStressFactor = overtimeStress || 0;
     console.log(`[Quality] 3. Overtime Stress (Raw): ${overtimeStressFactor.toFixed(4)}`);
 
@@ -155,7 +143,7 @@ function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, worksta
 
 
     // --- Calculate Weighted Loss Breakdown ---
-    // New weights: WS 40%, Conveyor 20%, Overtime 20%, Wage 20%
+    // Weights: WorkStation 40%, Conveyor 20%, Overtime 20%, Wage 20%
     const breakdown = {
         workstationLoss: 0.4 * workstationStress,
         conveyorLoss: 0.2 * conveyorFatigue,
