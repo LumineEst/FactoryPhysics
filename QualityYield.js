@@ -227,12 +227,12 @@ function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, worksta
     breakdown.totalStress = Math.min(1.0, breakdown.totalStress);
 
     console.log(`[Quality] Breakdown (Weighted):
-        Workstation: ${breakdown.workstationLoss.toFixed(4)} (40%)
-        Conveyor: ${breakdown.conveyorLoss.toFixed(4)} (20%)
-        Overtime: ${breakdown.overtimeLoss.toFixed(4)} (20%)
-        Wage: ${breakdown.wageLoss.toFixed(4)} (20%)
-        ---------------------
-        Total Stress (Loss): ${breakdown.totalStress.toFixed(4)}`);
+Workstation: ${breakdown.workstationLoss.toFixed(4)} (40%)
+Conveyor: ${breakdown.conveyorLoss.toFixed(4)} (20%)
+Overtime: ${breakdown.overtimeLoss.toFixed(4)} (20%)
+Wage: ${breakdown.wageLoss.toFixed(4)} (20%)
+---------------------
+Total Stress (Loss): ${breakdown.totalStress.toFixed(4)}`);
 
     return breakdown;
 }
