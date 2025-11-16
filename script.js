@@ -756,10 +756,13 @@ function updateUI(options = {}) {
             laborCost: parseFloat(laborCostInput.value),
             superSell: parseFloat(superSellInput.value),
             superCogs: parseFloat(superCogsInput.value),
+            superRework: parseFloat(superReworkInput.value),
             ultraSell: parseFloat(ultraSellInput.value),
             ultraCogs: parseFloat(ultraCogsInput.value),
+            superRework: parseFloat(superReworkInput.value),
             megaSell: parseFloat(megaSellInput.value),
             megaCogs: parseFloat(megaCogsInput.value),
+            megaRework: parseFloat(megaReworkInput.value)
         };
         const results = calculateMetrics(opInputs, finInputs);
 
@@ -1084,9 +1087,6 @@ function setupEventListeners() {
     // Attach listeners to trigger financial updates
     inputs.forEach(input => {
         input.addEventListener('input', () => {
-            if (input.id === 'qualityYieldInput') {
-                return;
-            }
             if (typeof window.updateProbabilisticValues === 'function') {
                 window.updateProbabilisticValues('mean');
             }
@@ -1434,12 +1434,13 @@ function setupUIEventListeners() {
     const switchContainer = document.createElement('div');
     switchContainer.style.display = 'flex';
     switchContainer.style.alignItems = 'center';
-    switchContainer.style.gap = '6px';
+    switchContainer.style.gap = '5px';
 
     const switchText = document.createElement('span');
     switchText.textContent = 'Auto\nAdjust';
-    switchText.style.fontSize = 'clamp(0.7rem, 0.9vw, 0.875rem';
+    switchText.style.fontSize = 'clamp(0.7rem, 0.9vw, 0.85rem';
     switchText.style.fontWeight = 'bold';
+    switchText.style.verticalAlign = 'top';
     switchText.style.whiteSpace = 'pre-wrap';
 
     const switchLabel = document.createElement('label');
@@ -1985,10 +1986,13 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
         laborCost: getFinVal(fin.laborCost) || getFinVal(laborCostInput?.value),
         superSell: getFinVal(fin.superSell) || getFinVal(superSellInput?.value),
         superCogs: getFinVal(fin.superCogs) || getFinVal(superCogsInput?.value),
+        superRework: getFinVal(fin.superRework) || getFinVal(superReworkInput?.value),
         ultraSell: getFinVal(fin.ultraSell) || getFinVal(ultraSellInput?.value),
         ultraCogs: getFinVal(fin.ultraCogs) || getFinVal(ultraCogsInput?.value),
+        ultraRework: getFinVal(fin.ultraRework) || getFinVal(ultraReworkInput?.value),
         megaSell: getFinVal(fin.megaSell) || getFinVal(megaSellInput?.value),
-        megaCogs: getFinVal(fin.megaCogs) || getFinVal(megaCogsInput?.value)
+        megaCogs: getFinVal(fin.megaCogs) || getFinVal(megaCogsInput?.value),
+        megaRework: getFinVal(fin.megaRework) || getFinVal(megaReworkInput?.value),
     };
     // --- END VALIDATION ---
 
@@ -2042,8 +2046,14 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
             return parseFloat(qualityYieldInput.value) / 100.0; // Return user override for math
         } else {
             // Only update the input if it's not being overridden
-            if (qualityYieldInput) { // Add null check
-                qualityYieldInput.value = (calculatedQualityYield * 100.0).toFixed(1); // Update input box
+            if (qualityYieldInput) {
+                const newYieldValue = (calculatedQualityYield * 100.0).toFixed(1);
+                if (qualityYieldInput.value != - newYieldValue) {
+                    qualityYieldInput.value = newYieldValue;
+                    qualityYieldInput.dispatchEvent(new Event('input', {
+                        bubbles: true
+                    }));
+                }
             }
             return calculatedQualityYield; // Return calculated value for math
         }
@@ -2181,9 +2191,9 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
     const failedMega = (finalTotalUnitsProduced * BUILD_RATIOS.mega) * totalStress;
 
     // Use the sanitized finInputs values
-    const reworkCost = (failedSuper * finInputs.superCogs) +
-        (failedUltra * finInputs.ultraCogs) +
-        (failedMega * finInputs.megaCogs);
+    const reworkCost = (failedSuper * finInputs.superRework) +
+        (failedUltra * finInputs.ultraRework) +
+        (failedMega * finInputs.megaRework);
 
     // This is now guaranteed to be a valid number (e.g., 0)
     const costOfPoorQuality = reworkCost;
@@ -2212,7 +2222,7 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
         workstations: wsDetails.workstations,
         averageEfficiency, totalIdleTime, balanceDelay, idleTimeCv,
         throughputUnitsPerDay: effectiveTotalUnits, // TOTAL daily
-        qualityYield: calculatedQualityYield // The calculated % (1.0 - totalStress)
+        qualityYield: finalQualityYield // The calculated % (1.0 - totalStress)
     };
 }
 
@@ -2510,13 +2520,15 @@ function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
 
                 // --- FINANCIAL CALCULATION (with quality) ---
                 // Revenue is based on "good" units (target * yield)
-                const totalRevenue = (requiredProductionTotal * qualityYield) * ((BUILD_RATIOS.super * (finInputs.superSell || 0)) + (BUILD_RATIOS.ultra * (finInputs.ultraSell || 0)) + (BUILD_RATIOS.mega * (finInputs.megaSell || 0)));
+                const totalRevenue = requiredProductionTotal * ((BUILD_RATIOS.super * (finInputs.superSell || 0)) + (BUILD_RATIOS.ultra * (finInputs.ultraSell || 0)) + (BUILD_RATIOS.mega * (finInputs.megaSell || 0)));
                 // COGS is based on *all* units produced (the target)
                 const totalCogs = requiredProductionTotal * ((BUILD_RATIOS.super * (finInputs.superCogs || 0)) + (BUILD_RATIOS.ultra * (finInputs.ultraCogs || 0)) + (BUILD_RATIOS.mega * (finInputs.megaCogs || 0)));
-
                 const totalDailyLaborCost = numEmployees * opHours * (finInputs.laborCost || 0);
+                const totalStress = 1.0 - qualityYield;
+                const failedUnits = requiredProductionTotal * totalStress;
+                const reworkCost = failedUnits * ((BUILD_RATIOS.super * finInputs.superRework) + (BUILD_RATIOS.ultra * finInputs.ultraRework) + (BUILD_RATIOS.mega * finInputs.megaRework));
 
-                const profitWithQuality = totalRevenue - totalCogs - totalDailyLaborCost;
+                const profitWithQuality = totalRevenue - totalCogs - reworkCost - totalDailyLaborCost;
                 const marginWithQuality = totalRevenue > 0 ? (profitWithQuality / totalRevenue) * 100 : 0;
                 // --- END FINANCIAL CALC ---
 
