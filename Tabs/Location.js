@@ -1833,7 +1833,7 @@ const LocationTab = (() => {
         summaryDiv.append("div").attr('class', 'summary-row').html(`<span># Shipments:</span><span id="summary-shipments">0</span>`);
         summaryDiv.append("div").attr('class', 'summary-row summary-total').html(`<span>Total Cost:</span><span id="summary-total-cost">$0</span>`);
         summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Avg Cost/U:</span><span id="summary-avg-cost">$0.00</span>`);
-        summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Local median wage:</span><span id="loc-wage-display">${_currentWageDisplay}</span>`);
+        summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Median Wage:</span><span id="loc-wage-display">${_currentWageDisplay}</span>`);
 
         // --- Bottom Ribbon ---
         const ribbonRect = layoutManager.getRibbonRect();
