@@ -6,6 +6,10 @@ const ProfitTab = (function () {
         const { clientWidth: width, clientHeight: height } = container;
         svg.selectAll("*").remove();
 
+        // NOTE: The @keyframes for blinking are now assumed to be in your CSS file.
+        // We just need to add the <defs> for gradients, etc.
+        svg.append("defs"); // Placeholder in case gradients are added later
+
         // global scale based on window width so resizing the window actually shows change
         const viewportW = Math.max(320, window.innerWidth || width);
         // allow scaling down AND up
@@ -57,6 +61,8 @@ const ProfitTab = (function () {
             opHours: +opHoursInput.value,
             numEmployees: +numEmployeesInput.value
         };
+
+        // --- Grab all financial inputs, including Rework ---
         const fin = {
             laborCost: +laborCostInput.value,
             superSell: +superSellInput.value,
@@ -65,7 +71,11 @@ const ProfitTab = (function () {
             ultraCogs: +ultraCogsInput.value,
             megaSell: +megaSellInput.value,
             megaCogs: +megaCogsInput.value,
+            superRework: +superReworkInput.value,
+            ultraRework: +ultraReworkInput.value,
+            megaRework: +megaReworkInput.value
         };
+        // m.qualityYield is correct from the main script
         const m = calculateMetrics(op, fin);
 
         const x = d3.scaleLinear().domain([50, 552]).range([0, chartWidth]).clamp(true);
@@ -113,24 +123,24 @@ const ProfitTab = (function () {
         function drawAxesWithGrid(g, xScale, yScale, isProfit) {
             g.append("g")
                 .attr("class", "grid-major")
-                .call(d3.axisLeft(yScale).ticks(8).tickSize(-chartWidth).tickFormat(""))
+                .call(d3.axisLeft(yScale).ticks(8).tickSizeOuter(0).tickSize(-chartWidth).tickFormat(""))
                 .selectAll("text")
                 .attr("font-size", sizes.small);
             g.append("g")
                 .attr("class", "grid-major")
                 .attr("transform", `translate(0,${chartHeight})`)
-                .call(d3.axisBottom(xScale).ticks(12).tickSize(-chartHeight).tickFormat(""))
+                .call(d3.axisBottom(xScale).ticks(12).tickSizeOuter(0).tickSize(-chartHeight).tickFormat(""))
                 .selectAll("text")
                 .attr("font-size", sizes.small);
             g.append("g")
                 .attr("class", "axis")
                 .attr("transform", `translate(0,${chartHeight})`)
-                .call(d3.axisBottom(xScale).ticks(12).tickFormat(d3.format("d")))
+                .call(d3.axisBottom(xScale).ticks(12).tickSizeOuter(0).tickFormat(d3.format("d")))
                 .selectAll("text")
                 .attr("font-size", sizes.axis);
             g.append("g")
                 .attr("class", "axis")
-                .call(d3.axisLeft(yScale).ticks(6).tickFormat(isProfit ? fmtMoney : d => fmtPct(d)))
+                .call(d3.axisLeft(yScale).ticks(6).tickSizeOuter(0).tickFormat(isProfit ? fmtMoney : d => fmtPct(d)))
                 .selectAll("text")
                 .attr("font-size", sizes.axis);
         }
@@ -202,8 +212,8 @@ const ProfitTab = (function () {
                 } else {
                     showTT(
                         `<div class="tooltip-header">Current Profit</div>
-                         <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtMoney(m.dailyGrossProfit)}</span></div>
-                         <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
+                         <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtMoney(m.dailyGrossProfit)}</span></div>
+                         <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
                         ev);
                 }
             })
@@ -230,9 +240,9 @@ const ProfitTab = (function () {
 
             showTT(
                 `<div class="tooltip-header">Demand: ${demandHover}</div>
-                 <div class="tooltip-row"><span class="tooltip-key">Optimal Profit</span><span>${fmtMoney(d.value)}</span></div>
-                 <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${d.config.emp}</span></div>
-                 <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${d.config.hrs}</span></div>`,
+                 <div class="tooltip-row"><span class="tooltip-key">Optimal Profit</span><span>${fmtMoney(d.value)}</span></div>
+                 <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${d.config.emp}</span></div>
+                 <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${d.config.hrs}</span></div>`,
                 ev
             );
         }).on("mouseleave", () => {
@@ -308,8 +318,8 @@ const ProfitTab = (function () {
                 } else {
                     showTT(
                         `<div class="tooltip-header">Current Margin</div>
-                         <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtPct(m.grossProfitMargin)}</span></div>
-                         <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
+                         <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtPct(m.grossProfitMargin)}</span></div>
+                         <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
                         ev);
                 }
             })
@@ -340,9 +350,9 @@ const ProfitTab = (function () {
             hGuideM.style("display", null).attr("x1", 0).attr("x2", chartWidth).attr("y1", yMargin(dM.value)).attr("y2", yMargin(dM.value));
             showTT(
                 `<div class="tooltip-header">Demand: ${demandHover}</div>
-                 <div class="tooltip-row"><span class="tooltip-key">Optimal Margin</span><span>${fmtPct(dM.value)}</span></div>
-                 <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${dM.config.emp}</span></div>
-                 <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${dM.config.hrs}</span></div>`,
+                 <div class="tooltip-row"><span class="tooltip-key">Optimal Margin</span><span>${fmtPct(dM.value)}</span></div>
+                 <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${dM.config.emp}</span></div>
+                 <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${dM.config.hrs}</span></div>`,
                 ev
             );
         }).on("mouseleave", () => {
@@ -353,19 +363,31 @@ const ProfitTab = (function () {
 
         // --- BREAKDOWN PANEL (RIGHT SIDE) ---
         const totalLabor = op.numEmployees * op.opHours * fin.laborCost;
+
+        // --- Correctly calculate breakdown with Rework ---
+        const qualityYield = m.qualityYield; // This is the correct, final yield
+        const totalStress = 1.0 - qualityYield;
+
         const perModel = ["super", "ultra", "mega"].map(key => {
             const units = m.throughputUnitsPerDay * BUILD_RATIOS[key];
-            const sales = units * fin[`${key}Sell`];
+            const failedUnits = units * totalStress;
+
+            const sales = units * fin[`${key}Sell`]; // Revenue from ALL units
             const cogs = units * fin[`${key}Cogs`];
             const labor = totalLabor * BUILD_RATIOS[key];
-            const profit = sales - cogs - labor;
+            const rework = failedUnits * fin[`${key}Rework`]; // Rework cost from FAILED units
+
+            const profit = sales - cogs - labor - rework;
+
             return {
                 label: key[0].toUpperCase() + key.slice(1),
-                sales, cogs, labor, profit,
+                sales, cogs, labor, profit, rework, // Return rework
                 margin: sales > 0 ? (profit / sales) * 100 : 0
             };
         });
+
         const totalProfit = d3.sum(perModel, d => d.profit);
+        const totalRework = d3.sum(perModel, d => d.rework); // Get total rework
         const pad = Math.max(16 * uiScale, breakdownWidth * 0.10);
 
         // ---------- TOP (Legend) ----------
@@ -436,9 +458,10 @@ const ProfitTab = (function () {
             .attr("font-weight", "bold")
             .text("Cost & Profit Composition");
 
+        // --- Use a 4-item color scheme ---
         const pieColors = {
             Profit: getComputedStyle(root).getPropertyValue('--primary').trim(),
-            Loss: getComputedStyle(root).getPropertyValue('--failure-color').trim(),
+            Rework: getComputedStyle(root).getPropertyValue('--failure-color').trim(),
             Labor: getComputedStyle(root).getPropertyValue('--secondary1').trim(),
             Material: getComputedStyle(root).getPropertyValue('--secondary2').trim()
         };
@@ -449,9 +472,10 @@ const ProfitTab = (function () {
         const pie = d3.pie().value(d => d.value).sort(null);
         const ttPie = createTooltip('profit-pie-tooltip');
 
+        // --- Add Rework to pie data objects ---
         const pies = [
-            { title: "Overall", data: { Profit: totalProfit, Labor: totalLabor, Material: d3.sum(perModel, d => d.cogs) } },
-            ...perModel.map(d => ({ title: d.label, data: { Profit: d.profit, Labor: d.labor, Material: d.cogs } }))
+            { title: "Overall", data: { Profit: totalProfit, Labor: totalLabor, Material: d3.sum(perModel, d => d.cogs), Rework: totalRework } },
+            ...perModel.map(d => ({ title: d.label, data: { Profit: d.profit, Labor: d.labor, Material: d.cogs, Rework: d.rework } }))
         ];
 
         const cols = 2;
@@ -471,14 +495,30 @@ const ProfitTab = (function () {
             const arc = d3.arc().innerRadius(0).outerRadius(baseR);
             const g = topHalf.append("g").attr("transform", `translate(${cx}, ${cy})`);
 
+            // --- THIS IS THE CORE LOGIC FIX ---
             const isLoss = pd.data.Profit < 0;
-            const chartData = Object.entries(
-                isLoss
-                    ? { Loss: -pd.data.Profit, Labor: pd.data.Labor, Material: pd.data.Material }
-                    : { Profit: pd.data.Profit, Labor: pd.data.Labor, Material: pd.data.Material }
-            )
+            let dataForPie;
+
+            if (isLoss) {
+                // Unprofitable: Show COST breakdown
+                dataForPie = {
+                    Labor: pd.data.Labor,
+                    Material: pd.data.Material,
+                    Rework: pd.data.Rework
+                };
+            } else {
+                // Profitable: Show REVENUE breakdown
+                dataForPie = {
+                    Profit: pd.data.Profit,
+                    Labor: pd.data.Labor,
+                    Material: pd.data.Material,
+                    Rework: pd.data.Rework
+                };
+            }
+
+            const chartData = Object.entries(dataForPie)
                 .map(([k, v]) => ({ label: k, value: v }))
-                .filter(d => d.value > 1e-6);
+                .filter(d => d.value > 1e-6); // Filter out zero values
 
             const totalPart = d3.sum(chartData, r => r.value);
 
@@ -490,14 +530,41 @@ const ProfitTab = (function () {
                 .attr("fill", d => pieColors[d.data.label])
                 .on("mouseenter", () => ttPie.style("opacity", 1))
                 .on("mouseleave", () => ttPie.style("opacity", 0))
+                // --- Tooltip logic to explain the dynamic "Loss" slice ---
                 .on("mousemove", (ev, d) => {
-                    const amountValue = d.data.label === 'Loss' ? `-${fmtMoney(d.data.value)}` : fmtMoney(d.data.value);
+
+                    let tooltipHeader = `${pd.title}: ${d.data.label}`;
+                    let amountValue = fmtMoney(d.data.value);
+                    let shareLabel; // Will be set below
+
+                    if (isLoss) {
+                        // Unprofitable case
+                        shareLabel = "Share of Costs";
+                    } else {
+                        // Profitable case
+                        shareLabel = "Share of Revenue";
+                    }
+
+                    if (d.data.label === 'Rework') {
+                        tooltipHeader = `${pd.title}: Rework`;
+                    }
+
                     ttPie.html(
-                        `<div class="tooltip-header">${pd.title}: ${d.data.label}</div>
-                         <div class="tooltip-row"><span class="tooltip-key">Amount</span><span>${amountValue}</span></div>
-                         <div class="tooltip-row"><span class="tooltip-key">${isLoss ? 'Share of Costs & Loss' : 'Share'}</span><span>${(totalPart > 0 ? (d.data.value / totalPart * 100) : 0).toFixed(1)}%</span></div>`
+                        `<div class="tooltip-header">${tooltipHeader}</div>
+<div class="tooltip-row"><span class="tooltip-key">Amount</span><span>${amountValue}</span></div>
+<div class="tooltip-row"><span class="tooltip-key">${shareLabel}</span><span>${(totalPart > 0 ? (d.data.value / totalPart * 100) : 0).toFixed(1)}%</span></div>`
                     ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
                 });
+
+            const outerArc = d3.arc().outerRadius(baseR + 1.5 * uiScale);
+            
+            g.append("path")
+                .attr("class", "profit-pie-border")
+                .classed("blinking-failure", isLoss)
+                .attr("d", outerArc({
+                    startAngle: 0,
+                    endAngle: 2 * Math.PI
+                }));
 
             g.append("text")
                 .attr("y", -baseR - 8 * uiScale)
@@ -508,9 +575,11 @@ const ProfitTab = (function () {
 
         // --- LEGEND (2 columns, aligned) ---
         const legend2 = topHalf.append("g");
+
+        // --- 4-item legend ---
         const legendItems = [
             { label: "Profit", color: pieColors.Profit },
-            { label: "Loss", color: pieColors.Loss },
+            { label: "Rework", color: pieColors.Rework },
             { label: "Labor", color: pieColors.Labor },
             { label: "Material", color: pieColors.Material }
         ];
@@ -537,11 +606,12 @@ const ProfitTab = (function () {
 
         const rowGapLegend = 22 * uiScale;
 
+        // --- 4-item (2x2) layout ---
         [
-            { ...legendItems[0], col: 0, row: 0 },
-            { ...legendItems[1], col: 1, row: 0 },
-            { ...legendItems[2], col: 0, row: 1 },
-            { ...legendItems[3], col: 1, row: 1 },
+            { ...legendItems[0], col: 0, row: 0 }, // Profit
+            { ...legendItems[1], col: 1, row: 0 }, // Rework
+            { ...legendItems[2], col: 0, row: 1 }, // Labor
+            { ...legendItems[3], col: 1, row: 1 }, // Material
         ].forEach(item => {
             const xCol = item.col === 0 ? startX : startX + col1Width + colGap;
             const yRow = legendBaseY + item.row * rowGapLegend;
@@ -662,8 +732,8 @@ const ProfitTab = (function () {
             .on("mousemove", (ev, d) => {
                 ttBar.html(
                     `<div class="tooltip-header">${d.label}</div>
-                     <div class="tooltip-row"><span class="tooltip-key">Profit</span><span>${fmtMoney(d.profit)}</span></div>
-                     <div class="tooltip-row"><span class="tooltip-key">Margin</span><span>${fmtPct(d.margin)}</span></div>`
+<div class="tooltip-row"><span class="tooltip-key">Profit</span><span>${fmtMoney(d.profit)}</span></div>
+<div class="tooltip-row"><span class="tooltip-key">Margin</span><span>${fmtPct(d.margin)}</span></div>`
                 ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
             });
 
