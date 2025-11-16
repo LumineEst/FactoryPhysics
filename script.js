@@ -154,7 +154,6 @@ const megaReworkInput = document.getElementById('megaRework');
 // --- New Quality UI Elements ---
 const qualityYieldInput = document.getElementById('qualityYieldInput');
 const qualityStDevPercentageInput = document.getElementById('qualityStDevPercentage');
-const qualityYieldGoodsDisplay = document.getElementById('qualityYieldGoodsDisplay');
 const qualityStDevPercentageDisplay = document.getElementById('qualityStDevPercentageDisplay');
 const copqEl = document.getElementById('copq');
 window.lastQualityBreakdown = {};
@@ -280,6 +279,9 @@ async function loadData() {
         // Set the initial sales target to match the input's default value
         targetSalesDemand = parseInt(dailyDemandInput.value);
 
+        if (qualityYieldInput) {
+            qualityYieldInput.value = (parseFloat(qualityYieldInput.value) * 100.0).toFixed(1);
+        }
         originalInputs = {
             dailyDemand: parseInt(dailyDemandInput.value),
             opHours: parseFloat(opHoursInput.value),
@@ -733,11 +735,6 @@ function updateUI(options = {}) {
         qualityYieldEl.textContent = '---';
         if (copqEl) copqEl.textContent = '---'; // <-- ADD THIS
 
-        // Add a null check
-        if (qualityYieldGoodsDisplay) {
-            qualityYieldGoodsDisplay.textContent = '---';
-        }
-
         // Clear calculated yield field if user hasn't touched it
         if (qualityYieldInput && qualityYieldInput.dataset.userModified !== "true") {
             qualityYieldInput.value = "---";
@@ -1087,6 +1084,9 @@ function setupEventListeners() {
     // Attach listeners to trigger financial updates
     inputs.forEach(input => {
         input.addEventListener('input', () => {
+            if (input.id === 'qualityYieldInput') {
+                return;
+            }
             if (typeof window.updateProbabilisticValues === 'function') {
                 window.updateProbabilisticValues('mean');
             }
@@ -1103,9 +1103,10 @@ function setupEventListeners() {
 
 
     // --- New Tooltip for Quality Yield Breakdown ---
-    if (qualityYieldLabel) {
+    const qualityYieldLabelElement = document.querySelector('label[for="qualityYieldInput"]');
+    if (qualityYieldLabelElement) {
         const tooltip = createTooltip('quality-breakdown-tooltip');
-        qualityYieldLabel.addEventListener('mouseover', (event) => {
+        qualityYieldLabelElement.addEventListener('mouseover', (event) => {
             const breakdown = window.lastQualityBreakdown;
             if (!breakdown) return;
 
@@ -1144,11 +1145,11 @@ function setupEventListeners() {
                 .style('left', `${event.pageX + 15}px`)
                 .style('top', `${event.pageY - 28}px`);
         });
-        qualityYieldLabel.addEventListener('mousemove', (e) => {
+        qualityYieldLabelElement.addEventListener('mousemove', (e) => {
             tooltip.style('left', `${e.pageX + 15}px`)
                 .style('top', `${e.pageY - 28}px`);
         });
-        qualityYieldLabel.addEventListener('mouseout', () => {
+        qualityYieldLabelElement.addEventListener('mouseout', () => {
             tooltip.style('opacity', 0);
         });
     }
@@ -1301,7 +1302,7 @@ function attachCommitBehavior(inputs, onCommit) {
         'megaSell': 1000,
         'megaCogs': 960,
         'megaRework': 650, // Added
-        'qualityYieldInput': 1.0,
+        'qualityYieldInput': 100.0,
         'qualityStDevPercentage': 0.15
     };
     Object.assign(defaultValues, {
@@ -1419,7 +1420,7 @@ function clampByField(id, n) {
         case 'megaCogs':
             return Math.max(0, n);
         case 'qualityYieldInput': // New clamp
-            return Math.min(Math.max(0, n), 1.0);
+            return Math.min(Math.max(0, n), 100.0);
         default:
             return n;
     }
@@ -1825,106 +1826,90 @@ function generateElementColorScale(workstationIndex, numWorkstations, numElement
 * --------------------------------------------------------------------
 */
 
+
 /**
 * Handles changes from any of the main input controls, triggering
 * recalculations and UI updates.
+* NOW ASYNC to wait for wage stress calculation.
 * @param {string} driverId - The ID of the input element that changed.
+* @param {object} [context={}] - An optional context object.
 */
-async function handleInputChange(driverId) {
-    if (isRecalculating) return;
+async function handleInputChange(driverId, context = {}) {
+    if (isRecalculating) return; // <-- TYPO FIX
     isRecalculating = true;
 
-    const isFinancialDriver = [
-        'laborCost', 'superSell', 'superCogs', 'superRework',
-        'ultraSell', 'ultraCogs', 'ultraRework',
-        'megaSell', 'megaCogs', 'megaRework',
-        'qualityYieldInput', 'qualityStDevPercentage'
-    ].includes(driverId);
+    const isFinancialDriver = ['laborCost', 'superSell', 'superCogs', 'ultraSell', 'ultraCogs', 'megaSell', 'megaCogs', 'qualityYieldInput', 'qualityStDevPercentage'].includes(driverId);
     const isOperationalDriver = ['dailyDemand', 'opHours', 'numEmployees'].includes(driverId);
 
+    if (isFinancialDriver) {
+        if (driverId === 'qualityYieldInput') {
+            qualityYieldInput.dataset.userModified = "true"; // Set flag
+        } else {
+            qualityYieldInput.dataset.userModified = "false"; // Clear flag
+        }
+
+        if (driverId === 'laborCost' && typeof LocationTab !== 'undefined' && LocationTab.updateLocalWageStress) {
+            console.log("LaborCost changed, forcing wage stress recalculation...");
+            const currentLaborCost = parseFloat(laborCostInput.value) || 25;
+            await LocationTab.updateLocalWageStress(currentLaborCost);
+        }
+
+        calculateOptimalProfitData();
+    }
+
+    if (isOperationalDriver) {
+        workstationList.scrollTop = 0;
+
+        // This is fine, as 'qualityYieldInput' is not an operational driver
+        qualityYieldInput.dataset.userModified = "false";
+
+        if (typeof LocationTab !== 'undefined' && LocationTab.runOptimization) {
+            console.log("Operational driver changed, running full optimization...");
+            await LocationTab.runOptimization();
+        }
+    }
+
     try {
-        // --- STEP 1: Determine Stable Operational Values FIRST ---
-        // Get the *unstable* values from the DOM
-        let dailyDemand = parseInt(dailyDemandInput.value) || 1;
         let opHours = parseFloat(opHoursInput.value) || 1;
         let numEmployees = parseInt(numEmployeesInput.value);
 
-        // Update global CV right away
         window.stDevPercentage = parseFloat(qualityStDevPercentageInput.value);
 
-        // Reload config if employees changed. This is safe.
         if (driverId === 'numEmployees') {
             state.configData[numEmployees] = JSON.parse(JSON.stringify(originalConfigData[numEmployees]));
             invalidPrecedenceNodes.clear();
             document.querySelectorAll('.element-row').forEach(row => row.classList.remove('precedence-error'));
         }
 
-        // Run auto-adjust logic to get the *stable* values
         if (isOperationalDriver && autoAdjustEnabled) {
+
+            let productionTarget = parseInt(dailyDemandInput.value) || 1;
+
             switch (driverId) {
                 case 'dailyDemand':
-                    numEmployees = findBestEmployeeFitForDemand(dailyDemand, opHours, numEmployees);
-                    let requiredHoursForDemand = getRequiredHours(dailyDemand, numEmployees);
-                    opHours = Math.min(24, roundUpToQuarter(requiredHoursForDemand));
-                    dailyDemand = Math.min(dailyDemand, calculateMaxDemand(opHours, numEmployees));
+                    numEmployees = findBestEmployeeFitForDemand(productionTarget, opHours, numEmployees);
+                    opHours = Math.min(24, roundUpToQuarter(getRequiredHours(productionTarget, numEmployees)));
+
+                    const maxPhysical = calculateMaxDemand(opHours, numEmployees);
+                    if (productionTarget > maxPhysical) {
+                        productionTarget = maxPhysical;
+                        setInputValue(dailyDemandInput, productionTarget);
+                    }
                     break;
+
                 case 'opHours':
-                    let bestFit = { demand: 0, employees: numEmployees };
-                    for (let i = 3; i <= 13; i++) {
-                        const maxDemandForConfig = calculateMaxDemand(opHours, i);
-                        if (maxDemandForConfig > bestFit.demand) {
-                            bestFit.demand = maxDemandForConfig;
-                            bestFit.employees = i;
-                        }
-                    }
-                    numEmployees = bestFit.employees;
-                    dailyDemand = bestFit.demand > 0 ? bestFit.demand : 1;
-                    break;
                 case 'numEmployees':
-                    let requiredHoursForEmps = getRequiredHours(dailyDemand, numEmployees);
-                    opHours = Math.min(24, roundUpToQuarter(requiredHoursForEmps));
-                    if (requiredHoursForEmps > 24) {
-                        dailyDemand = calculateMaxDemand(24, numEmployees);
-                    }
                     break;
             }
-        } else if (driverId === 'qualityYieldInput') {
-            qualityYieldInput.dataset.userModified = "true";
-            // This is *just* a financial change. No auto-adjust needed.
+
+            setInputValue(opHoursInput, opHours, 2);
+            setInputValue(numEmployeesInput, numEmployees);
+
         }
 
-        // --- STEP 2: Update the DOM Inputs ---
-        // Now the inputs in the DOM reflect the *stable* configuration.
-        // Any function called from here on will read the correct, stable values.
-        setInputValue(dailyDemandInput, Math.round(dailyDemand));
-        setInputValue(opHoursInput, opHours.toFixed(2), 2);
-        setInputValue(numEmployeesInput, numEmployees);
+        // The old 'else if' block for 'qualityYieldInput' is removed.
+        // All drivers now fall through to updateUI().
 
-        // --- STEP 3: Run Async/Financial Logic (NOW STABLE) ---
-        // These functions will now read the *stable* values from the DOM.
-        if (isFinancialDriver) {
-            if (driverId !== 'qualityYieldInput') {
-                qualityYieldInput.dataset.userModified = "false";
-            }
-            if (driverId === 'laborCost' && typeof LocationTab !== 'undefined' && LocationTab.updateLocalWageStress) {
-                await LocationTab.updateLocalWageStress(parseFloat(laborCostInput.value) || 25);
-            }
-            calculateOptimalProfitData();
-        }
-
-        if (isOperationalDriver) {
-            workstationList.scrollTop = 0;
-            qualityYieldInput.dataset.userModified = "false";
-            if (typeof LocationTab !== 'undefined' && LocationTab.runOptimization) {
-                // This await will now use the *stable* values.
-                // Any `calculateMetrics` it triggers will be correct.
-                await LocationTab.runOptimization();
-            }
-        }
-
-        // --- STEP 4: Final Update ---
-        // This call runs *after* all logic is stable.
-        // This is the *correct level* to run the main quality calculation.
         updateUI();
 
     } catch (error) {
@@ -2054,11 +2039,11 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
         calculatedQualityYield = 1.0 - qualityBreakdown.totalStress; // Store the calculated value
 
         if (qualityYieldInput && qualityYieldInput.dataset.userModified === "true") {
-            return parseFloat(qualityYieldInput.value); // Return user override for math
+            return parseFloat(qualityYieldInput.value) / 100.0; // Return user override for math
         } else {
             // Only update the input if it's not being overridden
             if (qualityYieldInput) { // Add null check
-                qualityYieldInput.value = calculatedQualityYield.toFixed(3); // Update input box
+                qualityYieldInput.value = (calculatedQualityYield * 100.0).toFixed(1); // Update input box
             }
             return calculatedQualityYield; // Return calculated value for math
         }
@@ -2206,13 +2191,6 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
     // Gross Profit now subtracts COGS, Labor, AND Rework (CoPQ)
     const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost - costOfPoorQuality;
     const grossProfitMargin = totalRevenue > 0 ? (dailyGrossProfit / totalRevenue) * 100 : 0;
-
-
-    // --- FINALIZED PRODUCTION & DEMAND METRICS ---
-    if (qualityYieldGoodsDisplay && !skipQualityYield) {
-        // This label shows the *total production target*
-        qualityYieldGoodsDisplay.textContent = op.dailyDemand;
-    }
 
     // "Meets Demand" is a purely physical check.
     const effectiveMeetsDemand = finalTotalUnitsProduced >= totalProductionTarget;
@@ -2494,7 +2472,7 @@ function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
     let maxMargin = -Infinity;
     let maxMarginConfig = { emp: 0, hrs: 0 };
 
-    const qualityYield = parseFloat(qualityYieldInput.value) || 1.0;
+    const qualityYield = (parseFloat(qualityYieldInput.value) || 100.0) / 100.0;
     if (qualityYield < 0) qualityYield = 0; // Cannot be negative
 
     // --- THIS IS THE FIX ---
