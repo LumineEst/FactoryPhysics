@@ -724,7 +724,6 @@ function updateUI(options = {}) {
         throughputEl.textContent = '---';
         conveyorSpeedEl.textContent = '---';
         productSpacingEl.textContent = '---';
-        copqEl.textContent = '---'; // Added
         grossProfitEl.textContent = '---';
         profitMarginEl.textContent = '---';
         avgEfficiencyEl.textContent = '---';
@@ -732,6 +731,7 @@ function updateUI(options = {}) {
         balanceDelayEl.textContent = '---';
         idleTimeCvEl.textContent = '---';
         qualityYieldEl.textContent = '---';
+        if (copqEl) copqEl.textContent = '---'; // <-- ADD THIS
 
         // Add a null check
         if (qualityYieldGoodsDisplay) {
@@ -755,18 +755,14 @@ function updateUI(options = {}) {
             opHours: parseFloat(opHoursInput.value),
             numEmployees: parseInt(numEmployeesInput.value)
         };
-        // Pass all financial inputs, including new rework costs
         const finInputs = {
             laborCost: parseFloat(laborCostInput.value),
             superSell: parseFloat(superSellInput.value),
             superCogs: parseFloat(superCogsInput.value),
-            superRework: parseFloat(superReworkInput.value), // Added
             ultraSell: parseFloat(ultraSellInput.value),
             ultraCogs: parseFloat(ultraCogsInput.value),
-            ultraRework: parseFloat(ultraReworkInput.value), // Added
             megaSell: parseFloat(megaSellInput.value),
             megaCogs: parseFloat(megaCogsInput.value),
-            megaRework: parseFloat(megaReworkInput.value) // Added
         };
         const results = calculateMetrics(opInputs, finInputs);
 
@@ -775,8 +771,6 @@ function updateUI(options = {}) {
             animateValue(throughputEl, results.throughputUnitsPerHour, 800, val => `${val.toFixed(1)}/hr`);
             animateValue(conveyorSpeedEl, results.conveyorSpeed, 800, val => `${val.toFixed(2)} ft/min`);
             animateValue(productSpacingEl, results.productSpacing, 800, val => `${val.toFixed(2)} ft`);
-            // Animate new COPQ value
-            animateValue(copqEl, results.copq, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }));
             animateValue(grossProfitEl, results.dailyGrossProfit, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }));
             animateValue(profitMarginEl, results.grossProfitMargin, 800, val => `${val.toFixed(1)}%`);
             animateValue(avgEfficiencyEl, results.averageEfficiency, 800, val => `${val.toFixed(1)}%`);
@@ -784,6 +778,12 @@ function updateUI(options = {}) {
             animateValue(balanceDelayEl, results.balanceDelay, 800, val => `${val.toFixed(1)}%`);
             animateValue(idleTimeCvEl, results.idleTimeCv, 800, val => `${val.toFixed(1)}%`);
             animateValue(qualityYieldEl, results.qualityYield * 100, 800, val => `${val.toFixed(1)}%`);
+
+            // --- ADD THIS BLOCK ---
+            if (copqEl) {
+                animateValue(copqEl, results.costOfPoorQuality, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }));
+            }
+            // --- END ADD ---
 
             // Update demand status text and class
             const idleHoursTotal = (results.totalIdleTime || 0) / 60;
@@ -1974,66 +1974,54 @@ function calculateWorkstationDetails(numEmployees) {
     return { workstations, bottleneckTime, fastestTime };
 }
 
+
 /**
 * Calculates all key performance indicators (KPIs) for the assembly line
 * based on the current operational and financial inputs.
-* @param {object} op - Operational inputs { dailyDemand, opHours, numEmployees }.
-* @param {object} fin - Financial inputs { laborCost, ...sell/cogs/rework prices }.
+* @param {object} op - Operational inputs { dailyDemand, opHours, numEmployees }.
+* @param {object} fin - Financial inputs { laborCost, ...sell/cogs prices }.
 * @param {boolean} [skipQualityYield=false] - If true, skips applying quality yield to throughput.
 * @returns {object} An object containing all calculated metrics.
 */
-function calculateMetrics(op, fin, skipQualityYield = false) { // skipQualityYield is unused but kept for compatibility
+function calculateMetrics(op, fin, skipQualityYield = false) {
     fin = fin || {};
-    // Ensure all financial inputs are present, even if 0
-    if (typeof fin.laborCost !== 'number' || !isFinite(fin.laborCost)) {
-        const parsed = parseFloat(laborCostInput?.value);
-        fin.laborCost = Number.isFinite(parsed) ? parsed : 0;
-    }
-    if (typeof fin.superRework !== 'number' || !isFinite(fin.superRework)) {
-        const parsed = parseFloat(superReworkInput?.value);
-        fin.superRework = Number.isFinite(parsed) ? parsed : 0;
-    }
-    if (typeof fin.ultraRework !== 'number' || !isFinite(fin.ultraRework)) {
-        const parsed = parseFloat(ultraReworkInput?.value);
-        fin.ultraRework = Number.isFinite(parsed) ? parsed : 0;
-    }
-    if (typeof fin.megaRework !== 'number' || !isFinite(fin.megaRework)) {
-        const parsed = parseFloat(megaReworkInput?.value);
-        fin.megaRework = Number.isFinite(parsed) ? parsed : 0;
-    }
-    if (typeof fin.superSell !== 'number' || !isFinite(fin.superSell)) {
-        fin.superSell = Number.isFinite(parseFloat(superSellInput?.value)) ? parseFloat(superSellInput.value) : 0;
-    }
-    if (typeof fin.superCogs !== 'number' || !isFinite(fin.superCogs)) {
-        fin.superCogs = Number.isFinite(parseFloat(superCogsInput?.value)) ? parseFloat(superCogsInput.value) : 0;
-    }
-    if (typeof fin.ultraSell !== 'number' || !isFinite(fin.ultraSell)) {
-        fin.ultraSell = Number.isFinite(parseFloat(ultraSellInput?.value)) ? parseFloat(ultraSellInput.value) : 0;
-    }
-    if (typeof fin.ultraCogs !== 'number' || !isFinite(fin.ultraCogs)) {
-        fin.ultraCogs = Number.isFinite(parseFloat(ultraCogsInput?.value)) ? parseFloat(ultraCogsInput.value) : 0;
-    }
-    if (typeof fin.megaSell !== 'number' || !isFinite(fin.megaSell)) {
-        fin.megaSell = Number.isFinite(parseFloat(megaSellInput?.value)) ? parseFloat(megaSellInput.value) : 0;
-    }
-    if (typeof fin.megaCogs !== 'number' || !isFinite(fin.megaCogs)) {
-        fin.megaCogs = Number.isFinite(parseFloat(megaCogsInput?.value)) ? parseFloat(megaCogsInput.value) : 0;
-    }
 
+    // --- ROBUST FIN INPUT VALIDATION ---
+    // This helper function ensures that any value (NaN, undefined, etc.)
+    // is converted to a valid number (0).
+    const getFinVal = (val) => {
+        const n = parseFloat(val);
+        return isFinite(n) ? n : 0;
+    };
+
+    // Create a sanitized `finInputs` object. We will use this
+    // for all financial calculations.
+    const finInputs = {
+        laborCost: getFinVal(fin.laborCost) || getFinVal(laborCostInput?.value),
+        superSell: getFinVal(fin.superSell) || getFinVal(superSellInput?.value),
+        superCogs: getFinVal(fin.superCogs) || getFinVal(superCogsInput?.value),
+        ultraSell: getFinVal(fin.ultraSell) || getFinVal(ultraSellInput?.value),
+        ultraCogs: getFinVal(fin.ultraCogs) || getFinVal(ultraCogsInput?.value),
+        megaSell: getFinVal(fin.megaSell) || getFinVal(megaSellInput?.value),
+        megaCogs: getFinVal(fin.megaCogs) || getFinVal(megaCogsInput?.value)
+    };
+    // --- END VALIDATION ---
 
     const wsDetails = calculateWorkstationDetails(op.numEmployees);
 
-    // *** FIX: Use the "floor of the step value" for minutes ***
-    const fullTotalOpMinutes = Math.floor(op.opHours * 4) * 15;
+    // Use precise minutes
+    const fullTotalOpMinutes = op.opHours * 60;
 
     const bottleneckCycleTime = wsDetails.bottleneckTime;
     const productSpacing = wsDetails.fastestTime === Infinity ? 0 : wsDetails.fastestTime * 15;
 
-    // --- Helper function to get quality yield ---
+    // This will hold the *calculated* yield, regardless of override
     let calculatedQualityYield = 1.0;
+
+    // --- Helper function to get quality yield ---
     const getQualityYield = (taktTime, convSpeed) => {
-        // (This function is only called *once* per calculateMetrics run,
-        // so it is not a source of "constant recalculation".)
+        if (skipQualityYield) return 1.0;
+
         const config = state.configData[op.numEmployees];
         const workstationDetails = Object.keys(config || {}).map(wsId => {
             const elements = config[wsId] || [];
@@ -2055,107 +2043,125 @@ function calculateMetrics(op, fin, skipQualityYield = false) { // skipQualityYie
         const wageStress = typeof LocationTab !== 'undefined' && LocationTab.getLocalWageStress ? LocationTab.getLocalWageStress() : 0;
         const stDevPercentage = parseFloat(qualityStDevPercentageInput.value);
 
+        // This function returns a breakdown with a single `.totalStress`
         const qualityBreakdown = calculateQualityStressBreakdown(
             stDevPercentage, convSpeed, workstationDetails, taktTime,
             overtimeStress, wageStress, BUILD_RATIOS
         );
         window.lastQualityBreakdown = qualityBreakdown; // Save for tooltip
 
+        // `calculatedQualityYield` is the (1.0 - totalStress)
         calculatedQualityYield = 1.0 - qualityBreakdown.totalStress; // Store the calculated value
 
         if (qualityYieldInput && qualityYieldInput.dataset.userModified === "true") {
             return parseFloat(qualityYieldInput.value); // Return user override for math
         } else {
-            if (qualityYieldInput) {
+            // Only update the input if it's not being overridden
+            if (qualityYieldInput) { // Add null check
                 qualityYieldInput.value = calculatedQualityYield.toFixed(3); // Update input box
             }
             return calculatedQualityYield; // Return calculated value for math
         }
     };
 
-    if (productSpacing <= 0 || bottleneckCycleTime <= 0) {
-        const zeroLabor = op.numEmployees * op.opHours * (fin.laborCost || 0);
-        // Still need to update quality display
-        const qualityYield = getQualityYield(Infinity, 0);
-        if (qualityYieldGoodsDisplay) {
-            qualityYieldGoodsDisplay.textContent = '0'; // Set to 0 good units
+    // --- Helper function to calculate throughput ---
+    const calculateThroughput = (productionTarget) => {
+        if (productSpacing <= 0 || bottleneckCycleTime <= 0) {
+            return {
+                wip: 0, throughputUnitsPerHour: 0, conveyorSpeed: 0,
+                effectiveCycleTime: Infinity,
+                totalUnitsProduced: 0, qualityYield: 1.0,
+                productionTarget: productionTarget
+            };
         }
+
+        // 1. Calculate the line's true physical maximum production
+        const bottleneckThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckCycleTime;
+        const bottleneckLaunchWindow = fullTotalOpMinutes - bottleneckThroughputTime;
+
+        let physicalMaxUnits = 0;
+        if (bottleneckLaunchWindow > 0) {
+            physicalMaxUnits = Math.round(bottleneckLaunchWindow / bottleneckCycleTime) + 1;
+        } else if (fullTotalOpMinutes >= bottleneckThroughputTime) {
+            physicalMaxUnits = 1;
+        }
+
+        // 2. Determine if the line is paced by demand or by the bottleneck
+        let effectiveCycleTime;
+        let totalUnitsProduced;
+
+        if (productionTarget > physicalMaxUnits) {
+            effectiveCycleTime = bottleneckCycleTime;
+            totalUnitsProduced = physicalMaxUnits;
+        } else {
+            const demandIntervals = productionTarget > 1 ? productionTarget - 1 : 0;
+            const throughputTimeAsIntervals = ASSEMBLY_LINE_LENGTH / productSpacing;
+            const totalIntervals = demandIntervals + throughputTimeAsIntervals;
+
+            if (productionTarget <= 1) {
+                effectiveCycleTime = bottleneckCycleTime;
+            } else {
+                effectiveCycleTime = fullTotalOpMinutes / totalIntervals;
+            }
+            totalUnitsProduced = productionTarget;
+        }
+
+        // 3. Calculate all other metrics
+        const conveyorSpeed = productSpacing / effectiveCycleTime;
+        const wip = ASSEMBLY_LINE_LENGTH / productSpacing;
+        const actualThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * effectiveCycleTime;
+
+        let actualProductionMinutes;
+        if (totalUnitsProduced <= 0) {
+            actualProductionMinutes = 0;
+        } else if (totalUnitsProduced === 1) {
+            actualProductionMinutes = actualThroughputTime;
+        } else {
+            const demandIntervals = totalUnitsProduced - 1;
+            actualProductionMinutes = effectiveCycleTime * (demandIntervals) + actualThroughputTime;
+        }
+
+        const throughputUnitsPerHour = actualProductionMinutes > 0 ? (totalUnitsProduced / actualProductionMinutes) * 60 : 0;
+
         return {
-            wip: 0, throughputUnitsPerHour: 0, conveyorSpeed: 0, productSpacing: 0,
-            copq: 0, dailyGrossProfit: -zeroLabor,
-            grossProfitMargin: 0, meetsDemand: false, effectiveCycleTime: Infinity,
-            workstations: wsDetails.workstations, averageEfficiency: 0,
-            totalIdleTime: fullTotalOpMinutes * op.numEmployees,
-            balanceDelay: 100, idleTimeCv: 0, throughputUnitsPerDay: 0,
-            qualityYield: qualityYield
+            wip, throughputUnitsPerHour, conveyorSpeed,
+            effectiveCycleTime, totalUnitsProduced, qualityYield: 1.0,
+            productionTarget
         };
-    }
+    };
 
-    // --- Takt Time Calculation (from your original file) ---
-    let requiredTaktTime;
-    const demandIntervals = op.dailyDemand > 1 ? op.dailyDemand - 1 : 0;
-    const throughputTimeAsIntervals = ASSEMBLY_LINE_LENGTH / productSpacing;
+    // --- Main Calculation Logic ---
+    const totalProductionTarget = op.dailyDemand;
 
-    if (op.dailyDemand <= 1) {
-        requiredTaktTime = Infinity;
-    } else {
-        const totalIntervals = demandIntervals + throughputTimeAsIntervals;
-        requiredTaktTime = fullTotalOpMinutes / totalIntervals;
-    }
+    // 1. Run simulation *once* with this production target
+    const finalPassResults = calculateThroughput(totalProductionTarget);
 
-    const meetsDemandByTakt = bottleneckCycleTime <= requiredTaktTime;
-    const effectiveCycleTime = meetsDemandByTakt ? requiredTaktTime : bottleneckCycleTime;
-    const cycleTimeToUseForSpeedCalc = isFinite(effectiveCycleTime) ? effectiveCycleTime : bottleneckCycleTime;
-    const conveyorSpeed = productSpacing / cycleTimeToUseForSpeedCalc;
-    const actualThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * effectiveCycleTime;
-    const wip = ASSEMBLY_LINE_LENGTH / productSpacing;
+    // 2. Get the quality yield.
+    const finalQualityYield = getQualityYield(finalPassResults.effectiveCycleTime, finalPassResults.conveyorSpeed);
 
-    // --- Throughput Calculation (Based on your original file) ---
-    let totalUnitsProduced; // This is the total physical production
+    // This is the failure rate
+    const totalStress = 1.0 - finalQualityYield;
 
-    // Check if we have enough time for one unit
-    if (fullTotalOpMinutes < (actualThroughputTime - 1e-9)) {
-        totalUnitsProduced = 0;
-    } else if (op.dailyDemand <= 1) {
-        totalUnitsProduced = 1;
-    } else {
-        const launchWindowMinutes = fullTotalOpMinutes - actualThroughputTime;
-        totalUnitsProduced = Math.floor((launchWindowMinutes / effectiveCycleTime) + 1e-9) + 1;
-    }
+    const {
+        wip: finalWip,
+        throughputUnitsPerHour: finalTotalThroughputPerHour,
+        conveyorSpeed: finalConveyorSpeed,
+        effectiveCycleTime: finalEffectiveCycleTime,
+        totalUnitsProduced: finalTotalUnitsProduced
+    } = finalPassResults;
 
-    // Check if we *actually* met demand
-    const effectiveMeetsDemand = totalUnitsProduced >= op.dailyDemand;
-
-    // If the line is paced by demand (meetsDemandByTakt), we shouldn't produce *more* than demanded
-    if (meetsDemandByTakt) {
-        totalUnitsProduced = Math.min(totalUnitsProduced, op.dailyDemand);
-    }
-
-    let actualProductionMinutes;
-    if (totalUnitsProduced <= 0) {
-        actualProductionMinutes = 0;
-    } else if (totalUnitsProduced === 1) {
-        actualProductionMinutes = actualThroughputTime;
-    } else {
-        // Recalculate intervals based on *actual* production
-        const actualIntervals = totalUnitsProduced - 1;
-        actualProductionMinutes = effectiveCycleTime * actualIntervals + actualThroughputTime;
-    }
-
-    const totalThroughputUnitsPerHour = actualProductionMinutes > 0 ? (totalUnitsProduced / actualProductionMinutes) * 60 : 0;
-
-    // --- Efficiency Calcs (from your original file) ---
+    // --- Calculate final metrics ---
     let totalWorkstationCycleTime = 0;
     wsDetails.workstations.forEach(ws => {
         totalWorkstationCycleTime += ws.cycleTime;
         ws.efficiency = bottleneckCycleTime > 0 ? (ws.cycleTime / bottleneckCycleTime) * 100 : 0;
         const idleTimePerCycle = bottleneckCycleTime - ws.cycleTime;
-        ws.dailyIdleTime = idleTimePerCycle * totalUnitsProduced;
+        ws.dailyIdleTime = idleTimePerCycle * finalTotalUnitsProduced;
     });
 
     const totalAvailableTime = op.numEmployees * fullTotalOpMinutes;
-    const totalDailyLaborCost = op.numEmployees * op.opHours * (fin.laborCost || 0);
-    const totalProductiveTime = totalUnitsProduced * totalWorkstationCycleTime;
+    const totalDailyLaborCost = op.numEmployees * op.opHours * finInputs.laborCost; // Use sanitized value
+    const totalProductiveTime = finalTotalUnitsProduced * totalWorkstationCycleTime;
     const totalIdleTime = Math.max(0, totalAvailableTime - totalProductiveTime);
     const averageEfficiency = totalAvailableTime > 0 ? (totalProductiveTime / totalAvailableTime) * 100 : 0;
 
@@ -2168,50 +2174,67 @@ function calculateMetrics(op, fin, skipQualityYield = false) { // skipQualityYie
     const stdDev = Math.sqrt(idleTimesPerCycle.map(x => Math.pow(x - idleMean, 2)).reduce((a, b) => a + b, 0) / (idleTimesPerCycle.length || 1));
     const idleTimeCv = idleMean > 0 ? (stdDev / idleMean) * 100 : 0;
 
-    // --- NEW FINANCIAL & YIELD CALCS ---
+    // --- FINANCIAL CALCULATION (with Rework Cost) ---
 
-    // 1. Get the calculated quality yield (this also updates the input box)
-    const qualityYield = getQualityYield(effectiveCycleTime, conveyorSpeed);
+    // Revenue is based on *ALL* units produced (using sanitized finInputs)
+    const totalRevenue = finalTotalUnitsProduced * (
+        (BUILD_RATIOS.super * finInputs.superSell) +
+        (BUILD_RATIOS.ultra * finInputs.ultraSell) +
+        (BUILD_RATIOS.mega * finInputs.megaSell)
+    );
 
-    // 2. Calculate good/defective units
-    const effectiveGoodUnits = Math.round(totalUnitsProduced * qualityYield);
-    const defectiveUnits = totalUnitsProduced - effectiveGoodUnits;
+    // COGS is based on *ALL* units produced (using sanitized finInputs)
+    const totalCogs = finalTotalUnitsProduced * (
+        (BUILD_RATIOS.super * finInputs.superCogs) +
+        (BUILD_RATIOS.ultra * finInputs.ultraCogs) +
+        (BUILD_RATIOS.mega * finInputs.megaCogs)
+    );
 
-    // 3. *** FIX: Update the "Units" span with GOOD units ***
-    if (qualityYieldGoodsDisplay) {
-        qualityYieldGoodsDisplay.textContent = effectiveGoodUnits; // CHANGED
-    }
+    // --- CoPQ CALCULATION (as Rework) ---
+    const failedSuper = (finalTotalUnitsProduced * BUILD_RATIOS.super) * totalStress;
+    const failedUltra = (finalTotalUnitsProduced * BUILD_RATIOS.ultra) * totalStress;
+    const failedMega = (finalTotalUnitsProduced * BUILD_RATIOS.mega) * totalStress;
 
-    // 4. Calculate Revenue, COGS, and COPQ
-    const totalRevenue = effectiveGoodUnits * ((BUILD_RATIOS.super * (fin.superSell || 0)) + (BUILD_RATIOS.ultra * (fin.ultraSell || 0)) + (BUILD_RATIOS.mega * (fin.megaSell || 0)));
-    const totalCogs = totalUnitsProduced * ((BUILD_RATIOS.super * (fin.superCogs || 0)) + (BUILD_RATIOS.ultra * (fin.ultraCogs || 0)) + (BUILD_RATIOS.mega * (fin.megaCogs || 0)));
-    const avgReworkCost = (BUILD_RATIOS.super * (fin.superRework || 0)) + (BUILD_RATIOS.ultra * (fin.ultraRework || 0)) + (BUILD_RATIOS.mega * (fin.megaRework || 0));
-    const copq = defectiveUnits * avgReworkCost;
+    // Use the sanitized finInputs values
+    const reworkCost = (failedSuper * finInputs.superCogs) +
+        (failedUltra * finInputs.ultraCogs) +
+        (failedMega * finInputs.megaCogs);
 
-    // 5. Calculate final profit
-    const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost - copq;
+    // This is now guaranteed to be a valid number (e.g., 0)
+    const costOfPoorQuality = reworkCost;
+
+    // Gross Profit now subtracts COGS, Labor, AND Rework (CoPQ)
+    const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost - costOfPoorQuality;
     const grossProfitMargin = totalRevenue > 0 ? (dailyGrossProfit / totalRevenue) * 100 : 0;
 
-    // 6. Throughput per hour must be 'good' units
-    const goodThroughputUnitsPerHour = totalThroughputUnitsPerHour * qualityYield;
+
+    // --- FINALIZED PRODUCTION & DEMAND METRICS ---
+    if (qualityYieldGoodsDisplay && !skipQualityYield) {
+        // This label shows the *total production target*
+        qualityYieldGoodsDisplay.textContent = op.dailyDemand;
+    }
+
+    // "Meets Demand" is a purely physical check.
+    const effectiveMeetsDemand = finalTotalUnitsProduced >= totalProductionTarget;
+
+    // Throughput KPIs report TOTAL physical units.
+    const effectiveHourlyUnits = finalTotalThroughputPerHour;
+    const effectiveTotalUnits = finalTotalUnitsProduced;
 
     return {
-        wip: wip,
-        throughputUnitsPerHour: goodThroughputUnitsPerHour, // Show good units/hr
-        conveyorSpeed: conveyorSpeed,
+        wip: finalWip,
+        throughputUnitsPerHour: effectiveHourlyUnits, // TOTAL hourly
+        conveyorSpeed: finalConveyorSpeed,
         productSpacing: productSpacing,
-        copq: copq,
-        dailyGrossProfit: dailyGrossProfit,
-        grossProfitMargin: grossProfitMargin,
-        meetsDemand: effectiveMeetsDemand, // This is the physical check
-        effectiveCycleTime: effectiveCycleTime,
+        dailyGrossProfit,
+        grossProfitMargin,
+        costOfPoorQuality: costOfPoorQuality, // <-- NOW INCLUDED AND VALID
+        meetsDemand: effectiveMeetsDemand, // PHYSICAL check
+        effectiveCycleTime: finalEffectiveCycleTime,
         workstations: wsDetails.workstations,
-        averageEfficiency: averageEfficiency,
-        totalIdleTime: totalIdleTime,
-        balanceDelay: balanceDelay,
-        idleTimeCv: idleTimeCv,
-        throughputUnitsPerDay: effectiveGoodUnits, // Report good units
-        qualityYield: calculatedQualityYield // Report the calculated yield %
+        averageEfficiency, totalIdleTime, balanceDelay, idleTimeCv,
+        throughputUnitsPerDay: effectiveTotalUnits, // TOTAL daily
+        qualityYield: calculatedQualityYield // The calculated % (1.0 - totalStress)
     };
 }
 
@@ -2461,7 +2484,7 @@ function runProfitCalculation() {
 /**
 * Finds the most profitable and highest margin configuration for a single demand value.
 * @param {number} demand - The daily demand to analyze.
-* @param {object} finInputs - The financial inputs object (MUST include rework costs).
+* @param {object} finInputs - The financial inputs object.
 * @param {Map<number, number>} maxDemandMap - A pre-calculated map of max demands per workstation.
 * @returns {{profitResult: object, marginResult: object}} An object containing the results.
 */
@@ -2471,13 +2494,16 @@ function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
     let maxMargin = -Infinity;
     let maxMarginConfig = { emp: 0, hrs: 0 };
 
-    // 'demand' is the production target
-    for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
+    const qualityYield = parseFloat(qualityYieldInput.value) || 1.0;
+    if (qualityYield < 0) qualityYield = 0; // Cannot be negative
 
-        // Use the robust max demand calculation to check if this is even possible
-        // We check at 24 hours, the max possible time
-        if (demand > calculateMaxDemand(24, numEmployees)) {
-            continue; // This employee count can't physically make the demand
+    // --- THIS IS THE FIX ---
+    // 'demand' is the TOTAL production target. No division by yield.
+    const requiredProductionTotal = demand;
+
+    for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
+        if (requiredProductionTotal > (maxDemandMap.get(numEmployees) || 0)) {
+            continue;
         }
 
         if (!originalConfigData[numEmployees] || Object.keys(originalConfigData[numEmployees]).length === 0) continue;
@@ -2485,41 +2511,49 @@ function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
         const { bottleneckTime, fastestTime } = calculateWorkstationDetails(numEmployees);
         if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) continue;
 
-        // Find the minimum hours required to produce 'demand'
-        const minRequiredHours = getRequiredHours(demand, numEmployees);
+        const productSpacing = fastestTime * 15;
+        const throughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckTime;
+        const totalRequiredMinutes = (requiredProductionTotal > 1 ? (requiredProductionTotal - 1) * bottleneckTime : 0) + throughputTime;
+        const minRequiredHours = totalRequiredMinutes / 60;
 
-        if (minRequiredHours > 24) continue; // This config can't make it in 24h
+        if (minRequiredHours > 24) continue;
 
-        // Start checking from the minimum required hours
         const startHours = roundUpToQuarter(minRequiredHours);
-
-        // *** FIX: Reverted to loop over opHours ***
-        // This is less efficient but calculates quality for each hour, as requested.
         for (let opHours = startHours; opHours <= 24; opHours += 0.25) {
 
-            // Run the full metrics calculation, which now includes COPQ and yield
             const metrics = calculateMetrics(
-                { dailyDemand: demand, opHours, numEmployees },
-                finInputs
+                { dailyDemand: requiredProductionTotal, opHours, numEmployees },
+                finInputs,
+                true // skipQualityYield = true. We apply it manually.
             );
 
-            // Check if this config *actually* produced the required demand
-            if (metrics && metrics.meetsDemand) {
+            // Check if this config can *physically* produce the target
+            if (metrics && metrics.throughputUnitsPerDay >= requiredProductionTotal) {
 
-                // The metrics object already contains the final, yield-adjusted profit
-                if (metrics.dailyGrossProfit > maxProfit) {
-                    maxProfit = metrics.dailyGrossProfit;
+                // --- FINANCIAL CALCULATION (with quality) ---
+                // Revenue is based on "good" units (target * yield)
+                const totalRevenue = (requiredProductionTotal * qualityYield) * ((BUILD_RATIOS.super * (finInputs.superSell || 0)) + (BUILD_RATIOS.ultra * (finInputs.ultraSell || 0)) + (BUILD_RATIOS.mega * (finInputs.megaSell || 0)));
+                // COGS is based on *all* units produced (the target)
+                const totalCogs = requiredProductionTotal * ((BUILD_RATIOS.super * (finInputs.superCogs || 0)) + (BUILD_RATIOS.ultra * (finInputs.ultraCogs || 0)) + (BUILD_RATIOS.mega * (finInputs.megaCogs || 0)));
+
+                const totalDailyLaborCost = numEmployees * opHours * (finInputs.laborCost || 0);
+
+                const profitWithQuality = totalRevenue - totalCogs - totalDailyLaborCost;
+                const marginWithQuality = totalRevenue > 0 ? (profitWithQuality / totalRevenue) * 100 : 0;
+                // --- END FINANCIAL CALC ---
+
+                if (profitWithQuality > maxProfit) {
+                    maxProfit = profitWithQuality;
                     maxProfitConfig = { emp: numEmployees, hrs: opHours };
                 }
-                if (metrics.grossProfitMargin > maxMargin) {
-                    maxMargin = metrics.grossProfitMargin;
+                if (marginWithQuality > maxMargin) {
+                    maxMargin = marginWithQuality;
                     maxMarginConfig = { emp: numEmployees, hrs: opHours };
                 }
-                // Found the cheapest config (lowest opHours) for this employee count
-                break;
+                break; // Found the cheapest config for this demand, move to next
             }
-        } // End opHours loop
-    } // End numEmployees loop
+        }
+    }
 
     const profitResult = { demand, value: isFinite(maxProfit) ? maxProfit : 0, config: maxProfitConfig };
     const marginResult = { demand, value: isFinite(maxMargin) ? maxMargin : 0, config: maxMarginConfig };
