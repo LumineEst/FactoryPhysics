@@ -312,6 +312,7 @@ h4 {
 
 .control-section h4,
 .output-section h4 {
+    margin-bottom: 0.3rem;
     font-size: 1.1rem;
 }
 
@@ -1632,6 +1633,27 @@ input:checked+.slider:before {
     /* Text in top legend */
     font-size: 12px;
     font-weight: 600;
+}
+
+@keyframes blink-failure-stroke {
+    0%, 100% {
+        stroke: var(--failure-color);
+        stroke-width: 5px;
+        stroke-opacity: 1;
+    } 50% {
+        stroke: #ff9a9a;
+        stroke-width: 2px;
+        stroke-opacity: 0.4;
+    }
+}
+
+.profit-pie-border.blinking-failure {
+    animation: blink-failure-stroke 1.5s ease-in-out infinite;
+}
+
+.profit-pie-border {
+    fill: none;
+    pointer-events: none;
 }
 
 .profit-pie-title {
