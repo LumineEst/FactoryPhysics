@@ -300,30 +300,54 @@ body {
 
 .control-section,
 .output-section {
-    margin-bottom: 1.5rem;
+    margin-top: 0.3rem;
+    margin-bottom: 0.3rem;
 }
 
 h4 {
-    margin-bottom: 0.75rem;
+    margin-top: 0.5rem;
     padding-bottom: 0.5rem;
+    color: var(--secondary2);
+}
+
+.control-section h4,
+.output-section h4 {
+    font-size: 1.1rem;
 }
 
 .input-group {
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.3rem;
+    display: grid;
+    grid-template-columns: 1fr 0.5fr;
+    justify-content: space-between;
+    align-items: center;
 }
 
-.input-group label {
-    display: block;
+.input-group-slider {
+    margin-bottom: 0.5rem;
+    display: grid;
+    grid-template-columns: 0.5fr 0.5fr;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.input-group label,
+.input-group-slider label {
+    display: inline;
     font-size: 0.9rem;
-    margin-bottom: 0.25rem;
+    margin-right: 0.5rem;
+    opacity: 0.9;
 }
 
 input[type="number"],
 input[type="range"] {
     width: 100%;
-    padding: 0.3rem;
+    text-align: right;
+    font-size: 0.9rem;
+    color: var(--accent);
+    padding: 0.2rem;
     margin-top: 0.3rem;
-    margin-bottom: 0.3rem;
+    margin-bottom: 0.2rem;
     border-radius: 4px;
 }
 
@@ -361,7 +385,8 @@ input[type="range"]::-webkit-slider-thumb {
 
 .fin-grid span {
     font-weight: bold;
-    font-size: 0.8rem;
+    font-size: 0.9rem;
+    opacity: 0.9;
     text-align: center;
 }
 
@@ -370,10 +395,7 @@ input[type="range"]::-webkit-slider-thumb {
     grid-template-columns: auto 1fr;
     gap: 0.5rem 1rem;
     font-size: 0.9rem;
-}
-
-.output-grid span {
-    opacity: 0.8;
+    opacity: 0.9;
 }
 
 .status {
