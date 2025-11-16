@@ -416,9 +416,18 @@ const LocationTab = (() => {
         PPI = ppiInput ? parseFloat(ppiInput) : 170;
 
         if (optimizationMode === 'New') {
-            if (cities.length < 2) {
+
+            // *** THIS IS THE FIX ***
+            if (cities.length === 1) {
+                // If there is only one city, the optimal location *is* that city.
+                optimalFactoryLocation = cities[0].coordinates;
+            } else if (cities.length < 2) {
+                // If there are 0 cities
                 optimalFactoryLocation = null;
             } else {
+                // *** END FIX ***
+
+                // (Original logic for 2+ cities)
                 cities.forEach(c => {
                     const shipmentDetails = getShipmentDetails(null, c, 1);
                     const costPerShipmentPerMile = shipmentDetails ? shipmentDetails.costPerShipment : 0;
@@ -903,7 +912,7 @@ const LocationTab = (() => {
         const avgCogs = (superCogsVal * buildRatios.super) + (ultraCogsVal * buildRatios.ultra) + (mcInputVal * buildRatios.mega);
 
         // Formatters
-        const formatK = (n) => (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k';
+        const formatK = d3.format(".2s");
         const formatInt = d3.format(",.0f");
         const formatCurrency = (val) => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
         const year = new Date().getFullYear();
