@@ -308,13 +308,18 @@ const drawInvestmentPanel = (function () {
 
         // Set defaults for any NaN values
         finInputs.laborCost = isNaN(finInputs.laborCost) ? 25 : finInputs.laborCost;
-        finInputs.superSell = isNaN(finInputs.superSell) ? 100 : finInputs.superSell;
-        finInputs.superCogs = isNaN(finInputs.superCogs) ? 50 : finInputs.superCogs;
-        finInputs.ultraSell = isNaN(finInputs.ultraSell) ? 150 : finInputs.ultraSell;
-        finInputs.ultraCogs = isNaN(finInputs.ultraCogs) ? 75 : finInputs.ultraCogs;
-        finInputs.megaSell = isNaN(finInputs.megaSell) ? 200 : finInputs.megaSell;
-        finInputs.megaCogs = isNaN(finInputs.megaCogs) ? 100 : finInputs.megaCogs;
+        finInputs.superSell = isNaN(finInputs.superSell) ? 400 : finInputs.superSell;
+        finInputs.superCogs = isNaN(finInputs.superCogs) ? 375 : finInputs.superCogs;
+        finInputs.superRework = isNaN(finInputs.superRework) ? 350 : finInputs.superRework;
+        finInputs.ultraSell = isNaN(finInputs.ultraSell) ? 650 : finInputs.ultraSell;
+        finInputs.ultraCogs = isNaN(finInputs.ultraCogs) ? 590 : finInputs.ultraCogs;
+        finInputs.ultraRework = isNaN(finInputs.ultraRework) ? 500 : finInputs.ultraRework;
+        finInputs.megaSell = isNaN(finInputs.megaSell) ? 1000 : finInputs.megaSell;
+        finInputs.megaCogs = isNaN(finInputs.megaCogs) ? 960 : finInputs.megaCogs;
+        finInputs.megaRework = isNaN(finInputs.megaRework) ? 650 : finInputs.megaRework;
 
+        const qualityYield = (parseFloat(qualityYieldInput.value) / 100.0) || 1.0;
+        const totalStress = 1.0 - qualityYield;
         const avgPrice = (finInputs.superSell * BUILD_RATIOS.super) + (finInputs.ultraSell * BUILD_RATIOS.ultra) + (finInputs.megaSell * BUILD_RATIOS.mega);
         let unitsToProduce = 0, configForReport = {}, initialInvestment = 0, equipmentCostForDepreciation = 0;
         const currentEmployees = parseInt(numEmployeesInput.value);
@@ -349,8 +354,10 @@ const drawInvestmentPanel = (function () {
             const revenue = unitsToProduce * avgPrice;
             const totalMaterialCost = unitsToProduce * ((finInputs.superCogs * BUILD_RATIOS.super) + (finInputs.ultraCogs * BUILD_RATIOS.ultra) + (finInputs.megaCogs * BUILD_RATIOS.mega));
             const laborCost = configForReport.empCount * configForReport.opHours * finInputs.laborCost * workingDaysCount;
+            const failedUnits = unitsToProduce * totalStress;
+            const reworkCost = failedUnits * ((BUILD_RATIOS.super * finInputs.superRework) + (BUILD_RATIOS.ultra * finInputs.ultraRework) + (BUILD_RATIOS.mega * finInputs.megaRework))
             const taxDepreciation = (t - 1 < macrsSchedule.length && equipmentCostForDepreciation > 0) ? equipmentCostForDepreciation * macrsSchedule[t - 1] : 0;
-            const ebit = revenue - (totalMaterialCost + laborCost + scaledMfgOverhead + investmentState.freightExpense + scaledSgaExpenses + taxDepreciation);
+            const ebit = revenue - (totalMaterialCost + laborCost + reworkCost + scaledMfgOverhead + investmentState.freightExpense + scaledSgaExpenses + taxDepreciation);
             const nopat = ebit - (ebit > 0 ? ebit * (taxRate / 100) : 0);
             cashFlows.push(nopat + taxDepreciation);
         }
@@ -426,14 +433,16 @@ const drawInvestmentPanel = (function () {
 
     function findOptimalNPVConfig(annualUnitDemand, finInputs) {
 
-        // Set defaults for any NaN values
         finInputs.laborCost = isNaN(finInputs.laborCost) ? 25 : finInputs.laborCost;
-        finInputs.superSell = isNaN(finInputs.superSell) ? 100 : finInputs.superSell;
-        finInputs.superCogs = isNaN(finInputs.superCogs) ? 50 : finInputs.superCogs;
-        finInputs.ultraSell = isNaN(finInputs.ultraSell) ? 150 : finInputs.ultraSell;
-        finInputs.ultraCogs = isNaN(finInputs.ultraCogs) ? 75 : finInputs.ultraCogs;
-        finInputs.megaSell = isNaN(finInputs.megaSell) ? 200 : finInputs.megaSell;
-        finInputs.megaCogs = isNaN(finInputs.megaCogs) ? 100 : finInputs.megaCogs;
+        finInputs.superSell = isNaN(finInputs.superSell) ? 400 : finInputs.superSell;
+        finInputs.superCogs = isNaN(finInputs.superCogs) ? 375 : finInputs.superCogs;
+        finInputs.superRework = isNaN(finInputs.superRework) ? 350 : finInputs.superRework;
+        finInputs.ultraSell = isNaN(finInputs.ultraSell) ? 650 : finInputs.ultraSell;
+        finInputs.ultraCogs = isNaN(finInputs.ultraCogs) ? 590 : finInputs.ultraCogs;
+        finInputs.ultraRework = isNaN(finInputs.ultraRework) ? 500 : finInputs.ultraRework;
+        finInputs.megaSell = isNaN(finInputs.megaSell) ? 1000 : finInputs.megaSell;
+        finInputs.megaCogs = isNaN(finInputs.megaCogs) ? 960 : finInputs.megaCogs;
+        finInputs.megaRework = isNaN(finInputs.megaRework) ? 650 : finInputs.megaRework;
 
         let maxNPV = -Infinity;
         let bestConfig = { emp: 0, hrs: 0 };
@@ -485,8 +494,10 @@ const drawInvestmentPanel = (function () {
                 const revenue = annualUnitDemand * avgPrice;
                 const totalMaterialCost = annualUnitDemand * ((finInputs.superCogs * BUILD_RATIOS.super) + (finInputs.ultraCogs * BUILD_RATIOS.ultra) + (finInputs.megaCogs * BUILD_RATIOS.mega));
                 const laborCost = configForAnalysis.empCount * configForAnalysis.opHours * finInputs.laborCost * workingDaysCount;
+                const failedUnits = annualUnitDemand * totalStress;
+                const reworkCost = failedUnits * ((BUILD_RATIOS.super * finInputs.superRework) + (BUILD_RATIOS.ultra * finInputs.ultraRework) + (BUILD_RATIOS.mega * finInputs.megaRework));
                 const taxDepreciation = (t - 1 < macrsSchedule.length && equipmentCostForDepreciation > 0) ? equipmentCostForDepreciation * macrsSchedule[t - 1] : 0;
-                const ebit = revenue - (totalMaterialCost + laborCost + scaledMfgOverhead + investmentState.freightExpense + scaledSgaExpenses + taxDepreciation);
+                const ebit = revenue - (totalMaterialCost + laborCost + reworkCost + scaledMfgOverhead + investmentState.freightExpense + scaledSgaExpenses + taxDepreciation);
                 const nopat = ebit - (ebit > 0 ? ebit * (taxRate / 100) : 0);
                 cashFlows.push(nopat + taxDepreciation);
             }
@@ -825,10 +836,15 @@ const drawInvestmentPanel = (function () {
                 document.getElementById('laborCost'),
                 document.getElementById('superSell'),
                 document.getElementById('superCogs'),
+                document.getElementById('superRework'),
                 document.getElementById('ultraSell'),
                 document.getElementById('ultraCogs'),
+                document.getElementById('ultraRework'),
                 document.getElementById('megaSell'),
-                document.getElementById('megaCogs')
+                document.getElementById('megaCogs'),
+                document.getElementById('megaRework'),
+                document.getElementById('qualityYieldInput'),
+                document.getElementById('qualityStDevPercentage')
             ];
             mainInputs.forEach(input => {
                 if (input) {
