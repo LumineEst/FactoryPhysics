@@ -8,41 +8,59 @@
 window.stDevPercentage = 0.15;
 
 /**
- * Helper function to calculate the stress (probability of overage)
+ * --- MODIFIED ---
+ * Helper function to calculate the probabilistic details
  * for a single model type within a single workstation.
  */
-function calculateStressForModel(elementTimes, taktTime, stDevPercentage) {
+function getModelProbabilistics(elementTimes, taktTime, stDevPercentage) {
     if (!elementTimes || elementTimes.length === 0) {
-        return 0; // No tasks for this model, so no stress
+        return { mean: 0, stdDev: 0, probOverage: 0 };
     }
 
     // Calculate the mean total time for this model
-    const workstationMeanTime = elementTimes.reduce((sum, t) => sum + t, 0);
+    const mean = elementTimes.reduce((sum, t) => sum + t, 0);
 
     // Calculate the total workstation stDev for this model
-    const workstationVariance = elementTimes.reduce((sum, t) => {
+    const variance = elementTimes.reduce((sum, t) => {
         const taskStDev = t * stDevPercentage;
         const taskVariance = taskStDev * taskStDev;
         return sum + taskVariance;
     }, 0);
-    const workstationStDev = Math.sqrt(workstationVariance);
-
-    if (!isFinite(workstationStDev) || workstationStDev <= 0) {
-        // No variability, stress is 0 unless the mean is already over takt.
-        return (workstationMeanTime > taktTime) ? 1.0 : 0.0;
-    }
+    const stdDev = Math.sqrt(variance);
 
     // Calculate probability of exceeding takt time
-    const z = (taktTime - workstationMeanTime) / workstationStDev;
-    const probOverage = 1 - normalCDF(z);
+    let probOverage = 0.0;
+    if (!isFinite(stdDev) || stdDev <= 0) {
+        // No variability, stress is 0 unless the mean is already over takt.
+        probOverage = (mean > taktTime) ? 1.0 : 0.0;
+    } else {
+        const z = (taktTime - mean) / stdDev;
+        probOverage = 1 - normalCDF(z);
+    }
 
-    return Math.min(1, Math.max(0, probOverage));
+    return {
+        mean: mean,
+        stdDev: stdDev,
+        probOverage: Math.min(1, Math.max(0, probOverage))
+    };
 }
 
 /**
+ * Defines the transition probabilities P(j | i)
+ * P(Next Model | Current Model)
+ */
+const transitionProbs = {
+    super: { super: 0.0, ultra: 0.7143, mega: 0.2857 }, // From Super
+    ultra: { super: 0.5618, ultra: 0.2135, mega: 0.2247 }, // From Ultra
+    mega: { super: 0.50, ultra: 0.0, mega: 0.50 }  // From Mega
+};
+
+
+/**
+ * --- REFACTORED (w/ New Logic) ---
  * Calculates the average workstation stress across the entire line.
  * It iterates through each workstation and finds the weighted-average stress
- * based on the build ratios for Super, Ultra, and Mega models.
+ * based on the new "failure to compensate" logic.
  */
 function calculateWorkstationStress(workstationDetails, taktTime, stDevPercentage, buildRatios) {
     if (!workstationDetails || workstationDetails.length === 0 || !taktTime || taktTime <= 0 || !buildRatios) {
@@ -51,19 +69,65 @@ function calculateWorkstationStress(workstationDetails, taktTime, stDevPercentag
 
     let totalStress = 0;
     let workstationCount = 0;
+    const modelKeys = ['super', 'ultra', 'mega'];
 
     for (let i = 0; i < workstationDetails.length; i++) {
         const ws = workstationDetails[i];
 
-        // Calculate the stress (probOverage) for each model type
-        const probSuper = calculateStressForModel(ws.superElementTimes, taktTime, stDevPercentage);
-        const probUltra = calculateStressForModel(ws.ultraElementTimes, taktTime, stDevPercentage);
-        const probMega = calculateStressForModel(ws.megaElementTimes, taktTime, stDevPercentage);
+        // 1. Get probabilistics for each model
+        const p = {
+            super: getModelProbabilistics(ws.superElementTimes, taktTime, stDevPercentage),
+            ultra: getModelProbabilistics(ws.ultraElementTimes, taktTime, stDevPercentage),
+            mega: getModelProbabilistics(ws.megaElementTimes, taktTime, stDevPercentage)
+        };
 
-        // Calculate the weighted-average stress for this workstation
-        const workstationStress = (buildRatios.super * probSuper) +
-            (buildRatios.ultra * probUltra) +
-            (buildRatios.mega * probMega);
+        // 2. Calculate P(Failure | given current model 'i')
+        let pFailGiven = { super: 0, ultra: 0, mega: 0 };
+
+        for (const i_key of modelKeys) { // Current model (e.g., 'super')
+            const prob_i_overruns = p[i_key].probOverage;
+
+            // If the current model never overruns, it can't cause this type of failure
+            if (prob_i_overruns === 0) {
+                pFailGiven[i_key] = 0;
+                continue;
+            }
+
+            let pNextFailsToCompensate = 0;
+
+            for (const j_key of modelKeys) { // Next model (e.g., 'ultra')
+                const prob_i_to_j = transitionProbs[i_key][j_key];
+                if (prob_i_to_j === 0) continue;
+
+                const model_j = p[j_key];
+
+                // We need P(j doesn't underrun by Overage_i)
+                // Approx: P(Time_j > Takt - (Mean_i - Takt)) = P(Time_j > 2*Takt - Mean_i)
+                // This is the "compensation takt time" j must beat.
+                const compensationTakt = 2 * taktTime - p[i_key].mean;
+
+                let p_j_fails_comp = 0.0;
+                if (!isFinite(model_j.stdDev) || model_j.stdDev <= 0) {
+                    p_j_fails_comp = (model_j.mean > compensationTakt) ? 1.0 : 0.0;
+                } else {
+                    const z_comp = (compensationTakt - model_j.mean) / model_j.stdDev;
+                    // P(Time_j > compensationTakt)
+                    p_j_fails_comp = 1 - normalCDF(z_comp);
+                }
+
+                // Add this to the weighted sum for the 'i' model
+                pNextFailsToCompensate += p_j_fails_comp * prob_i_to_j;
+            }
+
+            // P(Failure | i) = P(i overruns) * P(Next fails to compensate | i)
+            pFailGiven[i_key] = prob_i_overruns * pNextFailsToCompensate;
+        }
+
+        // 3. Calculate total workstation stress using buildRatios (stationary distribution)
+        // P(Stress) = P(Super) * P(Fail | Super) + P(Ultra) * P(Fail | Ultra) + P(Mega) * P(Fail | Mega)
+        const workstationStress = (buildRatios.super * pFailGiven.super) +
+            (buildRatios.ultra * pFailGiven.ultra) +
+            (buildRatios.mega * pFailGiven.mega);
 
         totalStress += workstationStress;
         workstationCount++;
@@ -89,6 +153,7 @@ function normalCDF(z) {
 
 /**
  * Calculates the quality loss (stress) from all factors and returns a breakdown.
+ * (This function is UNCHANGED, it just receives the new workstationStress value)
  *
  * @param {number} stDevPercentage - Standard deviation as a percentage of mean (e.g., 0.1)
  * @param {number} conveyorSpeed - Conveyor speed in ft/min
@@ -109,11 +174,12 @@ function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, worksta
     overtimeStress = isFinite(overtimeStress) ? Math.max(0, Math.min(1, overtimeStress)) : 0;
     wageStress = isFinite(wageStress) ? Math.max(0, Math.min(1, wageStress)) : 0;
 
-    console.log("--- Calculating Quality Stress Breakdown ---");
+    console.log("--- Calculating Quality Stress Breakdown (Compensation Logic) ---");
 
     // --- Calculate individual stress factors ---
 
     // Workstation Stress (Probabilistic, State-Based)
+    // This now calls the NEW (COMPENSATION) function
     const workstationStress = calculateWorkstationStress(workstationDetails, taktTime, stDevPercentage, buildRatios);
     console.log(`[Quality] 1. Workstation Stress (Raw): ${workstationStress.toFixed(4)}`);
 
@@ -160,13 +226,13 @@ function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, worksta
     // Clamp total stress to a max of 1.0 (100% loss)
     breakdown.totalStress = Math.min(1.0, breakdown.totalStress);
 
-    console.log(`[Quality] Breakdown (Weighted): 
-        Workstation: ${breakdown.workstationLoss.toFixed(4)} (40%)
-        Conveyor: ${breakdown.conveyorLoss.toFixed(4)} (20%)
-        Overtime: ${breakdown.overtimeLoss.toFixed(4)} (20%)
-        Wage: ${breakdown.wageLoss.toFixed(4)} (20%)
-        ---------------------
-        Total Stress (Loss): ${breakdown.totalStress.toFixed(4)}`);
+    console.log(`[Quality] Breakdown (Weighted):
+        Workstation: ${breakdown.workstationLoss.toFixed(4)} (40%)
+        Conveyor: ${breakdown.conveyorLoss.toFixed(4)} (20%)
+        Overtime: ${breakdown.overtimeLoss.toFixed(4)} (20%)
+        Wage: ${breakdown.wageLoss.toFixed(4)} (20%)
+        ---------------------
+        Total Stress (Loss): ${breakdown.totalStress.toFixed(4)}`);
 
     return breakdown;
 }
