@@ -6,25 +6,19 @@ const ProfitTab = (function () {
         const { clientWidth: width, clientHeight: height } = container;
         svg.selectAll("*").remove();
 
-        // NOTE: The @keyframes for blinking are now assumed to be in your CSS file.
-        // We just need to add the <defs> for gradients, etc.
-        svg.append("defs"); // Placeholder in case gradients are added later
+        svg.append("defs");
 
-        // global scale based on window width so resizing the window actually shows change
         const viewportW = Math.max(320, window.innerWidth || width);
-        // allow scaling down AND up
-        const uiScale = Math.max(0.7, Math.min(1.8, viewportW / 1440));
+        const uiScale = Math.max(0.8, Math.min(2.0, viewportW / 1440));
 
-        // centralized sizes
         const sizes = {
             title: 14 * uiScale,
             subtitle: 13 * uiScale,
             axis: 11 * uiScale,
-            body: 11 * uiScale,
+            body: 12 * uiScale,
             small: 10 * uiScale
         };
 
-        // optional: expose to CSS for HTML tooltips
         document.documentElement.style.setProperty('--profit-ui-scale', uiScale);
 
         const data = profitMaximizationCache.data;
@@ -39,18 +33,22 @@ const ProfitTab = (function () {
             return;
         }
 
-        // --- LAYOUT & SCALES ---
+        // --- LAYOUT GEOMETRY ---
+        const legendSpace = 70 * uiScale;
+
         const margin = {
-            top: 40 * uiScale,
-            right: 60 * uiScale,
-            bottom: 60 * uiScale,
+            top: 30 * uiScale,
+            right: 40 * uiScale,
+            bottom: 45 * uiScale,
             left: 80 * uiScale
         };
 
         const breakdownWidth = Math.max(280 * uiScale, width * 0.32);
         const chartsWidth = width - breakdownWidth;
         const chartWidth = chartsWidth - margin.left - margin.right;
-        const chartHeight = (height / 2) - margin.top - margin.bottom;
+
+        const availableChartVerticalSpace = height - margin.top - margin.bottom - legendSpace;
+        const chartHeight = availableChartVerticalSpace / 2;
 
         const chartsGroup = svg.append("g");
         const breakdownGroup = svg.append("g").attr("transform", `translate(${chartsWidth},0)`);
@@ -62,7 +60,6 @@ const ProfitTab = (function () {
             numEmployees: +numEmployeesInput.value
         };
 
-        // --- Grab all financial inputs, including Rework ---
         const fin = {
             laborCost: +laborCostInput.value,
             superSell: +superSellInput.value,
@@ -75,7 +72,7 @@ const ProfitTab = (function () {
             ultraRework: +ultraReworkInput.value,
             megaRework: +megaReworkInput.value
         };
-        // m.qualityYield is correct from the main script
+
         const m = calculateMetrics(op, fin);
 
         const x = d3.scaleLinear().domain([50, 552]).range([0, chartWidth]).clamp(true);
@@ -98,7 +95,7 @@ const ProfitTab = (function () {
             .nice()
             .range([chartHeight, 0]);
 
-        // --- HELPERS & FORMATTERS ---
+        // --- HELPERS ---
         const bisect = d3.bisector(d => d.demand).left;
         const fmtMoney = d3.format("$,.0f");
         const fmtPct = v => `${d3.format(".1f")(v)}%`;
@@ -117,8 +114,8 @@ const ProfitTab = (function () {
         const currentDemandLostProfit = Math.max(0, optimalProfitAtCurrentDemand - m.dailyGrossProfit);
 
         const missedProfitTooltipHtml = `<div class="tooltip-header">Missed Profit</div>
-<div class="tooltip-row"><span class="tooltip-key">Max Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>
-<div class="tooltip-row"><span class="tooltip-key">Lost Profit</span><span>${fmtMoney(currentDemandLostProfit)}</span></div>`;
+            <div class="tooltip-row"><span class="tooltip-key">Max Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>
+            <div class="tooltip-row"><span class="tooltip-key">Lost Profit</span><span>${fmtMoney(currentDemandLostProfit)}</span></div>`;
 
         function drawAxesWithGrid(g, xScale, yScale, isProfit) {
             g.append("g")
@@ -145,7 +142,9 @@ const ProfitTab = (function () {
                 .attr("font-size", sizes.axis);
         }
 
-        // --- PROFIT CHART (TOP) ---
+        // ============================================================
+        // 1. PROFIT CHART (TOP)
+        // ============================================================
         const gP = chartsGroup.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
         drawAxesWithGrid(gP, x, yProfit, true);
 
@@ -183,18 +182,11 @@ const ProfitTab = (function () {
             const startIndex = Math.max(0, bisect(data.profitData, m.throughputUnitsPerDay, 1) - 1);
             const endIndex = bisect(data.profitData, op.dailyDemand, 1);
             const areaData = data.profitData.slice(startIndex, endIndex + 1);
-
             const startPoint = { demand: m.throughputUnitsPerDay, value: yProfit.invert(y_at_act_profit) };
             const endPoint = { demand: op.dailyDemand, value: yProfit.invert(yProfit(data.profitData[Math.max(0, bisect(data.profitData, op.dailyDemand, 1) - 1)].value)) };
 
-            const finalAreaData = [
-                startPoint,
-                ...areaData.filter(d => d.demand > m.throughputUnitsPerDay && d.demand < op.dailyDemand),
-                endPoint
-            ];
-
             gP.append("path")
-                .datum(finalAreaData)
+                .datum([startPoint, ...areaData.filter(d => d.demand > m.throughputUnitsPerDay && d.demand < op.dailyDemand), endPoint])
                 .attr("class", "lost-profit-area")
                 .attr("d", profitAreaGenerator)
                 .on("mousemove", (ev) => showTT(missedProfitTooltipHtml, ev))
@@ -212,8 +204,8 @@ const ProfitTab = (function () {
                 } else {
                     showTT(
                         `<div class="tooltip-header">Current Profit</div>
-                         <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtMoney(m.dailyGrossProfit)}</span></div>
-                         <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
+                        <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtMoney(m.dailyGrossProfit)}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
                         ev);
                 }
             })
@@ -221,7 +213,7 @@ const ProfitTab = (function () {
 
         gP.append("text")
             .attr("x", chartWidth / 2)
-            .attr("y", -14 * uiScale)
+            .attr("y", -10 * uiScale)
             .attr("text-anchor", "middle")
             .attr("font-size", sizes.title)
             .attr("font-weight", "bold")
@@ -240,9 +232,9 @@ const ProfitTab = (function () {
 
             showTT(
                 `<div class="tooltip-header">Demand: ${demandHover}</div>
-                 <div class="tooltip-row"><span class="tooltip-key">Optimal Profit</span><span>${fmtMoney(d.value)}</span></div>
-                 <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${d.config.emp}</span></div>
-                 <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${d.config.hrs}</span></div>`,
+                <div class="tooltip-row"><span class="tooltip-key">Optimal Profit</span><span>${fmtMoney(d.value)}</span></div>
+                <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${d.config.emp}</span></div>
+                <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${d.config.hrs}</span></div>`,
                 ev
             );
         }).on("mouseleave", () => {
@@ -253,8 +245,88 @@ const ProfitTab = (function () {
             hideTT();
         });
 
-        // --- MARGIN CHART (BOTTOM) ---
-        const gM = chartsGroup.append("g").attr("transform", `translate(${margin.left},${margin.top + height / 2})`);
+
+        // ============================================================
+        // 2. LEGEND (CENTERED IN GAP)
+        // ============================================================
+        const legendY = margin.top + chartHeight + (legendSpace / 2);
+        const legendG = chartsGroup.append("g").attr("transform", `translate(${margin.left}, ${legendY})`);
+
+        const legItems = [
+            { type: 'icon', class: 'point-now', shape: 'circle', label: "Current profit/margin" },
+            { type: 'icon', class: 'lost-profit-area', shape: 'rect', label: "Unmet demand" },
+            { type: 'text', class: 'text-only', label: "Demand < 50: Use 3-Workstation Config", color: getComputedStyle(root).getPropertyValue('--secondary1').trim() }
+        ];
+
+        let currentX = 0;
+        const itemGap = 30 * uiScale;
+
+        const measurer = legendG.append("text").attr("font-size", sizes.body).style("opacity", 0);
+
+        const renderedItems = legItems.map(item => {
+            measurer.text(item.label);
+            const textW = measurer.node().getComputedTextLength();
+            const iconW = item.type === 'icon' ? 12 * uiScale : 0;
+            const spacing = item.type === 'icon' ? 6 * uiScale : 0;
+            const totalW = iconW + spacing + textW;
+
+            const obj = { ...item, width: totalW, x: currentX };
+            currentX += totalW + itemGap;
+            return obj;
+        });
+        measurer.remove();
+
+        const totalLegendWidth = currentX - itemGap;
+        const startOffset = (chartWidth - totalLegendWidth) / 2;
+
+        const boxPaddingX = 15 * uiScale;
+        const boxPaddingY = 8 * uiScale;
+
+        legendG.append("rect")
+            .attr("x", startOffset - (boxPaddingX*1.5))
+            .attr("y", -boxPaddingY - (sizes.body / 2))
+            .attr("width", totalLegendWidth + (boxPaddingX * 3))
+            .attr("height", (sizes.body) + (boxPaddingY))
+            .attr("fill", "none")
+            .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim())
+            .attr("stroke-width", 1)
+            .attr("stroke-dasharray", "4 2")
+            .attr("rx", 4);
+
+        const itemGroup = legendG.append("g").attr("transform", `translate(${startOffset}, 0)`);
+
+        renderedItems.forEach(d => {
+            const g = itemGroup.append("g").attr("transform", `translate(${d.x}, 0)`);
+
+            if (d.type === 'icon') {
+                if (d.shape === 'circle') {
+                    g.append("circle").attr("class", d.class).attr("r", 5 * uiScale).attr("cx", 5 * uiScale).attr("cy", -4 * uiScale);
+                } else {
+                    g.append("rect").attr("class", d.class).attr("x", 0).attr("y", -9 * uiScale).attr("width", 10 * uiScale).attr("height", 10 * uiScale);
+                }
+                g.append("text")
+                    .attr("x", 16 * uiScale)
+                    .attr("y", 0)
+                    .attr("font-size", sizes.body)
+                    .attr("fill", getComputedStyle(root).getPropertyValue('--accent').trim())
+                    .text(d.label);
+            } else {
+                g.append("text")
+                    .attr("x", 0)
+                    .attr("y", 0)
+                    .attr("font-size", sizes.body)
+                    .attr("font-weight", "bold")
+                    .attr("fill", d.color)
+                    .text(d.label);
+            }
+        });
+
+        // ============================================================
+        // 3. MARGIN CHART (BOTTOM)
+        // ============================================================
+        const bottomChartY = margin.top + chartHeight + (legendSpace*1.1);
+
+        const gM = chartsGroup.append("g").attr("transform", `translate(${margin.left},${bottomChartY})`);
         drawAxesWithGrid(gM, x, yMargin, false);
 
         const vGuideM = gM.append("line").attr("class", "crosshair").style("display", "none");
@@ -289,18 +361,11 @@ const ProfitTab = (function () {
             const startIndex = Math.max(0, bisect(data.marginData, m.throughputUnitsPerDay, 1) - 1);
             const endIndex = bisect(data.marginData, op.dailyDemand, 1);
             const areaData = data.marginData.slice(startIndex, endIndex + 1);
-
             const startPoint = { demand: m.throughputUnitsPerDay, value: yMargin.invert(y_at_act_margin) };
             const endPoint = { demand: op.dailyDemand, value: yMargin.invert(yMargin(data.marginData[Math.max(0, bisect(data.marginData, op.dailyDemand, 1) - 1)].value)) };
 
-            const finalAreaData = [
-                startPoint,
-                ...areaData.filter(d => d.demand > m.throughputUnitsPerDay && d.demand < op.dailyDemand),
-                endPoint
-            ];
-
             gM.append("path")
-                .datum(finalAreaData)
+                .datum([startPoint, ...areaData.filter(d => d.demand > m.throughputUnitsPerDay && d.demand < op.dailyDemand), endPoint])
                 .attr("class", "lost-profit-area")
                 .attr("d", marginAreaGenerator)
                 .on("mousemove", (ev) => showTT(missedProfitTooltipHtml, ev))
@@ -318,8 +383,8 @@ const ProfitTab = (function () {
                 } else {
                     showTT(
                         `<div class="tooltip-header">Current Margin</div>
-                         <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtPct(m.grossProfitMargin)}</span></div>
-                         <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
+                        <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtPct(m.grossProfitMargin)}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
                         ev);
                 }
             })
@@ -327,7 +392,7 @@ const ProfitTab = (function () {
 
         gM.append("text")
             .attr("x", chartWidth / 2)
-            .attr("y", -14 * uiScale)
+            .attr("y", -10 * uiScale)
             .attr("text-anchor", "middle")
             .attr("font-size", sizes.title)
             .attr("font-weight", "bold")
@@ -335,9 +400,10 @@ const ProfitTab = (function () {
 
         gM.append("text")
             .attr("x", chartWidth / 2)
-            .attr("y", chartHeight + (margin.bottom - 12 * uiScale))
+            .attr("y", chartHeight + (margin.bottom - (12*uiScale)))
             .attr("text-anchor", "middle")
             .attr("font-size", sizes.axis)
+            .attr("font-weight", "bold")
             .text("Daily Demand (units)");
 
         marginHoverRect.on("mousemove", (ev) => {
@@ -350,9 +416,9 @@ const ProfitTab = (function () {
             hGuideM.style("display", null).attr("x1", 0).attr("x2", chartWidth).attr("y1", yMargin(dM.value)).attr("y2", yMargin(dM.value));
             showTT(
                 `<div class="tooltip-header">Demand: ${demandHover}</div>
-                 <div class="tooltip-row"><span class="tooltip-key">Optimal Margin</span><span>${fmtPct(dM.value)}</span></div>
-                 <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${dM.config.emp}</span></div>
-                 <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${dM.config.hrs}</span></div>`,
+                <div class="tooltip-row"><span class="tooltip-key">Optimal Margin</span><span>${fmtPct(dM.value)}</span></div>
+                <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${dM.config.emp}</span></div>
+                <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${dM.config.hrs}</span></div>`,
                 ev
             );
         }).on("mouseleave", () => {
@@ -361,94 +427,45 @@ const ProfitTab = (function () {
             hideTT();
         });
 
-        // --- BREAKDOWN PANEL (RIGHT SIDE) ---
-        const totalLabor = op.numEmployees * op.opHours * fin.laborCost;
 
-        // --- Correctly calculate breakdown with Rework ---
-        const qualityYield = m.qualityYield; // This is the correct, final yield
+        // ============================================================
+        // 4. BREAKDOWN PANEL (RIGHT SIDE)
+        // ============================================================
+        const totalLabor = op.numEmployees * op.opHours * fin.laborCost;
+        const qualityYield = m.qualityYield;
         const totalStress = 1.0 - qualityYield;
 
         const perModel = ["super", "ultra", "mega"].map(key => {
             const units = m.throughputUnitsPerDay * BUILD_RATIOS[key];
             const failedUnits = units * totalStress;
-
-            const sales = units * fin[`${key}Sell`]; // Revenue from ALL units
+            const sales = units * fin[`${key}Sell`];
             const cogs = units * fin[`${key}Cogs`];
             const labor = totalLabor * BUILD_RATIOS[key];
-            const rework = failedUnits * fin[`${key}Rework`]; // Rework cost from FAILED units
-
+            const rework = failedUnits * fin[`${key}Rework`];
             const profit = sales - cogs - labor - rework;
 
             return {
                 label: key[0].toUpperCase() + key.slice(1),
-                sales, cogs, labor, profit, rework, // Return rework
+                sales, cogs, labor, profit, rework,
                 margin: sales > 0 ? (profit / sales) * 100 : 0
             };
         });
 
         const totalProfit = d3.sum(perModel, d => d.profit);
-        const totalRework = d3.sum(perModel, d => d.rework); // Get total rework
-        const pad = Math.max(16 * uiScale, breakdownWidth * 0.10);
+        const totalRework = d3.sum(perModel, d => d.rework);
+        const pad = Math.max(10 * uiScale, breakdownWidth * 0.05);
 
-        // ---------- TOP (Legend) ----------
-        const keyGroup = breakdownGroup.append("g");
-        const legendBorder = keyGroup.append("rect")
-            .attr("class", "breakdown-border")
-            .attr("x", pad / 2).attr("y", pad / 2)
-            .attr("width", breakdownWidth - pad)
-            .attr("height", 1);
+        const rightTotalH = height;
+        const pieSectionHeight = rightTotalH * 0.57;
+        const barSectionHeight = rightTotalH * 0.43;
 
-        const titleY = pad / 2 + 20 * uiScale;
-        keyGroup.append("text")
-            .attr("x", pad / 2 + (breakdownWidth - pad) / 2)
-            .attr("y", titleY)
-            .attr("text-anchor", "middle")
-            .attr("font-size", sizes.subtitle)
-            .attr("font-weight", "bold")
-            .text("Profit Margin Indicators");
-
-        const legendCard = keyGroup.append("g")
-            .attr("transform", `translate(${pad},${titleY + 12 * uiScale})`);
-
-        function addLegendItem(g, y, drawIcon, label) {
-            const item = g.append("g").attr("transform", `translate(0,${y})`);
-            drawIcon(item);
-            item.append("text")
-                .attr("x", 22 * uiScale)
-                .attr("y", 10 * uiScale)
-                .attr("font-size", sizes.body)
-                .text(label);
-            return item;
-        }
-
-        const rowHeight = 22 * uiScale;
-        addLegendItem(
-            legendCard, 0,
-            (r) => r.append("circle").attr("class", "point-now").attr("r", 6 * uiScale).attr("cx", 6 * uiScale).attr("cy", 6 * uiScale),
-            "Current profit/margin"
-        );
-        addLegendItem(
-            legendCard, rowHeight,
-            (r) => r.append("rect").attr("class", "lost-profit-area").attr("x", 1).attr("y", 0).attr("width", 12 * uiScale).attr("height", 12 * uiScale),
-            "Unmet demand (lost profit)"
-        );
-
-        const legendBBox = keyGroup.node().getBBox();
-        const legendOuterBottom = legendBBox.y + legendBBox.height + pad / 2 + 8 * uiScale;
-        const baseTopH = Math.round(height * 0.10);
-        const rightTopH = Math.max(baseTopH, Math.ceil(legendOuterBottom));
-        legendBorder.attr("height", rightTopH - pad);
-
-        const rightMidH = Math.round((height - rightTopH) * 0.55);
-        const rightBotH = height - rightTopH - rightMidH;
-
-        // ---------- MIDDLE (Pies) ----------
-        const topHalf = breakdownGroup.append("g").attr("transform", `translate(0, ${rightTopH})`);
+        // ---------- PART A: PIE CHARTS ----------
+        const topHalf = breakdownGroup.append("g");
         topHalf.append("rect")
             .attr("class", "breakdown-border")
             .attr("x", pad / 2).attr("y", pad / 2)
             .attr("width", breakdownWidth - pad)
-            .attr("height", rightMidH - pad);
+            .attr("height", pieSectionHeight - pad);
 
         topHalf.append("text")
             .attr("x", pad / 2 + (breakdownWidth - pad) / 2)
@@ -458,7 +475,6 @@ const ProfitTab = (function () {
             .attr("font-weight", "bold")
             .text("Cost & Profit Composition");
 
-        // --- Use a 4-item color scheme ---
         const pieColors = {
             Profit: getComputedStyle(root).getPropertyValue('--primary').trim(),
             Rework: getComputedStyle(root).getPropertyValue('--failure-color').trim(),
@@ -467,12 +483,11 @@ const ProfitTab = (function () {
         };
 
         const innerW = breakdownWidth - 2 * pad;
-        const innerH = rightMidH - 2 * pad;
+        const innerH = pieSectionHeight - 2 * pad;
 
         const pie = d3.pie().value(d => d.value).sort(null);
         const ttPie = createTooltip('profit-pie-tooltip');
 
-        // --- Add Rework to pie data objects ---
         const pies = [
             { title: "Overall", data: { Profit: totalProfit, Labor: totalLabor, Material: d3.sum(perModel, d => d.cogs), Rework: totalRework } },
             ...perModel.map(d => ({ title: d.label, data: { Profit: d.profit, Labor: d.labor, Material: d.cogs, Rework: d.rework } }))
@@ -482,8 +497,10 @@ const ProfitTab = (function () {
         const rowsP = Math.ceil(pies.length / cols);
         const cellW = innerW / cols;
         const cellH = innerH / rowsP;
-        const rowPositions = [0.32, 0.68];
-        const baseR = Math.min(cellW, cellH) * 0.28;
+
+        // --- MODIFIED HERE: SHIFTED UP AND LARGER ---
+        const rowPositions = [0.29, 0.69];
+        const baseR = Math.min(cellW, cellH) * 0.36;
 
         pies.forEach((pd, i) => {
             const row = Math.floor(i / cols);
@@ -495,30 +512,18 @@ const ProfitTab = (function () {
             const arc = d3.arc().innerRadius(0).outerRadius(baseR);
             const g = topHalf.append("g").attr("transform", `translate(${cx}, ${cy})`);
 
-            // --- THIS IS THE CORE LOGIC FIX ---
             const isLoss = pd.data.Profit < 0;
             let dataForPie;
 
             if (isLoss) {
-                // Unprofitable: Show COST breakdown
-                dataForPie = {
-                    Labor: pd.data.Labor,
-                    Material: pd.data.Material,
-                    Rework: pd.data.Rework
-                };
+                dataForPie = { Labor: pd.data.Labor, Material: pd.data.Material, Rework: pd.data.Rework };
             } else {
-                // Profitable: Show REVENUE breakdown
-                dataForPie = {
-                    Profit: pd.data.Profit,
-                    Labor: pd.data.Labor,
-                    Material: pd.data.Material,
-                    Rework: pd.data.Rework
-                };
+                dataForPie = { Profit: pd.data.Profit, Labor: pd.data.Labor, Material: pd.data.Material, Rework: pd.data.Rework };
             }
 
             const chartData = Object.entries(dataForPie)
                 .map(([k, v]) => ({ label: k, value: v }))
-                .filter(d => d.value > 1e-6); // Filter out zero values
+                .filter(d => d.value > 1e-6);
 
             const totalPart = d3.sum(chartData, r => r.value);
 
@@ -530,53 +535,35 @@ const ProfitTab = (function () {
                 .attr("fill", d => pieColors[d.data.label])
                 .on("mouseenter", () => ttPie.style("opacity", 1))
                 .on("mouseleave", () => ttPie.style("opacity", 0))
-                // --- Tooltip logic to explain the dynamic "Loss" slice ---
                 .on("mousemove", (ev, d) => {
-
                     let tooltipHeader = `${pd.title}: ${d.data.label}`;
                     let amountValue = fmtMoney(d.data.value);
-                    let shareLabel; // Will be set below
-
-                    if (isLoss) {
-                        // Unprofitable case
-                        shareLabel = "Share of Costs";
-                    } else {
-                        // Profitable case
-                        shareLabel = "Share of Revenue";
-                    }
-
-                    if (d.data.label === 'Rework') {
-                        tooltipHeader = `${pd.title}: Rework`;
-                    }
+                    let shareLabel = isLoss ? "Share of Costs" : "Share of Revenue";
+                    if (d.data.label === 'Rework') tooltipHeader = `${pd.title}: Rework`;
 
                     ttPie.html(
                         `<div class="tooltip-header">${tooltipHeader}</div>
-<div class="tooltip-row"><span class="tooltip-key">Amount</span><span>${amountValue}</span></div>
-<div class="tooltip-row"><span class="tooltip-key">${shareLabel}</span><span>${(totalPart > 0 ? (d.data.value / totalPart * 100) : 0).toFixed(1)}%</span></div>`
+                        <div class="tooltip-row"><span class="tooltip-key">Amount</span><span>${amountValue}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-key">${shareLabel}</span><span>${(totalPart > 0 ? (d.data.value / totalPart * 100) : 0).toFixed(1)}%</span></div>`
                     ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
                 });
 
             const outerArc = d3.arc().outerRadius(baseR + 1.5 * uiScale);
-            
             g.append("path")
                 .attr("class", "profit-pie-border")
                 .classed("blinking-failure", isLoss)
-                .attr("d", outerArc({
-                    startAngle: 0,
-                    endAngle: 2 * Math.PI
-                }));
+                .attr("d", outerArc({ startAngle: 0, endAngle: 2 * Math.PI }));
 
             g.append("text")
                 .attr("y", -baseR - 8 * uiScale)
                 .attr("text-anchor", "middle")
                 .attr("font-size", sizes.body)
+                .attr("font-weight", "bold")
                 .text(pd.title);
         });
 
-        // --- LEGEND (2 columns, aligned) ---
+        // --- PIE LEGEND (Moved to bottom of topHalf) ---
         const legend2 = topHalf.append("g");
-
-        // --- 4-item legend ---
         const legendItems = [
             { label: "Profit", color: pieColors.Profit },
             { label: "Rework", color: pieColors.Rework },
@@ -584,77 +571,55 @@ const ProfitTab = (function () {
             { label: "Material", color: pieColors.Material }
         ];
 
-        const bottomPieCenterY = pad + innerH * rowPositions[1];
-        const bottomPieBottom = bottomPieCenterY + baseR;
-        const legendBaseY = bottomPieBottom + 12 * uiScale;
+        const rowGapLegend = 18 * uiScale;
+        const legendHeight = 2 * rowGapLegend;
+        const legendBaseY = pieSectionHeight - pad - legendHeight - uiScale;
 
-        const measurer = svg.append("text")
-            .style("opacity", 0)
-            .attr("font-size", sizes.body);
-
+        const measurer2 = svg.append("text").style("opacity", 0).attr("font-size", sizes.body);
         function itemWidth(lbl) {
-            measurer.text(lbl);
-            return 12 * uiScale + 6 * uiScale + measurer.node().getBBox().width;
+            measurer2.text(lbl);
+            return 12 * uiScale + 6 * uiScale + measurer2.node().getBBox().width;
         }
-
         const col1Width = Math.max(itemWidth(legendItems[0].label), itemWidth(legendItems[2].label));
         const col2Width = Math.max(itemWidth(legendItems[1].label), itemWidth(legendItems[3].label));
-
         const colGap = 28 * uiScale;
-        const totalLegendWidth = col1Width + colGap + col2Width;
-        const startX = pad + (innerW - totalLegendWidth) / 2;
+        const totalLegendWidth2 = col1Width + colGap + col2Width;
+        const startX = pad + (innerW - totalLegendWidth2) / 2;
 
-        const rowGapLegend = 22 * uiScale;
-
-        // --- 4-item (2x2) layout ---
         [
-            { ...legendItems[0], col: 0, row: 0 }, // Profit
-            { ...legendItems[1], col: 1, row: 0 }, // Rework
-            { ...legendItems[2], col: 0, row: 1 }, // Labor
-            { ...legendItems[3], col: 1, row: 1 }, // Material
+            { ...legendItems[0], col: 0, row: 0 },
+            { ...legendItems[1], col: 1, row: 0 },
+            { ...legendItems[2], col: 0, row: 1 },
+            { ...legendItems[3], col: 1, row: 1 },
         ].forEach(item => {
             const xCol = item.col === 0 ? startX : startX + col1Width + colGap;
             const yRow = legendBaseY + item.row * rowGapLegend;
-
             const g = legend2.append("g").attr("transform", `translate(${xCol}, ${yRow})`);
-
-            g.append("rect")
-                .attr("width", 12 * uiScale)
-                .attr("height", 12 * uiScale)
-                .attr("y", 3 * uiScale)
-                .attr("rx", 2)
-                .attr("fill", item.color);
-
-            g.append("text")
-                .attr("x", 12 * uiScale + 6 * uiScale)
-                .attr("y", 13 * uiScale)
-                .attr("font-size", sizes.body)
-                .text(item.label);
+            g.append("rect").attr("width", 12 * uiScale).attr("height", 12 * uiScale).attr("y", 3 * uiScale).attr("rx", 2).attr("fill", item.color);
+            g.append("text").attr("x", 18 * uiScale).attr("y", 13 * uiScale).attr("font-size", sizes.body).text(item.label);
         });
+        measurer2.remove();
 
-        measurer.remove();
-        // --- END LEGEND ---
-
-        // ---------- BOTTOM (Bars) ----------
-        const bottomHalf = breakdownGroup.append("g").attr("transform", `translate(0, ${rightTopH + rightMidH})`);
+        // ---------- PART B: BAR CHARTS ----------
+        const bottomHalf = breakdownGroup.append("g").attr("transform", `translate(0, ${pieSectionHeight})`);
         bottomHalf.append("rect")
             .attr("class", "breakdown-border")
             .attr("x", pad / 2).attr("y", pad / 2)
             .attr("width", breakdownWidth - pad)
-            .attr("height", height - (rightTopH + rightMidH) - pad);
+            .attr("height", barSectionHeight - pad);
 
-        const barM = { top: 38 * uiScale, right: 22 * uiScale, bottom: 40 * uiScale, left: 20 * uiScale };
+        // --- MODIFIED: Adjusted margins and shifted chart up ---
+        const barM = { top: 25 * uiScale, right: 10 * uiScale, bottom: 40 * uiScale, left: 10 * uiScale };
         bottomHalf.append("text")
             .attr("x", pad / 2 + (breakdownWidth - pad) / 2)
-            .attr("y", pad / 2 + 22 * uiScale)
+            .attr("y", pad / 2 + 20 * uiScale)
             .attr("text-anchor", "middle")
             .attr("font-size", sizes.subtitle)
             .attr("font-weight", "bold")
             .text("Profit by Model");
 
-        const barShiftX = 16 * uiScale;
-
-        const barH = (height - (rightTopH + rightMidH)) - 2 * pad - barM.top - barM.bottom;
+        const barShiftX = 24;
+        const barH = barSectionHeight - pad - barM.top - (1.5*barM.bottom);
 
         const minP = d3.min(perModel, d => d.profit);
         const maxP = d3.max(perModel, d => d.profit);
@@ -664,7 +629,6 @@ const ProfitTab = (function () {
             .range([barH, 0])
             .clamp(true);
 
-        // measure y tick label width for k-format
         let maxLabelWidth = 0;
         const tempText = svg.append("text").style("opacity", 0).attr("font-size", sizes.axis);
         yBar.ticks(5).forEach(t => {
@@ -672,8 +636,7 @@ const ProfitTab = (function () {
         });
         tempText.remove();
 
-        // extra gap so y-axis label doesn't overlap
-        const yAxisSpace = maxLabelWidth + 28 * uiScale;
+        const yAxisSpace = maxLabelWidth + 15 * uiScale;
         const barW = breakdownWidth - 2 * pad - barM.right - yAxisSpace - barShiftX;
 
         const gB = bottomHalf.append("g").attr("transform", `translate(${pad + barShiftX},${pad + barM.top})`);
@@ -732,29 +695,28 @@ const ProfitTab = (function () {
             .on("mousemove", (ev, d) => {
                 ttBar.html(
                     `<div class="tooltip-header">${d.label}</div>
-<div class="tooltip-row"><span class="tooltip-key">Profit</span><span>${fmtMoney(d.profit)}</span></div>
-<div class="tooltip-row"><span class="tooltip-key">Margin</span><span>${fmtPct(d.margin)}</span></div>`
+                    <div class="tooltip-row"><span class="tooltip-key">Profit</span><span>${fmtMoney(d.profit)}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-key">Margin</span><span>${fmtPct(d.margin)}</span></div>`
                 ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
             });
 
-        // y-axis label (move it left more)
         gB.append("text")
             .attr("transform", "rotate(-90)")
             .attr("x", -barH / 2)
-            .attr("y", yAxisSpace - 40 * uiScale)
+            .attr("y", yAxisSpace - 36 * uiScale)
             .attr("text-anchor", "middle")
             .attr("font-size", sizes.axis)
+            .attr("font-weight", "bold")
             .text("Gross Profit");
 
-        // x-axis label
         gB.append("text")
             .attr("x", yAxisSpace + barW / 2)
-            .attr("y", barH + barM.bottom + 4 * uiScale)
+            .attr("y", barH + barM.bottom + uiScale)
             .attr("text-anchor", "middle")
             .attr("font-size", sizes.axis)
+            .attr("font-weight", "bold")
             .text("Model");
 
-        // ------------- LAST PASS: make sure every svg text has a font-size -------------
         svg.selectAll("text").each(function () {
             const t = d3.select(this);
             if (!t.attr("font-size")) {
@@ -770,7 +732,6 @@ const ProfitTab = (function () {
     return { draw, resize };
 })();
 
-// re-draw on window resize so scaling is visible
 window.addEventListener("resize", () => {
     if (typeof ProfitTab !== "undefined" && ProfitTab.resize) {
         ProfitTab.resize();
