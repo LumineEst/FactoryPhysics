@@ -230,13 +230,10 @@ async function main() {
         console.error('Failed to attach right-sidebar tooltips:', err);
     }
 
-    // --- FIX: Call updateUI() ONCE at the end of setup ---
-    // This will perform the *first* and *only* initial calculation
-    // using the stable, default DOM values.
     updateUI();
-
-    // --- FIX: Call this *after* the initial UI render ---
-    // This will now run in the background using the stable financial inputs.
+    if (typeof InvestmentTab !== 'undefined' && typeof InvestmentTab.calculate === 'function') {
+        InvestmentTab.calculate();
+    }
     runProfitCalculation();
 }
 
@@ -881,8 +878,8 @@ function updateUI(options = {}) {
                 }
                 break;
             case 'investment':
-                if (typeof drawInvestmentPanel === 'function') {
-                    drawInvestmentPanel();
+                if (typeof InvestmentTab.draw() === 'function') {
+                    InvestmentTab.draw();
                 }
                 break;
             case 'location':
@@ -1024,9 +1021,8 @@ function renderWorkstationSidebar(numEmployees) {
             task._workstationId = row.dataset.workstationId || '';
             task._workstationLengthFt = row.dataset.workstationLengthFt != null ? row.dataset.workstationLengthFt : null;
             tooltip.html(buildTooltipHtmlForTask(task, { wsId: task._workstationId, wsLen: task._workstationLengthFt }))
-                .style('opacity', 1)
-                .style('left', `${e.pageX + 12}px`)
-                .style('top', `${e.pageY + 12}px`);
+                .style('opacity', 1);
+            positionTooltip(tooltip, e, 12, 12);
         });
 
         workstationList.addEventListener('pointermove', (e) => {
@@ -1141,13 +1137,11 @@ function setupEventListeners() {
 </div>
 `;
             tooltip.html(html)
-                .style('opacity', 1)
-                .style('left', `${event.pageX + 15}px`)
-                .style('top', `${event.pageY - 28}px`);
+                .style('opacity', 1);
+            positionTooltip(tooltip, e, 15, -28);
         });
         qualityYieldLabelElement.addEventListener('mousemove', (e) => {
-            tooltip.style('left', `${e.pageX + 15}px`)
-                .style('top', `${e.pageY - 28}px`);
+            positionTooltip(tooltip, e, 15, -28);
         });
         qualityYieldLabelElement.addEventListener('mouseout', () => {
             tooltip.style('opacity', 0);
@@ -1697,6 +1691,34 @@ function createTooltip(className) {
     return tooltip;
 }
 
+/**
+ * --- ADD THIS NEW FUNCTION ---
+ * Positions a D3 tooltip, flipping to the left side if the cursor
+ * is in the rightmost quarter of the viewport.
+ * @param {d3.Selection} tooltip - The D3 tooltip selection.
+ * @param {Event} event - The mouse/pointer event.
+ * @param {number} [xOffset=15] - The horizontal padding from the cursor.
+ * @param {number} [yOffset=0] - The vertical padding from the cursor.
+ */
+function positionTooltip(tooltip, event, xOffset = 15, yOffset = 0) {
+    const tooltipNode = tooltip.node();
+    // Use offsetWidth, or a fallback if node isn't ready
+    const tooltipWidth = tooltipNode ? tooltipNode.offsetWidth : 200;
+
+    let leftPos;
+    // Check if cursor is in the rightmost 25% of the window
+    if (event.pageX > window.innerWidth * 0.75) {
+        // Flip to left side
+        leftPos = event.pageX - tooltipWidth - xOffset;
+    } else {
+        // Standard right side
+        leftPos = event.pageX + xOffset;
+    }
+
+    tooltip.style('left', `${leftPos}px`)
+        .style('top', `${event.pageY + yOffset}px`);
+}
+
 function wireRightSidebarTooltips() {
     const tooltips = {
         'dailyDemand': 'Number of units which can be sold, or which producing more than needed is a liability. Production should match your demand.',
@@ -1705,6 +1727,7 @@ function wireRightSidebarTooltips() {
         'laborCost': 'Hourly labor cost per employee.',
         'sellPriceHeading': 'Selling price per unit (used to compute total revenue).',
         'materialCostHeading': 'Material / COGS per unit (used to compute cost of goods sold).',
+        'reworkCostHeading' : 'The Cost of Reworking units due to yield issues (used to compute CoPQ (Cost of Poor Quality)).',
         'wip': 'Work in Progress. Number of incomplete products currently being worked on.',
         'throughput': 'Number of models built within a given time-period, usually an hour. Adjusted for quality yield.',
         'conveyorSpeed': 'Conveyor belt speed in feet per minute.',
@@ -1723,6 +1746,7 @@ function wireRightSidebarTooltips() {
         'irrMetric': 'Represents the annual rate of return an investment is expected to yield. Is the discount rate that makes the NPV of all cash flows from the investment equal to zero.',
         'paybackMetric': 'Length of time it takes for an investment to generate enough cash flow to recover its initial cost.'
     };
+
     const tooltip = createTooltip('right-sidebar-tooltip');
     const sidebar = document.getElementById('right-sidebar');
     if (!sidebar) return;
@@ -1748,6 +1772,7 @@ function wireRightSidebarTooltips() {
         if (!target) {
             if (id === 'sellPriceHeading' && finSpans.length >= 2) target = finSpans[1];
             if (id === 'materialCostHeading' && finSpans.length >= 3) target = finSpans[2];
+            if (id === 'reworkCostHeading' && finSpans.length >= 4) target = finSpans[3];
         }
 
         if (!target) {
@@ -1761,7 +1786,7 @@ function wireRightSidebarTooltips() {
             });
 
             target.addEventListener('mousemove', function (event) {
-                tooltip.style('left', (event.pageX + 15) + 'px').style('top', (event.pageY - 28) + 'px');
+                positionTooltip(tooltip, event, 15, -28);
             });
             target.addEventListener('mouseout', function () {
                 tooltip.transition().duration(500).style('opacity', 0);
@@ -1833,7 +1858,7 @@ function generateElementColorScale(workstationIndex, numWorkstations, numElement
 * recalculations and UI updates.
 * NOW ASYNC to wait for wage stress calculation.
 * @param {string} driverId - The ID of the input element that changed.
-* @param {object} [context={}] - An optional context object.
+* @param {object} [context={}] - An optional context object.
 */
 async function handleInputChange(driverId, context = {}) {
     if (isRecalculating) return; // <-- TYPO FIX
@@ -1908,9 +1933,6 @@ async function handleInputChange(driverId, context = {}) {
 
         }
 
-        // The old 'else if' block for 'qualityYieldInput' is removed.
-        // All drivers now fall through to updateUI().
-
         updateUI();
 
     } catch (error) {
@@ -1919,7 +1941,9 @@ async function handleInputChange(driverId, context = {}) {
         isRecalculating = false;
     }
 
-    if (investmentMetricsInitialized && typeof window.updateProbabilisticValues === 'function') {
+    if (typeof InvestmentTab !== 'undefined' && InvestmentTab.calculate) {
+        InvestmentTab.calculate();
+    } else if (investmentMetricsInitialized && typeof window.updateProbabilisticValues === 'function') {
         window.updateProbabilisticValues('mean');
     }
 }
@@ -2770,7 +2794,7 @@ function renderActiveTab() {
     else if (activeTab === 'efficiency') EfficiencyTab.draw();
     else if (activeTab === 'layout') LayoutTab.draw();
     else if (activeTab === 'profit') ProfitTab.draw();
-    else if (activeTab === 'investment') drawInvestmentPanel();
+    else if (activeTab === 'investment' && typeof InvestmentTab !== 'undefined') InvestmentTab.draw();
     else if (activeTab === 'location') LocationTab.draw();
     setWorkstationListHeight();
 }
