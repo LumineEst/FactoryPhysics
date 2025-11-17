@@ -182,9 +182,7 @@
             <li>
                 <strong>Build Ratios:</strong> The fixed production mix for the <strong
                     data-tooltip="An assembly line that produces multiple product variations sharing common steps.">
-                    mixed
-                    assembly line
-                </strong> is 35% Super, 45% Ultra, and 20% Mega. Fixing this prevents calculations from
+                    mixed assembly line</strong> is 35% Super, 45% Ultra, and 20% Mega. Fixing this prevents calculations from
                 becoming too complex for a web browser.
             </li>
             <li>
@@ -501,25 +499,20 @@
             <li>
                 <strong>Assembly Line Length:</strong> Fixed at <code>486 feet</code>. This dimension is based on
                 providing adequate physical <strong data-tooltip="Physical area required for an operation.">
-                    floor
-                    space
-                </strong> (6 feet) for the task with the shortest element time (0.4 minutes), ensuring no task
+                    floor space</strong> (6 feet) for the task with the shortest element time (0.4 minutes), ensuring no task
                 is physically constrained.
                 \[\left( \frac{\text{Total Element Time (32.4 min)}}{0.4 \text{ min/element}} \right) \times 6 \text{
                 feet/element} = 486 \text{ feet}\]
             </li>
             <li>
-                <strong>Workstation Capacities & Configurations:</strong> For each potential number of employees
-                (<strong
+                <strong>Workstation Capacities & Configurations:</strong> For each potential number of employees (<strong
                     data-tooltip="A designated area where a specific set of assembly tasks (elements) are performed, typically by one operator.">workstations</strong>)
                 from 3 to 13, a near-optimal task assignment configuration is pre-defined in the code (derived from
                 <code>CONFIGS.csv</code>). These configurations were generated using a custom algorithm, <strong
                     data-tooltip="Backpropagating Iterative Ranked Weights: Custom algorithm used to improve line balance by iteratively applying a reversed RPW method.">BIRW</strong>
-                (Backpropagating Iterative Ranked Weights). This algorithm refines an initial assignment from the
-                standard <strong
+                (Backpropagating Iterative Ranked Weights). This algorithm refines an initial assignment from the standard <strong
                     data-tooltip="Ranked Positional Weights: Algorithm for assigning tasks to workstations based on task time and precedence constraints, often resulting in front-loaded imbalance.">RPW</strong>
-                (Ranked Positional Weights) method. RPW tends to front-load tasks, leading to imbalance. BIRW addresses
-                this by:
+                (Ranked Positional Weights) method. RPW tends to front-load tasks, leading to imbalance. BIRW addresses this by:
                 <ol>
                     <li>
                         Running RPW forward to get a baseline number of stations (<code>minStations</code>) and average
@@ -545,8 +538,7 @@
  { ws: 12, maxDemand: 501 }, { ws: 13, maxDemand: 552 }
 ]
                 </pre>
-                </code>These capacities significantly speed up the profit optimization by eliminating impossible
-                scenarios early.
+                </code>These capacities significantly speed up the profit optimization by eliminating impossible scenarios early.
             </li>
         </ul>
 
@@ -559,29 +551,22 @@
         <h4>1. Workstation Details & Bottleneck Identification</h4>
         <p>
             The function first calls <code>calculateWorkstationDetails</code>. For the selected number of employees,
-            this
-            sub-function determines:
+            this sub-function determines:
         </p>
         <ul>
             <li>
                 <strong>
                     Station <strong
                         data-tooltip="The actual time it takes for one unit to be completed at the slowest workstation. This determines your line's true output rate.">
-                        Cycle
-                        Time
-                    </strong> (min):
-                </strong> Calculated for each workstation by summing the <strong
+                        Cycle Time</strong> (min):</strong> Calculated for each workstation by summing the <strong
                     data-tooltip="The average time an operator spends on a task per unit, considering the mix of models being built and task requirements.">
-                    labor
-                    time
-                </strong> (<code>laborTime</code>) of all tasks assigned to it. This represents the average
+                    labor time</strong> (<code>laborTime</code>) of all tasks assigned to it. This represents the average
                 workload per unit for that station.
             </li>
             <li>
                 <strong>
                     Line <strong
-                        data-tooltip="The single process or workstation that limits the overall output rate of the entire system.">Bottleneck</strong>
-                    Time (min):
+                        data-tooltip="The single process or workstation that limits the overall output rate of the entire system.">Bottleneck</strong>Time (min):
                 </strong> The maximum Station Cycle Time found across all workstations. This value
                 dictates the absolute fastest rate the entire line can produce units.
             </li>
@@ -617,14 +602,11 @@
         <h4>
             3. Required <strong
                 data-tooltip="The required pace (time per unit) of production needed to meet customer demand within the available operating time.">
-                Takt
-                Time
-            </strong> Calculation
+                Takt Time</strong> Calculation
         </h4>
         <p>
             This determines the pace (minutes per unit) required to meet the user-set <code>dailyDemand</code> within
-            the
-            specified <code>opHours</code>. The formula correctly accounts for the initial time needed to fill the
+            the specified <code>opHours</code>. The formula correctly accounts for the initial time needed to fill the
             entire assembly line before the first unit is completed:
         </p>
         \[ \text{Required Takt Time} = \frac{\text{Total Operational Minutes}}{(\text{Daily Demand} - 1) +
@@ -648,40 +630,31 @@
         <ul>
             <li>
                 <strong>
-                    Actual <strong
-                        data-tooltip="The total time it takes for a single unit to travel from the start to the end of the assembly line.">
-                        Process
-                        Time
-                    </strong> (min):
-                </strong> The total time for one unit to traverse the entire line at the
-                effective pace:
+                    Actual <strong data-tooltip="The total time it takes for a single unit to travel from the start to the end of the assembly line.">Process Time</strong> (min):
+                </strong> The total time for one unit to traverse the entire line at the effective pace:
                 \[\text{Actual Process Time} = \frac{\text{Assembly Line Length}}{\text{Product Spacing}} \times
                 \text{Effective Cycle Time}\]
             </li>
             <li>
                 <strong>
                     <strong
-                        data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>
-                    (Units per Day):
+                        data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>(Units per Day):
                 </strong> The total number of units the line can actually produce within the
                 operating hours. Calculated based on the "launch window" (total time minus the time for the first unit
                 to exit):
-                \[\text{Throughput}_{\text{Units/Day}} = \left\lfloor \frac{\text{Total Op Minutes} - \text{Actual
-                Process Time}}{\text{Effective Cycle Time}} \right\rfloor + 1\]
+                \[\text{Throughput}_{\text{Units/Day}} = \left\lfloor \frac{\text{Total Op Minutes} - \text{Actual Process Time}}{\text{Effective Cycle Time}} \right\rfloor + 1\]
                 (Throughput is 0 if Total Op Minutes < Actual Process Time). </li>
             <li>
                 <strong>
                     <strong
-                        data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>
-                    (Units per Hour):
+                        data-tooltip="The number of units completed per unit of time (e.g., per hour or per day).">Throughput</strong>(Units per Hour):
                 </strong> Calculated for display in the UI based on the actual production achieved
                 over the *effective* production time (which might be less than opHours if demand is low).
             </li>
             <li>
                 <strong>
                     <strong
-                        data-tooltip="Work In Progress: The average number of incomplete products currently physically present on the assembly line.">WIP</strong>
-                    (Units):
+                        data-tooltip="Work In Progress: The average number of incomplete products currently physically present on the assembly line.">WIP</strong>(Units):
                 </strong> The average number of units physically on the line at any given time. Displayed in
                 the UI.
                 \[\text{WIP} = \frac{\text{Assembly Line Length}}{\text{Product Spacing}}\]
@@ -693,11 +666,9 @@
             <li>
                 <strong>
                     Average <strong
-                        data-tooltip="Percentage of total available operator time that is spent productively working on units.">Efficiency</strong>
-                    (%):
+                        data-tooltip="Percentage of total available operator time that is spent productively working on units.">Efficiency</strong>(%):
                 </strong> Overall measure of labor utilization. Displayed in the UI.
-                \[\text{Avg. Efficiency} = \frac{\text{Throughput}_{\text{Units/Day}} \times \sum \text{Task Labor
-                Times}}{\text{Num Employees} \times \text{Total Op Minutes}} \times 100\%\]
+                \[\text{Avg. Efficiency} = \frac{\text{Throughput}_{\text{Units/Day}} \times \sum \text{Task Labor Times}}{\text{Num Employees} \times \text{Total Op Minutes}} \times 100\%\]
             </li>
             <li>
                 <strong>Total Idle Time (hrs):</strong> Total non-productive paid labor time across all employees per
@@ -708,8 +679,7 @@
             <li>
                 <strong
                     data-tooltip="The percentage of time operators are idle specifically due to unequal workload distribution between workstations.">Balance
-                    Delay</strong> (%): Measures inefficiency specifically from unequal task distribution. Displayed in
-                the UI.
+                    Delay</strong> (%): Measures inefficiency specifically from unequal task distribution. Displayed in the UI.
                 <ol type="a" style="padding-left: 1.5rem; margin-top: 0.5rem;">
                     <li>
                         Workstation Efficiency = \( \frac{\text{Workstation Cycle Time}}{\text{Bottleneck Cycle Time}}
@@ -721,13 +691,10 @@
             <li>
                 <strong
                     data-tooltip="The Coefficient of Variation (standard deviation / mean) of idle times across workstations. Measures how *evenly* the idle time (imbalance) is distributed. Lower is better.">
-                    Idle
-                    Time CV (BD CV)
-                </strong> (%): Quantifies the *variation* in idle time between stations. A high CV
+                    Idle Time CV (BD CV)</strong> (%): Quantifies the *variation* in idle time between stations. A high CV
                 means some stations are very busy while others are very idle, even if the average Balance Delay isn't
                 terrible. Displayed in the UI.
-                \[ \text{Idle Time CV} = \left( \frac{\text{StdDev}(\text{Station Idle Times per
-                Cycle})}{\text{Mean}(\text{Station Idle Times per Cycle})} \right) \times 100\% \]
+                \[ \text{Idle Time CV} = \left( \frac{\text{StdDev}(\text{Station Idle Times per Cycle})}{\text{Mean}(\text{Station Idle Times per Cycle})} \right) \times 100\% \]
                 (Where Station Idle Time per Cycle = Bottleneck Time - Station Cycle Time).
             </li>
         </ul>
@@ -751,15 +718,14 @@
             <li>
                 <strong
                     data-tooltip="Revenue minus COGS and direct Labor Cost. Profit generated directly from production before overheads."><code>Daily Gross Profit</code></strong>
-                ($): Displayed in the UI.
-                \[ \text{Gross Profit} = \text{Revenue} - \text{COGS} - \text{Labor Cost} \]
+                ($): Displayed in the UI (Rework under CoPQ below).
+                \[ \text{Gross Profit} = \text{Revenue} - \text{COGS} - \text{Labor Cost} - \text{Rework Cost} \]
             </li>
             <li>
                 <strong
                     data-tooltip="Gross Profit expressed as a percentage of total revenue. Measures profitability of production itself."><code>Gross Profit Margin</code></strong>
                 (%): Displayed in the UI.
-                \[ \text{Gross Profit Margin} = \left( \frac{\text{Gross Profit}}{\text{Revenue}} \right) \times 100\%
-                \]
+                \[ \text{Gross Profit Margin} = \left( \frac{\text{Gross Profit}}{\text{Revenue}} \right) \times 100\%\]
             </li>
         </ul>
         <h3>Profit Maximization Algorithm (<code>calculateOptimalProfitData</code>)</h3>
@@ -813,8 +779,7 @@
                 station's length on the conveyor. It's proportional to the station's share of the total line
                 <code>elementTime</code>:
                 \[\text{Travel Time}_{\text{station}} = \left( \frac{\sum \text{Element Time}_{\text{station}}}{\sum
-                \text{Element Time}_{\text{line}}} \right) \times \left( \frac{\text{Line Length}}{\text{Conveyor
-                Speed}} \right)\]
+                \text{Element Time}_{\text{line}}} \right) \times \left( \frac{\text{Line Length}}{\text{Conveyor Speed}} \right)\]
             </li>
             <li>
                 <strong>Task Start Time:</strong> Accurately models waiting scenarios (product waiting for worker, or
@@ -835,9 +800,7 @@
         <h4>
             <strong
                 data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">
-                Free
-                Cash Flow (FCF)
-            </strong> Calculation
+                Free Cash Flow (FCF)</strong> Calculation
         </h4>
         <p>
             FCF is the basis for investment metrics. For each year (\(t\)) from 1 to \(n\) (analysis period), it's
@@ -852,18 +815,12 @@
             <li>
                 Calculate <strong
                     data-tooltip="Net Operating Profit After Tax. A measure of profitability that excludes debt financing effects.">
-                    Net
-                    Operating Profit After Tax (NOPAT)
-                </strong>:
-                \[ \text{NOPAT}_t = \text{EBIT}_t \times (1 - \text{Tax Rate}) \]
+                    Net Operating Profit After Tax (NOPAT)</strong>: \[ \text{NOPAT}_t = \text{EBIT}_t \times (1 - \text{Tax Rate}) \]
             </li>
             <li>
                 Calculate <strong
                     data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">
-                    Free
-                    Cash Flow (FCF)
-                </strong>:
-                \[ \text{FCF}_t = \text{NOPAT}_t + \text{Depreciation}_t \]
+                    Free Cash Flow (FCF)</strong>: \[ \text{FCF}_t = \text{NOPAT}_t + \text{Depreciation}_t \]
                 (Depreciation is calculated using the selected <strong
                     data-tooltip="Modified Accelerated Cost Recovery System. A US tax depreciation system specifying depreciation rates per year.">MACRS</strong>
                 schedule. In the final year \(n\), the after-tax Salvage Value is added: \( \text{FCF}_n \leftarrow
@@ -878,9 +835,7 @@
             <li>
                 <strong
                     data-tooltip="A project's total discounted future cash flows minus the initial investment. If positive, the project is expected to generate more value than its cost.">
-                    Net
-                    Present Value (NPV)
-                </strong>: Discounts future FCFs back to present value using the <strong
+                    Net Present Value (NPV)</strong>: Discounts future FCFs back to present value using the <strong
                     data-tooltip="Minimum Acceptable Rate of Return: The hurdle rate or required return an investor expects for undertaking the risk of an investment.">MARR</strong>.
                 A positive NPV suggests a potentially acceptable investment.
                 \[NPV = \sum_{t=0}^{n} \frac{FCF_t}{(1 + MARR)^t}\]
@@ -888,18 +843,14 @@
             <li>
                 <strong
                     data-tooltip="The discount rate (%) at which a project's Net Present Value (NPV) equals zero. Represents the project's effective rate of return. Higher is better.">
-                    Internal
-                    Rate of Return (IRR)
-                </strong> (%): The effective rate of return of the investment. It's the discount
+                    Internal Rate of Return (IRR)</strong> (%): The effective rate of return of the investment. It's the discount
                 rate (\(r\)) where NPV = 0. Calculated numerically using the bisection method (iteratively narrowing a
                 rate range [low, high] until the NPV at the midpoint is close to zero).
             </li>
             <li>
                 <strong
                     data-tooltip="The time (in years or days) required for an investment's cumulative positive cash inflows to equal the initial investment cost.">
-                    Payback
-                    Period
-                </strong> (Years/Days): Time until cumulative positive FCFs (\( \sum_{t=1}^{k} FCF_t \))
+                    Payback Period</strong> (Years/Days): Time until cumulative positive FCFs (\( \sum_{t=1}^{k} FCF_t \))
                 recover the initial investment (\( |FCF_0| \)). If payback occurs between year \(k-1\) and year \(k\):
                 \[ \text{Payback Period} = (k-1) + \frac{|FCF_0| - \sum_{t=1}^{k-1} FCF_t}{FCF_k} \]
                 (Result is Infinity if investment is never recovered). Calculated in days for UI display.
@@ -958,13 +909,11 @@
                 constructs a pro forma income statement for each year. It calculates revenue, subtracts all costs
                 (material, labor, scaled overheads, <strong
                     data-tooltip="Total annual cost for transporting goods, derived from the Location Tab analysis.">freight</strong>),
-                and also deducts the non-cash tax depreciation expense using the 5-year Modified Accelerated Cost
-                Recovery System (<strong
+                and also deducts the non-cash tax depreciation expense using the 5-year Modified Accelerated Cost Recovery System (<strong
                     data-tooltip="Modified Accelerated Cost Recovery System. A US tax depreciation system specifying depreciation rates per year.">MACRS</strong>)
                 schedule. It then computes the <strong
                     data-tooltip="Net Operating Profit After Tax. A measure of profitability that excludes debt financing effects.">
-                    Net
-                    Operating Profit After Tax (NOPAT)
+                    Net Operating Profit After Tax (NOPAT)
                 </strong> and correctly adds back the depreciation charge to
                 arrive at the <strong
                     data-tooltip="Cash generated by a company's operations after accounting for capital expenditures needed to maintain operations.">
@@ -1007,12 +956,9 @@
             <li>
                 <strong>New (Greenfield):</strong> Iteratively finds the best *coordinate* using the Weiszfeld
                 algorithm, weighted by annual cost to each city:
-                \[\text{New Coordinate} = \frac{\sum_{i} \frac{\text{City Coordinate}_i \times \text{Annual
-                Cost}_i}{\text{Distance}_i}}{\sum_{i} \frac{\text{Annual Cost}_i}{\text{Distance}_i}}\]
+                \[\text{New Coordinate} = \frac{\sum_{i} \frac{\text{City Coordinate}_i \times \text{Annual Cost}_i}{\text{Distance}_i}}{\sum_{i} \frac{\text{Annual Cost}_i}{\text{Distance}_i}}\]
                 <p>
-                    Upon determining an optimal median value, all existing locations are then checked to see if any have
-                    a
-                    lower cost.
+                    Upon determining an optimal median value, all existing locations are then checked to see if any have a lower cost.
                 </p>
             </li>
             <li>
@@ -1324,9 +1270,10 @@
             <li>
                 <strong>Backward Pass: OT Offset:</strong>
                 <ul>
-                    <li>After slack is removed, the simulation iterates *backward*.
+                    <li>After slack is removed, the simulation iterates *backward* to balance out the annual demand and budget.
                     </li>
-                    <li>It looks for any *remaining* standard production days (as total hours) that were not removed</li>
+                    <li>It looks for any *remaining* standard production days (as total hours) that were not removed
+                    </li>
                     <li>It runs another <code>runSafetyCheck</code> to see if removing this day is
                         safe (checking against the final `targetEndInventory` of 0).</li>
                     <li>If safe, the day is removed and marked as a <code>isReductionDay</code> to
@@ -1341,6 +1288,183 @@
             which now meets all demand with the minimum possible inventory and cost, is returned to the main
             application.
         </p>
+
+        <h3>Quality Yield & Stress Model</h3>
+        <p>
+            Manufacturing quality is treated as a dynamic variable derived from system stress. The simulation calculates
+            a <strong
+                data-tooltip="The percentage of products produced that meet quality standards without requiring rework.">First
+                Pass Yield (FPY)</strong> starting at 100% and subtracting penalties based on four distinct stress
+            vectors.
+        </p>
+        \[ \text{Total Stress} = (0.4 \times \text{Process Stress}) + (0.2 \times \text{Conveyor Stress}) + (0.2 \times
+        \text{Wage Stress}) + (0.2 \times \text{Overtime Stress}) \]
+        \[ \text{Quality Yield} = 1.0 - \text{Total Stress} \]
+
+        <h4>1. Process Capability Stress (Variability vs. Slack)</h4>
+        <p>
+            This stress models the probability that a station cannot complete its work within the allotted time, causing a
+            line stop or a rushed (defective) unit. This is not a static failure rate; it is a dynamic interaction between three variables:
+        </p>
+        <ul>
+            <li><strong>Task Variation (<strong
+                        data-tooltip="Coefficient of Variation: Standard Deviation / Mean. Represents the inherent instability of the process.">CV</strong>):</strong>
+                The width of the bell curve. A higher CV flattens the curve, pushing the "tail" of long task times out.
+            </li>
+            <li><strong>Slack Time:</strong> The safety buffer. Calculated as \( \text{Takt Time} -
+                \text{Station Cycle Time} \).</li>
+            <li><strong>Bayesian Recovery:</strong> The model accounts for the fact that a single cycle overrun does not
+                guarantee a failure. If the <em>next</em> unit is produced faster than the average, it can absorb the
+                delay, based on Bayesian probabilities of the MSSA Production Sequence</li>
+        </ul>
+        <p>
+            The stress is calculated as the <strong>Tail Probability</strong> (area under the Log-Normal curve beyond Takt Time)
+            weighted by the <strong>Conditional Probability</strong> that the subsequent cycle lacks sufficient slack to
+            recover the specific time lost.
+        </p>
+
+        <div style="text-align: center; margin: 2rem 0;">
+            <svg width="600" height="300" viewBox="0 0 600 300" style="background: #fff; border: 1px solid #ddd;">
+                [attachment_0](attachment)
+                <defs>
+                    <linearGradient id="gradSafe" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" style="stop-color:#4CAF50;stop-opacity:0.1" />
+                        <stop offset="100%" style="stop-color:#4CAF50;stop-opacity:0.4" />
+                    </linearGradient>
+                    <pattern id="diagonalHatch" patternUnits="userSpaceOnUse" width="4" height="4">
+                        <path d="M-1,1 l2,-2 M0,4 l4,-4 M3,5 l2,-2" style="stroke:#D32F2F; stroke-width:1" />
+                    </pattern>
+                </defs>
+                <line x1="50" y1="260" x2="550" y2="260" stroke="#333" stroke-width="2" />
+                <line x1="50" y1="260" x2="50" y2="40" stroke="#333" stroke-width="2" />   <text x="300" y="290"
+                    text-anchor="middle" font-family="sans-serif" font-size="12">Task Duration (Time)</text>
+                <path d="M50,260 Q100,260 150,100 Q200,40 300,150 T550,260" fill="none" stroke="#333"
+                    stroke-width="2" />
+                <line x1="240" y1="40" x2="240" y2="260" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" />
+                <text x="240" y="30" fill="#2196F3" text-anchor="middle" font-family="sans-serif" font-size="11"
+                    font-weight="bold">Mean Cycle Time</text>
+                <line x1="400" y1="40" x2="400" y2="260" stroke="#D32F2F" stroke-width="3" />
+                <text x="400" y="30" fill="#D32F2F" text-anchor="middle" font-family="sans-serif" font-size="11"
+                    font-weight="bold">Takt Time Limit</text>
+                <path d="M240,100 L400,100" stroke="#4CAF50" stroke-width="2" marker-end="url(#arrow)"
+                    marker-start="url(#arrow)" />
+                <rect x="270" y="85" width="100" height="30" fill="white" opacity="0.9" />
+                <text x="320" y="103" fill="#4CAF50" text-anchor="middle" font-family="sans-serif" font-weight="bold"
+                    font-size="12">SLACK (Buffer)</text>
+                <path d="M400,230 Q450,250 550,260 L400,260 Z" fill="url(#diagonalHatch)" opacity="0.5" />
+                <text x="475" y="220" fill="#D32F2F" text-anchor="middle" font-family="sans-serif" font-size="11"
+                    font-weight="bold">Overrun Risk</text>
+                <text x="50" y="40" font-family="sans-serif" font-size="11" fill="#555">
+                    <tspan x="60" dy="1.2em">High CV widens curve,</tspan>
+                    <tspan x="60" dy="1.2em">increasing the overlap</tspan>
+                    <tspan x="60" dy="1.2em">past Takt Time.</tspan>
+                </text>
+            </svg>
+            <p style="font-style: italic; font-size: 0.9rem; color: #666; text-align: center;">
+                Visualizing Stress: The intersection of Variability (Curve) and Constraints (Takt Time).
+            </p>
+        </div>
+
+        <<h4>2. Conveyor Speed Stress (Speed vs. Variability)</h4>
+            <p>
+                Working on a moving line introduces physical stress (vibration, tracking difficulty).
+                However, this stress is heavily compounded by process variability (<strong
+                    data-tooltip="Coefficient of Variation. A high CV means task times are inconsistent.">CV</strong>).
+            </p>
+            <p>
+                If a worker has high variability, they need a stationary target to recover from "slow" cycles. A moving conveyor
+                removes that recovery buffer. Therefore, the model <strong>derates</strong> the "Safe Speed Limit" based on the CV.
+            </p>
+            <ul>
+                <li><strong>Base Limit:</strong> 15 ft/min is the maximum safe speed for a perfectly consistent process
+                    (CV = 0).</li>
+                <li><strong>Derated Limit:</strong> As CV increases, the safe speed drops.
+                    \[ \text{Effective Safe Speed} = 15 \text{ ft/min} \times (1.0 - \text{CV}) \]
+                </li>
+                <li><strong>Stress Formula:</strong> Stress grows exponentially as the actual conveyor speed approaches
+                    this reduced limit.
+                    \[ \text{Speed Stress} = \left( \frac{\text{Actual Speed}}{\text{Effective Safe Speed}} \right)^2
+                    \times 0.05 \]
+                </li>
+            </ul>
+            <p><em>Example: If CV is 20%, the Safe Speed drops to 12 ft/min. Running at 15 ft/min would essentially ensure defects.</em></p>
+
+            <h4>2. Local Wage Stress (Location Tab)</h4>
+            <p>
+                The quality of the workforce is modeled as a function of the wages paid relative to the local market conditions.
+                This captures how underpaying employees will increase their stress, engagement, turnover, and starting skill level.
+                The system uses a 3rd-party API to fetch the **Median Household Income** for the specific Census Block
+                of the factory's optimal location (lat/lon).
+            </p>
+            <ul>
+                <li><strong>Step 1:</strong> Convert Median Household Income to an hourly rate (assuming a full-time 2080 hours/year).
+                </li>
+                <li><strong>Step 2:</strong> Compare the user-set <code>Labor Cost</code> to this local median.</li>
+                <li><strong>Step 3:</strong> Calculate Stress. If the user pays <em>above</em> the median, stress is 0.
+                    If they pay <em>below</em> 60% of the median, stress is maximized (1.0). Between these points, it scales linearly.
+                </li>
+            </ul>
+            \[ \text{Wage Stress} = \begin{cases}
+            0 & \text{if } \text{Pay} \ge \text{Median} \\
+            \frac{\text{Median} - \text{Pay}}{\text{Median} - (0.6 \times \text{Median})} & \text{if } \text{Median} \gt
+            \text{Pay} \gt (0.6 \times \text{Median}) \\
+            1 & \text{if } \text{Pay} \le (0.6 \times \text{Median}) \\
+            \end{cases} \]
+
+            <h4>4. Exception Stress (Sigmoid Function)</h4>
+            <p>
+                High utilization (overtime, rushing) causes defects. The simulation tracks the percentage of days
+                that required exceptions (Overtime). This ratio is fed into a <strong
+                    data-tooltip="An 'S'-shaped curve defined by the logistic function. Used here to model a threshold effect where low overtime has little impact, but high overtime causes quality to collapse rapidly.">Sigmoid
+                    Function</strong>.
+            </p>
+            <p>
+                The Sigmoid creates a realistic threshold effect: a small amount of overtime has negligible impact on quality,
+                but once a tipping point (around 20% overtime days) is reached, the stress factor skyrockets, reflecting
+                worker burnout and systemic errors.
+            </p>
+
+            <div style="text-align: center; margin: 2rem 0;">
+                <svg width="500" height="250" viewBox="0 0 500 250" style="background: #fff; border: 1px solid #ddd;">
+                    <line x1="50" y1="220" x2="450" y2="220" stroke="#333" stroke-width="2" />
+                    <line x1="50" y1="220" x2="50" y2="20" stroke="#333" stroke-width="2" />
+                    <text x="250" y="245" text-anchor="middle" font-family="sans-serif" font-size="0.9rem">% Days with
+                        Overtime</text>
+                    <text x="20" y="120" text-anchor="middle" transform="rotate(-90, 20, 120)" font-family="sans-serif"
+                        font-size="0.9rem">Stress Factor (Quality Loss)</text>
+                    <path d="M50,215 C200,215 200,20 400,20" fill="none" stroke="#3F51B5" stroke-width="4" />
+                    <circle cx="50" cy="215" r="4" fill="#3F51B5" />
+                    <circle cx="225" cy="97" r="5" fill="#F44336" />
+                    <circle cx="400" cy="20" r="4" fill="#3F51B5" />
+                    <line x1="225" y1="97" x2="225" y2="220" stroke="#F44336" stroke-width="3" stroke-dasharray="4,4" />
+                    <text x="230" y="210" fill="#666" font-family="sans-serif" font-size="1.1rem">Tipping Point
+                        (~20%)</text>
+                    <text x="100" y="120" fill="#4CAF50" font-family="sans-serif" font-size="1.1rem">Safe Zone</text>
+                    <text x="320" y="80" fill="#F44336" font-family="sans-serif" font-size="1.1rem">Burnout Zone</text>
+                </svg>
+                <p style="font-style: italic; font-size: 0.9rem; color: #666;">
+                    Sigmoid Function: Overtime vs. Quality Stress
+                </p>
+            </div>
+
+            <h3>Financial Impact: Cost of Poor Quality (CoPQ)</h3>
+            <p>
+                The calculated <code>Quality Yield</code> directly impacts the bottom line through the <strong  
+                    data-tooltip="Cost of Poor Quality: The financial loss generated by defective products. In this simulation, it is modeled purely as Rework Cost.">CoPQ</strong> metric.
+            </p>
+            <ol>
+                <li><strong>Failed Units:</strong> The system calculates how many units failed quality checks based on the yield.
+                    \[ \text{Failed Units} = \text{Total Production} \times (1.0 - \text{Quality Yield}) \]
+                </li>
+                <li><strong>Rework Cost Calculation:</strong> Failed units are not scrapped; they are reworked.
+                    Each model type (Super, Ultra, Mega) has a specific <code>Rework Cost</code> input in the Finance Tab.
+                    \[ \text{CoPQ} = \sum (\text{Failed Units}_{\text{model}} \times \text{Rework Cost}_{\text{model}})
+                    \]
+                </li>
+                <li><strong>Profit Reduction:</strong> CoPQ is subtracted directly from Revenue, effectively acting as
+                    an additional variable cost that reduces the Gross Margin.
+                </li>
+            </ol>
     </div>
 </body>
 
