@@ -553,7 +553,7 @@ const LayoutTab = (function () {
             .attr("y", binContentStartY - 10); // Position above the actual bin rectangle
 
         // --- Legend and Grid ---
-        const legendWidth = 160;
+        const legendWidth = 170;
         const legendHeight = 110;
         const legendX = containerWidth * 0.01;
         // Position legend relative to the *actual* bottom of the bin rectangle
@@ -577,12 +577,13 @@ const LayoutTab = (function () {
         const itemsGrid = [
             [
                 { label: "Super", color: getComputedStyle(root).getPropertyValue('--super-color').trim() },
-                { label: "Ultra", color: getComputedStyle(root).getPropertyValue('--ultra-color').trim() }
+                { label: "Ultra", color: getComputedStyle(root).getPropertyValue('--ultra-color').trim() },
+                { label: "Mega", color: getComputedStyle(root).getPropertyValue('--mega-color').trim() }
             ],
             [
-                { label: "Mega", color: getComputedStyle(root).getPropertyValue('--mega-color').trim() },
+                
                 { label: "Idle", color: getComputedStyle(root).getPropertyValue('--idle-color').trim() },
-                { label: "Defective", color: getComputedStyle(root).getPropertyValue('--failure-color').trim() }
+                { label: "Defective Unit", color: getComputedStyle(root).getPropertyValue('--failure-color').trim() }
             ]
         ];
 
