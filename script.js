@@ -150,8 +150,6 @@ const ultraReworkInput = document.getElementById('ultraRework');
 const megaSellInput = document.getElementById('megaSell');
 const megaCogsInput = document.getElementById('megaCogs');
 const megaReworkInput = document.getElementById('megaRework');
-
-// --- New Quality UI Elements ---
 const qualityYieldInput = document.getElementById('qualityYieldInput');
 const qualityStDevPercentageInput = document.getElementById('qualityStDevPercentage');
 const qualityStDevPercentageDisplay = document.getElementById('qualityStDevPercentageDisplay');
@@ -169,7 +167,7 @@ const avgEfficiencyEl = document.getElementById('avgEfficiency');
 const totalIdleTimeEl = document.getElementById('totalIdleTime');
 const balanceDelayEl = document.getElementById('balanceDelay');
 const idleTimeCvEl = document.getElementById('idleTimeCv');
-const qualityYieldEl = document.getElementById('qualityYield'); // This is the output display, not the input
+const qualityYieldEl = document.getElementById('qualityYield');
 const leftSidebar = document.getElementById('left-sidebar');
 const rightSidebar = document.getElementById('right-sidebar');
 const leftToggle = document.getElementById('left-toggle');
@@ -179,7 +177,7 @@ const visPanels = document.querySelectorAll('.vis-panel');
 const workstationList = document.getElementById('workstation-list');
 const precedenceMap = flattenPrecedenceTree();
 
-// Save/Compare elements (may not exist at script parse time in some ordering)
+// Save/Compare elements
 const saveConfigBtn = document.getElementById('saveConfigBtn');
 const compareBtn = document.getElementById('compareBtn');
 const comparePanel = document.getElementById('save-compare-section');
@@ -211,7 +209,7 @@ async function main() {
     setupUIEventListeners();
     setupVisibilityListener();
 
-    // --- FIX: Run validation and UI setup *before* any calculations ---
+    // --- Run validation and UI setup ---
     state.invalidPrecedenceMap = validatePrecedence();
     invalidPrecedenceNodes = new Set(Array.from(state.invalidPrecedenceMap.keys()));
     restoreActiveTab();
@@ -286,13 +284,13 @@ async function loadData() {
             laborCost: parseFloat(laborCostInput.value),
             superSell: parseFloat(superSellInput.value),
             superCogs: parseFloat(superCogsInput.value),
-            superRework: parseFloat(superReworkInput.value), // Added
+            superRework: parseFloat(superReworkInput.value),
             ultraSell: parseFloat(ultraSellInput.value),
             ultraCogs: parseFloat(ultraCogsInput.value),
-            ultraRework: parseFloat(ultraReworkInput.value), // Added
+            ultraRework: parseFloat(ultraReworkInput.value),
             megaSell: parseFloat(megaSellInput.value),
             megaCogs: parseFloat(megaCogsInput.value),
-            megaRework: parseFloat(megaReworkInput.value), // Added
+            megaRework: parseFloat(megaReworkInput.value),
             qualityYieldInput: parseFloat(qualityYieldInput.value),
             qualityStDevPercentage: parseFloat(qualityStDevPercentageInput.value)
         };
@@ -419,7 +417,7 @@ function getEstimatedYield() {
         const calculatedYield = 1.0 - window.lastQualityBreakdown.totalStress;
         if (calculatedYield > 0) return calculatedYield;
     }
-    return 0.95; // Default guess
+    return 0.95;
 }
 
 /**
@@ -699,14 +697,13 @@ function restoreActiveTab() {
 function updateUI(options = {}) {
     // --- Update Top-Level Displays ---
     employeeCountDisplay.textContent = numEmployeesInput.value;
-    // Update CV display, as it might be stale after a compare/switch
+
     if (qualityStDevPercentageDisplay) {
         qualityStDevPercentageDisplay.textContent = (parseFloat(qualityStDevPercentageInput.value) * 100).toFixed(1);
     }
 
-    // FIX: Redraw sidebar FIRST to visually confirm element assignments
     renderWorkstationSidebar(parseInt(numEmployeesInput.value));
-    setupDragAndDrop(); // Re-initialize sortable after sidebar redraw
+    setupDragAndDrop(); 
 
     // --- Precedence Validation ---
     if (!options.skipPrecedence) {
@@ -718,7 +715,6 @@ function updateUI(options = {}) {
         // Display precedence error state
         demandStatusEl.textContent = "Fails to Meet Precedence";
         demandStatusEl.className = "status failure";
-        // Clear or show placeholder values for metrics
         wipEl.textContent = '---';
         throughputEl.textContent = '---';
         conveyorSpeedEl.textContent = '---';
@@ -730,7 +726,7 @@ function updateUI(options = {}) {
         balanceDelayEl.textContent = '---';
         idleTimeCvEl.textContent = '---';
         qualityYieldEl.textContent = '---';
-        if (copqEl) copqEl.textContent = '---'; // <-- ADD THIS
+        copqEl.textContent = '---';
 
         // Clear calculated yield field if user hasn't touched it
         if (qualityYieldInput && qualityYieldInput.dataset.userModified !== "true") {
@@ -775,12 +771,7 @@ function updateUI(options = {}) {
             animateValue(balanceDelayEl, results.balanceDelay, 800, val => `${val.toFixed(1)}%`);
             animateValue(idleTimeCvEl, results.idleTimeCv, 800, val => `${val.toFixed(1)}%`);
             animateValue(qualityYieldEl, results.qualityYield * 100, 800, val => `${val.toFixed(1)}%`);
-
-            // --- ADD THIS BLOCK ---
-            if (copqEl) {
-                animateValue(copqEl, results.costOfPoorQuality, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }));
-            }
-            // --- END ADD ---
+            animateValue(copqEl, results.costOfPoorQuality, 800, val => val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }));
 
             // Update demand status text and class
             const idleHoursTotal = (results.totalIdleTime || 0) / 60;
@@ -1064,9 +1055,9 @@ function setupEventListeners() {
     // --- Updated inputs array ---
     const inputs = [
         dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput,
-        superSellInput, superCogsInput, superReworkInput, // Added
-        ultraSellInput, ultraCogsInput, ultraReworkInput, // Added
-        megaSellInput, megaCogsInput, megaReworkInput, // Added
+        superSellInput, superCogsInput, superReworkInput,
+        ultraSellInput, ultraCogsInput, ultraReworkInput,
+        megaSellInput, megaCogsInput, megaReworkInput,
         qualityYieldInput,
         qualityStDevPercentageInput
     ];
@@ -1075,7 +1066,6 @@ function setupEventListeners() {
         handleInputChange(id);
     });
 
-    // --- New listener for quality yield override ---
     qualityYieldInput.addEventListener('input', () => {
         qualityYieldInput.dataset.userModified = "true";
     });
@@ -1089,16 +1079,15 @@ function setupEventListeners() {
         });
     });
 
-    // --- MODIFIED listener for CV slider ---
+    // --- Listener for CV slider ---
     qualityStDevPercentageInput.addEventListener('input', () => {
-        // Now displays as a percentage, e.g., 15.0
         qualityStDevPercentageDisplay.textContent = (parseFloat(qualityStDevPercentageInput.value) * 100).toFixed(1);
     });
+
     // Initialize CV display as a percentage
     qualityStDevPercentageDisplay.textContent = (parseFloat(qualityStDevPercentageInput.value) * 100).toFixed(1);
 
-
-    // --- New Tooltip for Quality Yield Breakdown ---
+    // --- Tooltip for Quality Yield Breakdown ---
     const qualityYieldLabelElement = document.querySelector('label[for="qualityYieldInput"]');
     if (qualityYieldLabelElement) {
         const tooltip = createTooltip('quality-breakdown-tooltip');
@@ -1281,7 +1270,6 @@ function attachCommitBehavior(inputs, onCommit) {
         });
     });
 
-    // Added default rework costs
     const defaultValues = {
         'dailyDemand': 180,
         'opHours': 15.0,
@@ -1289,13 +1277,13 @@ function attachCommitBehavior(inputs, onCommit) {
         'laborCost': 25.0,
         'superSell': 400,
         'superCogs': 375,
-        'superRework': 350, // Added
+        'superRework': 350,
         'ultraSell': 650,
         'ultraCogs': 590,
-        'ultraRework': 500, // Added
+        'ultraRework': 500,
         'megaSell': 1000,
         'megaCogs': 960,
-        'megaRework': 650, // Added
+        'megaRework': 650,
         'qualityYieldInput': 100.0,
         'qualityStDevPercentage': 0.15
     };
@@ -1330,7 +1318,6 @@ function attachCommitBehavior(inputs, onCommit) {
 
                     input.value = Math.max(min, Math.min(max, defaultValue));
 
-                    // Special case: Resetting quality yield should clear user override
                     if (input.id === 'qualityYieldInput') {
                         input.dataset.userModified = "false";
                     }
@@ -1413,7 +1400,7 @@ function clampByField(id, n) {
             return Math.max(1, n);
         case 'megaCogs':
             return Math.max(0, n);
-        case 'qualityYieldInput': // New clamp
+        case 'qualityYieldInput':
             return Math.min(Math.max(0, n), 100.0);
         default:
             return n;
@@ -1692,7 +1679,6 @@ function createTooltip(className) {
 }
 
 /**
- * --- ADD THIS NEW FUNCTION ---
  * Positions a D3 tooltip, flipping to the left side if the cursor
  * is in the rightmost quarter of the viewport.
  * @param {d3.Selection} tooltip - The D3 tooltip selection.
@@ -1702,7 +1688,6 @@ function createTooltip(className) {
  */
 function positionTooltip(tooltip, event, xOffset = 15, yOffset = 0) {
     const tooltipNode = tooltip.node();
-    // Use offsetWidth, or a fallback if node isn't ready
     const tooltipWidth = tooltipNode ? tooltipNode.offsetWidth : 200;
 
     let leftPos;
@@ -1738,8 +1723,7 @@ function wireRightSidebarTooltips() {
         'idleTimeCv': 'Coefficient of variation of idle times across stations (%).',
         'grossProfit': 'Value of goods sold minus COGS. Represents the value a given product provides for the company, to sustain operations.',
         'profitMargin': 'Percentage of profit compared to total goods sold. Can be either net or gross.',
-
-        // --- New/Modified Tooltips ---
+        'CoPQ': 'The associated costs from quality yields, the cost of reworking non-compliant units.',
         'qualityYield': 'The percentage of produced units that meet quality standards. This is either calculated automatically or set by your manual override.',
         'qualityStDevPercentage': 'Coefficient of Variance (CV). Represents process instability. A higher CV increases the probability of task overruns, conveyor issues, and overtime, which all reduce quality yield.',
         'npvMetric': 'Used to determine the profitability of an investment by comparing the present value of future cash inflows to the initial investment.',
@@ -1765,8 +1749,6 @@ function wireRightSidebarTooltips() {
 
     for (const [id, text] of Object.entries(tooltips)) {
         let target = null;
-
-        // Try `for` attribute or `id` of label
         target = containerElement.querySelector(`label[for="${id}"]`) || document.getElementById(id);
 
         if (!target) {
@@ -1861,7 +1843,7 @@ function generateElementColorScale(workstationIndex, numWorkstations, numElement
 * @param {object} [context={}] - An optional context object.
 */
 async function handleInputChange(driverId, context = {}) {
-    if (isRecalculating) return; // <-- TYPO FIX
+    if (isRecalculating) return;
     isRecalculating = true;
 
     const isFinancialDriver = ['laborCost', 'superSell', 'superCogs', 'ultraSell', 'ultraCogs', 'megaSell', 'megaCogs', 'qualityYieldInput', 'qualityStDevPercentage'].includes(driverId);
@@ -1869,9 +1851,9 @@ async function handleInputChange(driverId, context = {}) {
 
     if (isFinancialDriver) {
         if (driverId === 'qualityYieldInput') {
-            qualityYieldInput.dataset.userModified = "true"; // Set flag
+            qualityYieldInput.dataset.userModified = "true";
         } else {
-            qualityYieldInput.dataset.userModified = "false"; // Clear flag
+            qualityYieldInput.dataset.userModified = "false";
         }
 
         if (driverId === 'laborCost' && typeof LocationTab !== 'undefined' && LocationTab.updateLocalWageStress) {
@@ -1885,8 +1867,6 @@ async function handleInputChange(driverId, context = {}) {
 
     if (isOperationalDriver) {
         workstationList.scrollTop = 0;
-
-        // This is fine, as 'qualityYieldInput' is not an operational driver
         qualityYieldInput.dataset.userModified = "false";
 
         if (typeof LocationTab !== 'undefined' && LocationTab.runOptimization) {
@@ -1995,17 +1975,11 @@ function calculateWorkstationDetails(numEmployees) {
 */
 function calculateMetrics(op, fin, skipQualityYield = false) {
     fin = fin || {};
-
-    // --- ROBUST FIN INPUT VALIDATION ---
-    // This helper function ensures that any value (NaN, undefined, etc.)
-    // is converted to a valid number (0).
     const getFinVal = (val) => {
         const n = parseFloat(val);
         return isFinite(n) ? n : 0;
     };
 
-    // Create a sanitized `finInputs` object. We will use this
-    // for all financial calculations.
     const finInputs = {
         laborCost: getFinVal(fin.laborCost) || getFinVal(laborCostInput?.value),
         superSell: getFinVal(fin.superSell) || getFinVal(superSellInput?.value),
@@ -2018,11 +1992,8 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
         megaCogs: getFinVal(fin.megaCogs) || getFinVal(megaCogsInput?.value),
         megaRework: getFinVal(fin.megaRework) || getFinVal(megaReworkInput?.value),
     };
-    // --- END VALIDATION ---
 
     const wsDetails = calculateWorkstationDetails(op.numEmployees);
-
-    // Use precise minutes
     const fullTotalOpMinutes = op.opHours * 60;
 
     const bottleneckCycleTime = wsDetails.bottleneckTime;
@@ -2061,13 +2032,13 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
             stDevPercentage, convSpeed, workstationDetails, taktTime,
             overtimeStress, wageStress, BUILD_RATIOS
         );
-        window.lastQualityBreakdown = qualityBreakdown; // Save for tooltip
+        window.lastQualityBreakdown = qualityBreakdown;
 
         // `calculatedQualityYield` is the (1.0 - totalStress)
-        calculatedQualityYield = 1.0 - qualityBreakdown.totalStress; // Store the calculated value
+        calculatedQualityYield = 1.0 - qualityBreakdown.totalStress;
 
         if (qualityYieldInput && qualityYieldInput.dataset.userModified === "true") {
-            return parseFloat(qualityYieldInput.value) / 100.0; // Return user override for math
+            return parseFloat(qualityYieldInput.value) / 100.0;
         } else {
             // Only update the input if it's not being overridden
             if (qualityYieldInput) {
@@ -2079,7 +2050,7 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
                     }));
                 }
             }
-            return calculatedQualityYield; // Return calculated value for math
+            return calculatedQualityYield;
         }
     };
 
@@ -2151,14 +2122,8 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
 
     // --- Main Calculation Logic ---
     const totalProductionTarget = op.dailyDemand;
-
-    // 1. Run simulation *once* with this production target
     const finalPassResults = calculateThroughput(totalProductionTarget);
-
-    // 2. Get the quality yield.
     const finalQualityYield = getQualityYield(finalPassResults.effectiveCycleTime, finalPassResults.conveyorSpeed);
-
-    // This is the failure rate
     const totalStress = 1.0 - finalQualityYield;
 
     const {
@@ -2179,7 +2144,7 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
     });
 
     const totalAvailableTime = op.numEmployees * fullTotalOpMinutes;
-    const totalDailyLaborCost = op.numEmployees * op.opHours * finInputs.laborCost; // Use sanitized value
+    const totalDailyLaborCost = op.numEmployees * op.opHours * finInputs.laborCost;
     const totalProductiveTime = finalTotalUnitsProduced * totalWorkstationCycleTime;
     const totalIdleTime = Math.max(0, totalAvailableTime - totalProductiveTime);
     const averageEfficiency = totalAvailableTime > 0 ? (totalProductiveTime / totalAvailableTime) * 100 : 0;
@@ -2194,15 +2159,13 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
     const idleTimeCv = idleMean > 0 ? (stdDev / idleMean) * 100 : 0;
 
     // --- FINANCIAL CALCULATION (with Rework Cost) ---
-
-    // Revenue is based on *ALL* units produced (using sanitized finInputs)
     const totalRevenue = finalTotalUnitsProduced * (
         (BUILD_RATIOS.super * finInputs.superSell) +
         (BUILD_RATIOS.ultra * finInputs.ultraSell) +
         (BUILD_RATIOS.mega * finInputs.megaSell)
     );
 
-    // COGS is based on *ALL* units produced (using sanitized finInputs)
+    // COGS is based on *ALL* units produced
     const totalCogs = finalTotalUnitsProduced * (
         (BUILD_RATIOS.super * finInputs.superCogs) +
         (BUILD_RATIOS.ultra * finInputs.ultraCogs) +
@@ -2218,11 +2181,9 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
     const reworkCost = (failedSuper * finInputs.superRework) +
         (failedUltra * finInputs.ultraRework) +
         (failedMega * finInputs.megaRework);
-
-    // This is now guaranteed to be a valid number (e.g., 0)
     const costOfPoorQuality = reworkCost;
 
-    // Gross Profit now subtracts COGS, Labor, AND Rework (CoPQ)
+    // Gross Profit now subtracts COGS, Labor, and Rework (CoPQ)
     const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost - costOfPoorQuality;
     const grossProfitMargin = totalRevenue > 0 ? (dailyGrossProfit / totalRevenue) * 100 : 0;
 
@@ -2235,18 +2196,18 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
 
     return {
         wip: finalWip,
-        throughputUnitsPerHour: effectiveHourlyUnits, // TOTAL hourly
+        throughputUnitsPerHour: effectiveHourlyUnits,
         conveyorSpeed: finalConveyorSpeed,
         productSpacing: productSpacing,
         dailyGrossProfit,
         grossProfitMargin,
-        costOfPoorQuality: costOfPoorQuality, // <-- NOW INCLUDED AND VALID
-        meetsDemand: effectiveMeetsDemand, // PHYSICAL check
+        costOfPoorQuality: costOfPoorQuality,
+        meetsDemand: effectiveMeetsDemand,
         effectiveCycleTime: finalEffectiveCycleTime,
         workstations: wsDetails.workstations,
         averageEfficiency, totalIdleTime, balanceDelay, idleTimeCv,
-        throughputUnitsPerDay: effectiveTotalUnits, // TOTAL daily
-        qualityYield: finalQualityYield // The calculated % (1.0 - totalStress)
+        throughputUnitsPerDay: effectiveTotalUnits,
+        qualityYield: finalQualityYield
     };
 }
 
@@ -2259,7 +2220,7 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
 */
 function getRequiredHours(demand, numEmployees) {
     const { bottleneckTime, fastestTime } = calculateWorkstationDetails(numEmployees);
-    if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) return 24; // Return max if config is invalid
+    if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) return 24;
     const productSpacing = fastestTime * 15;
     const throughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckTime;
     const totalRequiredMinutes = (demand > 1 ? (demand - 1) * bottleneckTime : 0) + throughputTime;
@@ -2275,22 +2236,16 @@ function getRequiredHours(demand, numEmployees) {
 */
 function calculateMaxDemand(hours, numEmployees) {
     const { bottleneckTime, fastestTime } = calculateWorkstationDetails(numEmployees);
-    if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) return 0; // Return 0 if config is invalid
+    if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) return 0;
 
     const productSpacing = fastestTime * 15;
     const throughputTimeMinutes = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckTime;
-
-    // *** FIX: Use the "floor of the step value" for minutes ***
-    // This correctly handles the 0.25 step of the opHours input.
     const totalOpMinutes = Math.floor(hours * 4) * 15;
-
-    // Use a small epsilon (1e-9) to handle floating point comparisons
     if (totalOpMinutes < (throughputTimeMinutes - 1e-9)) {
-        return 0; // Not enough time to produce even one unit
+        return 0; 
     }
 
     const launchWindowMinutes = totalOpMinutes - throughputTimeMinutes;
-
     // We can always produce 1 unit if we have >= throughput time.
     return Math.floor((launchWindowMinutes / bottleneckTime) + 1e-9) + 1;
 }
@@ -2325,7 +2280,7 @@ function findBestEmployeeFit(requiredTaktTime, startingCount) {
         // Check if the bottleneck for this employee count meets the takt time
         if (calculateWorkstationDetails(i).bottleneckTime <= requiredTaktTime) return i;
     }
-    return 13; // Return max if no fit found
+    return 13; 
 }
 
 /**
@@ -2456,17 +2411,17 @@ function getFinancialInputsKey() {
         laborCost: parseFloat(laborCostInput.value),
         superSell: parseFloat(superSellInput.value),
         superCogs: parseFloat(superCogsInput.value),
-        superRework: parseFloat(superReworkInput.value), // Added
+        superRework: parseFloat(superReworkInput.value),
         ultraSell: parseFloat(ultraSellInput.value),
         ultraCogs: parseFloat(ultraCogsInput.value),
-        ultraRework: parseFloat(ultraReworkInput.value), // Added
+        ultraRework: parseFloat(ultraReworkInput.value),
         megaSell: parseFloat(megaSellInput.value),
         megaCogs: parseFloat(megaCogsInput.value),
-        megaRework: parseFloat(megaReworkInput.value), // Added
+        megaRework: parseFloat(megaReworkInput.value),
         qualityYield: parseFloat(qualityYieldInput.value),
         stDevPercentage: parseFloat(qualityStDevPercentageInput.value)
     };
-    return 'profitDataCache-v3-' + JSON.stringify(finInputs); // Bumped cache version
+    return 'profitDataCache-v3-' + JSON.stringify(finInputs);
 }
 
 /**
@@ -2507,10 +2462,7 @@ function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
     let maxMarginConfig = { emp: 0, hrs: 0 };
 
     const qualityYield = (parseFloat(qualityYieldInput.value) || 100.0) / 100.0;
-    if (qualityYield < 0) qualityYield = 0; // Cannot be negative
-
-    // --- THIS IS THE FIX ---
-    // 'demand' is the TOTAL production target. No division by yield.
+    if (qualityYield < 0) qualityYield = 0;
     const requiredProductionTotal = demand;
 
     for (let numEmployees = 3; numEmployees <= 13; numEmployees++) {
@@ -2536,25 +2488,21 @@ function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
             const metrics = calculateMetrics(
                 { dailyDemand: requiredProductionTotal, opHours, numEmployees },
                 finInputs,
-                true // skipQualityYield = true. We apply it manually.
+                true
             );
 
             // Check if this config can *physically* produce the target
             if (metrics && metrics.throughputUnitsPerDay >= requiredProductionTotal) {
 
                 // --- FINANCIAL CALCULATION (with quality) ---
-                // Revenue is based on "good" units (target * yield)
                 const totalRevenue = requiredProductionTotal * ((BUILD_RATIOS.super * (finInputs.superSell || 0)) + (BUILD_RATIOS.ultra * (finInputs.ultraSell || 0)) + (BUILD_RATIOS.mega * (finInputs.megaSell || 0)));
-                // COGS is based on *all* units produced (the target)
                 const totalCogs = requiredProductionTotal * ((BUILD_RATIOS.super * (finInputs.superCogs || 0)) + (BUILD_RATIOS.ultra * (finInputs.ultraCogs || 0)) + (BUILD_RATIOS.mega * (finInputs.megaCogs || 0)));
                 const totalDailyLaborCost = numEmployees * opHours * (finInputs.laborCost || 0);
                 const totalStress = 1.0 - qualityYield;
                 const failedUnits = requiredProductionTotal * totalStress;
                 const reworkCost = failedUnits * ((BUILD_RATIOS.super * finInputs.superRework) + (BUILD_RATIOS.ultra * finInputs.ultraRework) + (BUILD_RATIOS.mega * finInputs.megaRework));
-
                 const profitWithQuality = totalRevenue - totalCogs - reworkCost - totalDailyLaborCost;
                 const marginWithQuality = totalRevenue > 0 ? (profitWithQuality / totalRevenue) * 100 : 0;
-                // --- END FINANCIAL CALC ---
 
                 if (profitWithQuality > maxProfit) {
                     maxProfit = profitWithQuality;
@@ -2586,21 +2534,16 @@ async function calculateOptimalProfitData() {
         laborCost: parseFloat(laborCostInput.value),
         superSell: parseFloat(superSellInput.value),
         superCogs: parseFloat(superCogsInput.value),
-        superRework: parseFloat(superReworkInput.value), // Added
+        superRework: parseFloat(superReworkInput.value),
         ultraSell: parseFloat(ultraSellInput.value),
         ultraCogs: parseFloat(ultraCogsInput.value),
-        ultraRework: parseFloat(ultraReworkInput.value), // Added
+        ultraRework: parseFloat(ultraReworkInput.value),
         megaSell: parseFloat(megaSellInput.value),
         megaCogs: parseFloat(megaCogsInput.value),
-        megaRework: parseFloat(megaReworkInput.value) // Added
+        megaRework: parseFloat(megaReworkInput.value)
     };
 
-    const key = getFinancialInputsKey() + '-demand50plus'; // Key now includes rework costs
-
-    // --- FIX: Removed the premature ProfitTab.draw() call ---
-    // if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
-    //     ProfitTab.draw(); // This was the problem
-    // }
+    const key = getFinancialInputsKey() + '-demand50plus';
 
     setTimeout(() => {
         const profitData = [];
@@ -2612,7 +2555,6 @@ async function calculateOptimalProfitData() {
             const maxDemandMap = new Map(WORKSTATION_CAPACITIES.map(c => [c.ws, c.maxDemand]));
 
             for (let demand = 50; demand <= 552; demand++) {
-                // Pass the full finInputs (with rework costs)
                 const { profitResult, marginResult } = findOptimalConfigForDemand(demand, finInputs, maxDemandMap);
                 profitData.push(profitResult);
                 marginData.push(marginResult);
@@ -2629,7 +2571,6 @@ async function calculateOptimalProfitData() {
         } finally {
             state.configData = originalStateConfig;
             isProfitCalculating = false;
-            // This call is fine, as it runs *after* the calculation is complete
             if (document.querySelector('.tab-btn.active')?.dataset.tab === 'profit') {
                 ProfitTab.draw();
             }
@@ -2857,13 +2798,13 @@ function onSaveConfiguration() {
         laborCost: parseFloat(laborCostInput.value),
         superSell: parseFloat(superSellInput.value),
         superCogs: parseFloat(superCogsInput.value),
-        superRework: parseFloat(superReworkInput.value), // Added
+        superRework: parseFloat(superReworkInput.value),
         ultraSell: parseFloat(ultraSellInput.value),
         ultraCogs: parseFloat(ultraCogsInput.value),
-        ultraRework: parseFloat(ultraReworkInput.value), // Added
+        ultraRework: parseFloat(ultraReworkInput.value),
         megaSell: parseFloat(megaSellInput.value),
         megaCogs: parseFloat(megaCogsInput.value),
-        megaRework: parseFloat(megaReworkInput.value), // Added
+        megaRework: parseFloat(megaReworkInput.value),
         qualityYieldInput: parseFloat(qualityYieldInput.value),
         qualityStDevPercentage: parseFloat(qualityStDevPercentageInput.value)
     };
@@ -3040,7 +2981,7 @@ function switchCompareView(view) {
             setInputValue(megaReworkInput, lastSavedConfig.inputs.megaRework);
             setInputValue(qualityYieldInput, lastSavedConfig.inputs.qualityYieldInput, 3);
             setInputValue(qualityStDevPercentageInput, lastSavedConfig.inputs.qualityStDevPercentage);
-            qualityYieldInput.dataset.userModified = "true"; // Mark as overridden
+            qualityYieldInput.dataset.userModified = "true";
 
             if (typeof window.setInvestmentInputs === 'function' && lastSavedConfig.investmentInputs) {
                 try { window.setInvestmentInputs(lastSavedConfig.investmentInputs); } catch (e) { console.error('Error setting investment inputs:', e); }
@@ -3068,7 +3009,7 @@ function switchCompareView(view) {
                 setInputValue(megaReworkInput, currentInputs.megaRework);
                 setInputValue(qualityYieldInput, currentInputs.qualityYieldInput, 3);
                 setInputValue(qualityStDevPercentageInput, currentInputs.qualityStDevPercentage);
-                qualityYieldInput.dataset.userModified = "false"; // Clear the flag
+                qualityYieldInput.dataset.userModified = "false";
 
                 if (typeof window.setInvestmentInputs === 'function' && currentInputs.investmentInputs) {
                     try { window.setInvestmentInputs(currentInputs.investmentInputs); } catch (e) { console.error('Error setting investment inputs:', e); }
@@ -3082,16 +3023,12 @@ function switchCompareView(view) {
     } catch (e) {
         console.error('Error in switchCompareView:', e);
     }
-    // --- FIX: Call the main handler ONCE ---
-    // This will now run the full, stable update pipeline.
     handleInputChange('dailyDemand');
-
     currentView = view;
     updateCompareBtn();
 }
 
 async function fetchFipsFromLatLon(lat, lon, timeoutMs = 8000) {
-    // --- FIX: Switched to a new, working proxy ---
     const corsProxy = 'https://api.allorigins.win/raw?url=';
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -3147,7 +3084,6 @@ async function fetchFipsFromLatLon(lat, lon, timeoutMs = 8000) {
 }
 
 async function fetchMedianHouseholdIncome({ stateFips, countyFips, tract }, censusApiKey = '') {
-    // --- FIX: Switched to a new, working proxy ---
     const corsProxy = 'https://api.allorigins.win/raw?url=';
 
     const year = '2021';
@@ -3156,7 +3092,6 @@ async function fetchMedianHouseholdIncome({ stateFips, countyFips, tract }, cens
 
     // --- Helper function to safely fetch and parse from the proxy ---
     const safeProxyFetch = async (targetUrl) => {
-        // --- FIX: This proxy *requires* the target URL to be encoded ---
         const url = `${corsProxy}${encodeURIComponent(targetUrl)}`;
         console.log('Proxy URL:', url);
         let res;
@@ -3181,7 +3116,7 @@ async function fetchMedianHouseholdIncome({ stateFips, countyFips, tract }, cens
         }
     };
 
-    // --- Main Logic (unchanged, but will use the fixed helper) ---
+    // --- Main Logic ---
     try {
         // 1. --- Try Tract-Level ---
         if (stateFips && countyFips && tract) {
@@ -3199,7 +3134,7 @@ async function fetchMedianHouseholdIncome({ stateFips, countyFips, tract }, cens
                 if (Array.isArray(tractResponse) && tractResponse.length >= 2 && tractResponse[1][0] !== null) {
                     const val = Number(tractResponse[1][0]);
                     if (Number.isFinite(val) && val > 0) {
-                        return val; // Success at tract level
+                        return val;
                     }
                 }
             } else {
@@ -3222,7 +3157,7 @@ async function fetchMedianHouseholdIncome({ stateFips, countyFips, tract }, cens
                 if (Array.isArray(countyResponse) && countyResponse.length >= 2 && countyResponse[1][0] !== null) {
                     const val = Number(countyResponse[1][0]);
                     if (Number.isFinite(val) && val > 0) {
-                        return val; // Success at county level
+                        return val;
                     }
                 }
             } else {
@@ -3233,7 +3168,7 @@ async function fetchMedianHouseholdIncome({ stateFips, countyFips, tract }, cens
         console.warn('fetchMedianHouseholdIncome main try/catch error', err);
     }
 
-    return null; // Failed to get data
+    return null;
 }
 
 function medianIncomeToHourly(medianHouseholdIncome, hoursPerWeek = 40, weeksPerYear = 52) {
