@@ -53,12 +53,18 @@
             Takt Time.
         </li>
         <li>
-            <strong>Operating Hours:</strong> The total available production time for a shift. Driving labor costs and
+            <strong>Operating Hours:</strong> The available production time for a shift. Driving labor costs and
             Takt Time.
         </li>
         <li>
             <strong>Financial Inputs:</strong> Key cost and price parameters, including labor rate, material costs, and
             selling price for each model.
+        </li>
+        <li>
+            <strong>Quality Yield:</strong> The percentage of built products which are built correctly, influenced by many
+            employee stresses.  This directly impacts 
+            <strong data-tooltip="Cost of Poor Quality. Calculated from Operational conditions between Workstations, Factory Location, Rework and Labor Costs, and Build Schedule.">
+            CoPQ</strong>, based on the average cost of rework by model.
         </li>
         <li>
             <strong>Investment Factors:</strong> Many other variables must be accounted for to determine the long-term
@@ -155,7 +161,7 @@
         <li>
             <strong>Element vs Labor Time</strong> – In a mixed assembly line, where different models have different
             tasks required, the Element time a task takes to complete will impact how much conveyor space it needs;
-            however, the balancing of tasks should use the average labor time it needs throughout the day.
+            however, the balancing of tasks should use the average labor time throughout the day.
         </li>
         <li>
             <strong>Conveyor Layout</strong> – To minimize wasted movement from employees in the workstations between
@@ -166,6 +172,11 @@
             <strong>WIP & Held Inventory</strong> – Holding Inventory in your factory ties up capital which could be
             better invested, carries administrative costs like taxes and insurance, requires excess storage and
             handling, as well as deterioration, shrinkage, and obsolescence risks.
+        </li>
+        <li>
+            <strong>CoPQ & SRR</strong> – The Cost of Poor Quality is influenced by SRR (Scrap, Rework, Repair) of units
+            which were built incorrectly.  This is caused by overworkage, insufficient buffer time to cope with variance,
+            and non-competitive wages.
         </li>
     </ul>
 </section>
