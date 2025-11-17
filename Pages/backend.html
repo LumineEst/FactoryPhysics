@@ -88,7 +88,7 @@
             color: var(--accent, #37474F);
             padding: 0.2em 0.4em;
             margin: 0;
-            font-size: 85%;
+            font-size: 90%;
             border-radius: 6px;
             font-family: monospace;
         }
@@ -188,8 +188,8 @@
             <li>
                 <strong>Precedence Data:</strong> The required order of assembly <strong
                     data-tooltip="Atomic tasks done by one person; cannot be shared or split.">elements</strong>
-                (<code>PRECEDENCE_DATA</code>) is fixed, reflecting non-negotiable engineering and assembly logic based
-                on the physical requirements of building the refrigerators.
+                is fixed, reflecting non-negotiable engineering and assembly logic based on the physical requirements 
+                of building the refrigerators.  Order can be modified for elements so long as precedence is maintained.
             </li>
         </ul>
 
@@ -497,7 +497,7 @@
         </div>
         <ul>
             <li>
-                <strong>Assembly Line Length:</strong> Fixed at <code>486 feet</code>. This dimension is based on
+                <strong>Assembly Line Length:</strong> Fixed at 486 feet. This length is predicated on
                 providing adequate physical <strong data-tooltip="Physical area required for an operation.">
                     floor space</strong> (6 feet) for the task with the shortest element time (0.4 minutes), ensuring no task
                 is physically constrained.
@@ -507,15 +507,14 @@
             <li>
                 <strong>Workstation Capacities & Configurations:</strong> For each potential number of employees (<strong
                     data-tooltip="A designated area where a specific set of assembly tasks (elements) are performed, typically by one operator.">workstations</strong>)
-                from 3 to 13, a near-optimal task assignment configuration is pre-defined in the code (derived from
-                <code>CONFIGS.csv</code>). These configurations were generated using a custom algorithm, <strong
+                from 3 to 13, a near-optimal task assignment configuration is pre-defined. These configurations were generated using a custom algorithm, <strong
                     data-tooltip="Backpropagating Iterative Ranked Weights: Custom algorithm used to improve line balance by iteratively applying a reversed RPW method.">BIRW</strong>
                 (Backpropagating Iterative Ranked Weights). This algorithm refines an initial assignment from the standard <strong
                     data-tooltip="Ranked Positional Weights: Algorithm for assigning tasks to workstations based on task time and precedence constraints, often resulting in front-loaded imbalance.">RPW</strong>
                 (Ranked Positional Weights) method. RPW tends to front-load tasks, leading to imbalance. BIRW addresses this by:
                 <ol>
                     <li>
-                        Running RPW forward to get a baseline number of stations (<code>minStations</code>) and average
+                        Running RPW forward to get a baseline number of stations and average
                         station time.
                     </li>
                     <li>Calculating the standard deviation of individual element times.</li>
@@ -542,7 +541,7 @@
             </li>
         </ul>
 
-        <h3>Core Operational Calculations (<code>calculateMetrics</code>)</h3>
+        <h3>Core Operational Calculations</h3>
         <p>
             This central function translates user inputs (Demand, Op Hours, Employees, Costs/Prices) into the primary
             operational and financial KPIs displayed in the UI.
@@ -550,8 +549,7 @@
 
         <h4>1. Workstation Details & Bottleneck Identification</h4>
         <p>
-            The function first calls <code>calculateWorkstationDetails</code>. For the selected number of employees,
-            this sub-function determines:
+            The function first determines, for the selected number of employees:
         </p>
         <ul>
             <li>
@@ -560,7 +558,7 @@
                         data-tooltip="The actual time it takes for one unit to be completed at the slowest workstation. This determines your line's true output rate.">
                         Cycle Time</strong> (min):</strong> Calculated for each workstation by summing the <strong
                     data-tooltip="The average time an operator spends on a task per unit, considering the mix of models being built and task requirements.">
-                    labor time</strong> (<code>laborTime</code>) of all tasks assigned to it. This represents the average
+                    labor time</strong> of all tasks assigned to it. This represents the average
                 workload per unit for that station.
             </li>
             <li>
@@ -576,8 +574,7 @@
             </li>
         </ul>
         <p>
-            It's crucial that <code>laborTime</code> (work content) determines the bottleneck and cycle time, while
-            <code>elementTime</code> (task duration) influences physical layout and travel times.
+            Labor Time (average work content) determines the bottleneck and cycle time, while Element Time (discrete task duration) influences physical layout and travel times.
         </p>
 
         <h4>2. Conveyor Speed & Spacing (Physical Parameters)</h4>
@@ -605,8 +602,8 @@
                 Takt Time</strong> Calculation
         </h4>
         <p>
-            This determines the pace (minutes per unit) required to meet the user-set <code>dailyDemand</code> within
-            the specified <code>opHours</code>. The formula correctly accounts for the initial time needed to fill the
+            This determines the pace (minutes per unit) required to meet the user-set Daily Demand within
+            the specified Operational Hours. The formula correctly accounts for the initial time needed to fill the
             entire assembly line before the first unit is completed:
         </p>
         \[ \text{Required Takt Time} = \frac{\text{Total Operational Minutes}}{(\text{Daily Demand} - 1) +
@@ -701,18 +698,17 @@
 
         <h3>Integrated Financial Model (Daily KPIs)</h3>
         <p>
-            Connects the calculated operational <code>throughputUnitsPerDay</code> to daily financial performance shown
-            in the UI:
+            Connects the calculated operational throughput to daily financial performance shown in the UI:
         </p>
         <ul>
             <li>
                 <code>Total Revenue</code> = Throughput × Weighted Avg. Selling Price (per model price ×
-                <code>BUILD_RATIOS</code>)
+                <code>Build Ratios</code>)
             </li>
             <li>
                 <strong
                     data-tooltip="Cost Of Goods Sold: Variable costs (materials, direct labor) associated directly with producing goods."><code>Total COGS</code></strong>
-                = Throughput × Weighted Avg. COGS (per model COGS × <code>BUILD_RATIOS</code>)
+                = Throughput × Weighted Avg. COGS (per model COGS × <code>Build Ratios</code>)
             </li>
             <li><code>Total Daily Labor Cost</code> = Num Employees × Op Hours × Labor Rate</li>
             <li>
@@ -728,20 +724,20 @@
                 \[ \text{Gross Profit Margin} = \left( \frac{\text{Gross Profit}}{\text{Revenue}} \right) \times 100\%\]
             </li>
         </ul>
-        <h3>Profit Maximization Algorithm (<code>calculateOptimalProfitData</code>)</h3>
+        <h3>Profit Maximization Algorithm</h3>
         <p>
             Used by the Profit Tab to find the optimal configuration (employees & hours) for each demand level (50-552).
             It uses a grid search optimized by:
         </p>
         <ol>
             <li>
-                <strong>Capacity Pruning:</strong> Uses <code>WORKSTATION_CAPACITIES</code> to skip employee counts that
+                <strong>Capacity Pruning:</strong> Uses predetermined capacity thresholds to skip employee counts that
                 cannot possibly meet the target demand.
             </li>
             <li>
                 <strong>Early Exit:</strong> For a fixed demand and employee count, it calculates the minimum required
-                <code>opHours</code>. It then iterates hours upwards in 0.25 increments. The *first* hour value that
-                achieves <code>throughput >= demand</code> is guaranteed to be the most profitable (lowest cost) for
+                Operational Hours. It then iterates hours upwards in 0.25 increments. The *first* hour value that
+                achieves <code>Throughput >= Demand</code> is guaranteed to be the most profitable (lowest cost) for
                 that combination, so the inner loop breaks immediately.
             </li>
         </ol>
@@ -749,7 +745,6 @@
         <h3>
             Model-Mix Sequencing (MSSA / <strong
                 data-tooltip="A lean manufacturing method (also called Heijunka) for leveling production by sequencing different product models in a repeating pattern to smooth demand on components and workload.">Heijunka</strong>)
-            (<code>generateProductionQueue</code>)
         </h3>
         <p>Used by the Layout and Schedule tabs to create a balanced production sequence for simulations:</p>
         <ol>
@@ -771,30 +766,29 @@
             </li>
         </ol>
 
-        <h3>Discrete-Event Simulation for Gantt Scheduling (<code>runGanttSimulation</code>)</h3>
+        <h3>Discrete-Event Simulation for Gantt Scheduling</h3>
         <p>Models product flow through each task for the Schedule Tab visualization:</p>
         <ul>
             <li>
                 <strong>Station Travel Time:</strong> Calculates how long a product takes to physically move across a
-                station's length on the conveyor. It's proportional to the station's share of the total line
-                <code>elementTime</code>:
+                station's length on the conveyor. It's proportional to the station's share of the total line's Element Time:
                 \[\text{Travel Time}_{\text{station}} = \left( \frac{\sum \text{Element Time}_{\text{station}}}{\sum
                 \text{Element Time}_{\text{line}}} \right) \times \left( \frac{\text{Line Length}}{\text{Conveyor Speed}} \right)\]
             </li>
             <li>
                 <strong>Task Start Time:</strong> Accurately models waiting scenarios (product waiting for worker, or
-                worker waiting for product): <code>max(product_arrival_time, worker_free_time)</code>.
+                worker waiting for product):
+                \[\text{Start Time} = \max(\text{Product Arrival Time}, \text{Worker Free Time})\]
             </li>
             <li>
-                <strong>Product Exit Time from Station:</strong> Accounts for both processing completion and travel
-                time: <code>max(end_processing_time, product_arrival_time + station_travel_time)</code>.
+                <strong>Product Exit Time from Station:</strong> Accounts for both processing completion and travel time: 
+                \[\text{Start Time} = \max(\text{End Processing Time}, \text{Product Arrival Time + Station Travel Time})\]
             </li>
         </ul>
 
         <h3>Capital Investment Analysis (Investment Tab)</h3>
         <p>
-            Evaluates long-term investment viability over the <code>analysisPeriod</code> using the
-            <code>calculateFinancialScenario</code> function.
+            Evaluates long-term investment viability over the selected Analysis Period, default of 5 years.
         </p>
 
         <h4>
@@ -867,9 +861,8 @@
             </li>
             <li>
                 <strong>Expansion Case Analysis:</strong> This mode performs a dynamic optimization to
-                find the ideal operational setup for a given demand. For a specified annual demand, the
-                <code>findOptimalNPVConfig</code> algorithm is triggered. This algorithm systematically searches through
-                all feasible combinations of employee counts (from 3 to 13) and the minimum required operating hours for
+                find the ideal operational setup for a given demand. For a specified annual demand, this algorithm systematically 
+                searches all feasible combinations of employee counts (from 3 to 13) and the minimum required operating hours for
                 each. It calculates the full cash flow series and resulting NPV for each potential configuration,
                 ultimately identifying and using the specific operational setup that maximizes the project's Net Present
                 Value. This ensures the financial analysis is based on the most profitable way to meet the target
@@ -879,28 +872,26 @@
         </ul>
 
         <p>
-            For either case, the <code>calculateFinancialScenario</code> function undertakes a detailed,
-            multi-step process to generate the annual cash flows:
+            For either case, the following multi-step process is used to generate the annual cash flow:
         </p>
         <ol style="list-style-type: decimal; padding-left: 1.5rem;">
             <li>
                 <strong>Initial Investment Calculation:</strong> The model first determines the initial
                 capital outlay, which is directly tied to the number of employees. The total equipment cost is
-                calculated from the cost of the straight conveyor sections (<code>costPerFootStraight</code>) plus a
-                variable cost for the number of 90-degree bends (<code>costPerBend</code>), which is a function of the
-                employee count (e.g., <code>(4 * numEmployees) - 2</code> for an even number of workers). In an
-                Expansion Case, this calculation becomes more dynamic. The model compares the cost of the "old" line
+                calculated from the cost of the straight conveyor sections plus a variable cost for the number of 
+                90-degree bends, which is a function of the employee count (e.g., <code>(4 * Employees) - 2</code> for an 
+                even number of workers). In an Expansion Case, this model also compares the cost of the "old" line
                 (based on current employees) to the "new" line (based on the optimal employee count). If the new line is
                 smaller, a partial salvage value is credited against the initial investment, calculated as a proportion
-                of the total <code>salvageValue</code> based on the reduction in cost. Conversely, if the new line is
+                of the total Salvage Value based on the reduction in cost. Conversely, if the new line is
                 larger, the cost difference is added to the investment, reflecting the incremental capital required.
             </li>
             <li>
                 <strong>Operating Costs and Overhead Scaling:</strong> The model calculates annual
-                operating costs, including <code>totalMaterialCost</code> (based on units produced) and
-                <code>laborCost</code>. A key feature is the dynamic scaling of overheads; both <code>mfgOverhead</code>
-                and <code>sgaExpenses</code> are increased proportionally if the operating hours required for the
-                scenario exceed the base operating hours. This realistically models the increased wear, utility
+                operating costs, including Total Material and Labor Costs (based on units produced). 
+                A key feature is the dynamic scaling of overheads; both Mfg Overhead and SG&A Expenses
+                are increased proportionally if the operating hours required for the scenario exceed the 
+                base operating hours. This realistically models the increased wear, utility
                 consumption, and administrative burden of running longer shifts.
 
             </li>
@@ -925,24 +916,20 @@
         <h3>Probabilistic Demand Forecasting Model</h3>
         <p>
             To account for uncertainty in long-term planning, the investment analysis is enhanced with a
-            probabilistic demand model. The <code>updateProbabilisticValues</code> function allows the user to define a
-            probability distribution for annual demand rather than relying on a single point estimate. The model is
-            centered on the <code>p50Demand</code> (the mean or most likely outcome, derived from the current
-            operational inputs). The user can then specify the dispersion of the forecast in one of three ways: by
-            entering the standard deviation (<code>std</code>), the coefficient of variation (<code>cv</code>), or by
-            providing P10 (pessimistic) and P90 (optimistic) forecasts. If a P10 or P90 value is provided, the code
-            correctly uses the standard Z-score for a 90% confidence interval (Z = 1.28155) to reverse-calculate the
-            implied standard deviation.
+            probabilistic demand model. The user may define a probability distribution for annual demand rather than 
+            relying on a single point estimate. This model is centered on the p50 annual demand (the mean or most likely 
+            outcome, derived from the current operational inputs). The user can then specify the dispersion of the forecast 
+            in one of three ways: by entering the standard deviation, the coefficient of variation, or by providing P10 (pessimistic) 
+            and P90 (optimistic) forecasts. If a P10 or P90 value is provided, the code correctly uses the standard Z-score for a 90% 
+            confidence interval (Z = 1.28155) to reverse-calculate the implied standard deviation.
         </p>
         <p>
-            This enables a three-point estimation (optimistic, pessimistic, most likely). Each of these three
-            demand scenarios is then passed to the <code>calculateFinancialScenario</code> function, which evaluates it
-            according to the user's selected mode (Base Case or Expansion Case). This provides a full range of potential
-            investment outcomes for each possible future, giving a much richer picture of the project's risk and reward
-            profile.
+            This enables a three-point estimation (optimistic, pessimistic, most likely). Each of these three demand scenarios are 
+            then evaluated according to the user's selected mode (Base Case or Expansion Case). This provides a full range of potential 
+            investment outcomes for each possible future, giving a much richer picture of the project's risk and reward profile.
         </p>
 
-        <h3>Facility Location Optimization (<code>LocationTab</code>)</h3>
+        <h3>Facility Location Optimization</h3>
         <p>
             Finds the optimal factory location to minimize total annual transportation costs, solving the <strong
                 data-tooltip="A classic optimization problem to find a single point that minimizes the weighted sum of distances to a set of destination points.">
@@ -1108,7 +1095,7 @@
                 data-tooltip="Costs associated with storing inventory, including capital, storage, service, and risk costs.">
                 inventory holding cost
             </strong> rate (%) displayed in the Location Tab is an estimated value derived from four
-            primary components, as calculated by the <code>calculateHoldingCostBreakdown</code> function:
+            primary components, as calculated below:
         </p>
         <ul>
             <li>
@@ -1147,18 +1134,14 @@
         <p>The total estimated holding cost rate is the sum of these four components. This rate is then used in
             the daily inventory simulation.</p>
 
-        <h4>Shipping Strategy & Simulation (<code>simulation.worker.js</code>)</h4>
+        <h4>Shipping Strategy & Simulation</h4>
         <p>
             The core logic for scheduling shipments and simulating inventory levels resides in a separate <strong
                 data-tooltip="A script running in the background, separate from the main browser thread, to perform computationally intensive tasks without freezing the user interface.">Web
-                Worker</strong> (<code>simulation.worker.js</code>). This prevents complex calculations
-            from blocking
-            the user interface. The process involves two main functions:
-            <code>findOptimalShipmentSchedule</code> and
-            <code>performSimulation</code>.
+                Worker</strong>. This prevents complex calculations from blocking the user interface.
         </p>
 
-        <h4>Shipment Scheduling (<code>findOptimalShipmentSchedule</code> & MILP)</h4>
+        <h4>Shipment Scheduling</h4>
         <p>
             Before the daily simulation runs, an optimal shipment schedule is determined using <strong
                 data-tooltip="Mixed Integer Linear Programming: A mathematical optimization technique used to find the best outcome (e.g., minimum cost, maximum profit) in a model where some variables must be integers (often binary 0/1).">Mixed
@@ -1208,7 +1191,7 @@
             fallback.
         </p>
 
-        <h4>Daily Inventory Simulation (<code>performSimulation</code>)</h4>
+        <h4>Daily Inventory Simulation</h4>
         <p>
             This function simulates the inventory flow day-by-day for a full year (365 days). It executes in multiple
             passes to meet demand while minimizing inventory and exception costs.
@@ -1221,26 +1204,25 @@
         <ol>
             <li>
                 <strong>Target Production (Smoothing):</strong> On any given working day, the line's default
-                action is to produce the "desired" amount, defined by <code>targetDailyProduction</code>
-                (e.g., 180 units). This builds a smooth, predictable inventory level, preventing the massive
-                overproduction of building to max capacity every day.
+                action is to produce the "desired" amount, defined by the daily demand (e.g., 180 units). 
+                This builds a smooth, predictable inventory level, preventing the massive overproduction of building to max capacity every day.
             </li>
             <li>
                 <strong>Flex-to-Max (No Cost):</strong> After Tier 1 production, the system
                 checks for shortfalls for that day's scheduled shipments. If a shortfall exists (e.g., a lumpy shipment
                 of 200 arrives but only 180 were built), the line will "flex" its production *on the current day* up to
-                its <code>maxStandardProduction</code> (e.g., 215) to cover the difference. This step does **not** incur
+                its Max Standard Production (e.g., 215) to cover the difference. This step does **not** incur
                 any exception cost.
             </li>
             <li>
                 <strong>Reactive OT (Costly):</strong> If the shortfall *still* exists after
                 Tier 2 (e.g., the shipment was 300 units), the simulation looks *backward* to previous working days. It
-                adds costly overtime to those days, increasing their <code>opHours</code> and <code>production</code>,
-                until the shortfall is met. This generates <code>exceptionCost</code> and `accumulatedExtraHours`.
+                adds costly overtime to those days, increasing their Operational Hours and Production,
+                until the shortfall is met. This generates an Exception Cost and `Accumulated Extra Hours`.
             </li>
         </ol>
         <p> This pass also handles first-week shipment deferrals and logs critical "Demand Conflict" errors
-            if a shipment is impossible to meet. The `actualShipments` and `actualShipmentDetails` from this "safe" pass
+            if a shipment is impossible to meet. The shipment details from this "safe" pass
             are saved as the mandatory shipment schedule for the optimization passes.
         </p>
 
@@ -1253,15 +1235,15 @@
             <li>
                 <strong>Forward Pass: Slack Removal:</strong>
                 <ul>
-                    <li>First, the simulation finds the "cushion" (<code>minSafeInventory</code>),
+                    <li>First, the simulation finds the "cushion" Minimum Safe Inventory Level,
                         which is the true minimum inventory level required at any point during the year to meet the
                         shipment schedule from Pass 1.</li>
                     <li>It then iterates *forward* from Day 0. On any "standard" (Tier 1) production
-                        day, it runs a "what-if" check (<code>runSafetyCheck</code>) to see if removing that *entire*
+                        day, it runs a "what-if" check to see if removing that *entire*
                         day's production would *ever* cause the inventory to drop below the `minSafeInventory` cushion.
                     </li>
                     <li>If the check passes (it is safe), the day's production is permanently set to
-                        0, it's marked as a <code>isReductionDay</code>, and the inventory for the rest of the year is
+                        0, it's marked as a `Reduction Day`, and the inventory for the rest of the year is
                         recalculated.</li>
                     <li>This process removes slack inventory as early as possible, maximizing
                         holding cost savings.</li>
@@ -1274,19 +1256,16 @@
                     </li>
                     <li>It looks for any *remaining* standard production days (as total hours) that were not removed
                     </li>
-                    <li>It runs another <code>runSafetyCheck</code> to see if removing this day is
-                        safe (checking against the final `targetEndInventory` of 0).</li>
-                    <li>If safe, the day is removed and marked as a <code>isReductionDay</code> to
-                        offset `accumulatedExtraHours`</li>
+                    <li>It runs another check to see if removing this day is safe (checking against the final `Target End Inventory` of 0).</li>
+                    <li>If safe, the day is removed and marked as a `Reduction Day` to offset `Accumulated Extra Hours`</li>
                 </ul>
             </li>
         </ol>
 
         <h4>Pass 3: Final Recalculation</h4>
-        <p> Finally, the simulation does one last, fast pass to recalculate all <code>holdingCost</code>
-            values based on the new, optimized `inventoryEnd` levels for each day. The resulting `dailyData` array,
-            which now meets all demand with the minimum possible inventory and cost, is returned to the main
-            application.
+        <p> Finally, the simulation does one last, fast pass to recalculate all Holding Cost
+            values based on the new, optimized `Inventory End` levels for each day. The result,
+            which now meets all demand with the minimum possible inventory and cost, is returned to the main application.
         </p>
 
         <h3>Quality Yield & Stress Model</h3>
@@ -1399,7 +1378,7 @@
             <ul>
                 <li><strong>Step 1:</strong> Convert Median Household Income to an hourly rate (assuming a full-time 2080 hours/year).
                 </li>
-                <li><strong>Step 2:</strong> Compare the user-set <code>Labor Cost</code> to this local median.</li>
+                <li><strong>Step 2:</strong> Compare the user-set Labor Cost to this local median.</li>
                 <li><strong>Step 3:</strong> Calculate Stress. If the user pays <em>above</em> the median, stress is 0.
                     If they pay <em>below</em> 60% of the median, stress is maximized (1.0). Between these points, it scales linearly.
                 </li>
@@ -1449,7 +1428,7 @@
 
             <h3>Financial Impact: Cost of Poor Quality (CoPQ)</h3>
             <p>
-                The calculated <code>Quality Yield</code> directly impacts the bottom line through the <strong  
+                The calculated Quality Yield directly impacts the bottom line through the <strong  
                     data-tooltip="Cost of Poor Quality: The financial loss generated by defective products. In this simulation, it is modeled purely as Rework Cost.">CoPQ</strong> metric.
             </p>
             <ol>
@@ -1457,7 +1436,7 @@
                     \[ \text{Failed Units} = \text{Total Production} \times (1.0 - \text{Quality Yield}) \]
                 </li>
                 <li><strong>Rework Cost Calculation:</strong> Failed units are not scrapped; they are reworked.
-                    Each model type (Super, Ultra, Mega) has a specific <code>Rework Cost</code> input in the Finance Tab.
+                    Each model type (Super, Ultra, Mega) has a specific Rework Cost input in the Finance Tab.
                     \[ \text{CoPQ} = \sum (\text{Failed Units}_{\text{model}} \times \text{Rework Cost}_{\text{model}})
                     \]
                 </li>
