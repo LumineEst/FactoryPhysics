@@ -1102,7 +1102,7 @@ const ScheduleTab = (function () {
             .style("font-size", "12px")
             .style("font-weight", "bold")
             .style("fill", getComputedStyle(root).getPropertyValue('--accent').trim())
-            .text("Time (Hours:Minutes:Seconds)");
+            .text("Time (Hours : Minutes : Seconds)");
 
         // Vertical line for current time.
         const timeMarker = chart.append("line")
@@ -1287,7 +1287,7 @@ const ScheduleTab = (function () {
             .attr("x", 0)
             .attr("y", 0)
             .attr("width", 150)
-            .attr("height", 140)
+            .attr("height", 160)
             .attr("rx", 5)
             .classed("legend-box", true)
             .style("pointer-events", "auto");
