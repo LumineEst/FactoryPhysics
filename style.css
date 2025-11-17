@@ -327,9 +327,10 @@ h4 {
 .input-group-slider {
     margin-bottom: 0.5rem;
     display: grid;
-    grid-template-columns: 0.5fr 0.5fr;
+    grid-template-columns: 0.5fr 0.7fr;
     justify-content: space-between;
     align-items: center;
+    flex-grow: 1;
 }
 
 .input-group label,
@@ -361,7 +362,7 @@ input[type="range"] {
 }
 
 input[type="range"]::-webkit-slider-runnable-track {
-    background: var(--idle-color);
+    background: rgba(0, 0, 0, 0.25);
     height: 0.4rem;
     border-radius: 10px;
 }
@@ -374,6 +375,7 @@ input[type="range"]::-webkit-slider-thumb {
     height: 1rem;
     width: 1rem;
     border-radius: 50%;
+    border-color:rgba(0, 0, 0, 0.06);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
