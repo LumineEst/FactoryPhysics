@@ -144,7 +144,7 @@ const LocationTab = (() => {
             // Prefer placing near the rightAnchor but ensure it doesn't overflow.
             const preferredX = this.svgWidth * 0.6;
             const x = Math.min(Math.max(preferredX, controls.x + controls.width + gap), Math.max(0, this.svgWidth - width - this.topPanelMargin));
-            const height = this.svgHeight * 0.22;
+            const height = this.svgHeight * 0.23;
 
             return {
                 x: x,
@@ -668,6 +668,76 @@ const LocationTab = (() => {
             targetDailyProduction,
             maxStandardProduction
         };
+    }
+
+    /**
+     *  Generates and downloads a CSV file from the current simulation results.
+     */
+    function exportSimulationCSV() {
+        if (!simulationResults || simulationResults.length === 0) {
+            alert("No simulation data available. Please run the simulation first.");
+            return;
+        }
+
+        // Get constant inputs for columns that don't change per day
+        const numEmployees = document.getElementById('numEmployees')?.value || "8";
+        const opHoursStd = document.getElementById('opHours')?.value || "15.0";
+
+        // 1. Define Headers
+        const headers = [
+            "Date",
+            "Day Type",
+            "Op Hours",
+            "Produced Units",
+            "Total Shipped",
+            "Inventory End",
+            "Holding Cost ($)",
+            "Exception Cost ($)"
+        ];
+
+        // 2. Map Data Rows
+        const rows = simulationResults.map(d => {
+            // Determine Day Type String
+            let type = "Standard";
+            if (d.isReductionDay) type = "Reduction";
+            else if (d.isExceptionDay) type = "Overtime/Exception";
+            else if (!d.isWorkingDay) type = "Weekend/Holiday";
+
+            // Determine Production Hours
+            let hours = Math.max(d.opHours, opHoursStd).toFixed(2);
+            if (d.isReductionDay || !d.isWorkingDay) {
+                hours = 0;
+            }
+            // Escape function for CSV safety (though numbers are usually safe)
+            const safe = (val) => String(val).replace(/,/g, "");
+
+            // Shipments might be an object or number depending on your worker structure,
+            // casting to Number handles the general case.
+            return [
+                d.date,
+                type,
+                hours, // Simulation usually returns specific hours for exception days
+                safe(d.production),
+                safe(d.actualShipments),
+                safe(d.inventoryEnd),
+                d.holdingCost.toFixed(2),
+                d.exceptionCost.toFixed(2)
+            ].join(",");
+        });
+
+        // 3. Construct CSV String
+        const csvContent = [headers.join(","), ...rows].join("\n");
+
+        // 4. Trigger Download
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `FactoryFlow_Sim_Export_${new Date().toISOString().slice(0, 10)}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     }
 
     /**
@@ -1841,7 +1911,7 @@ const LocationTab = (() => {
         summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Ship Cost:</span><span id="summary-ship-cost">$0</span>`);
         summaryDiv.append("div").attr('class', 'summary-row').html(`<span># Shipments:</span><span id="summary-shipments">0</span>`);
         summaryDiv.append("div").attr('class', 'summary-row summary-total').html(`<span>Total Cost:</span><span id="summary-total-cost">$0</span>`);
-        summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Avg Cost/U:</span><span id="summary-avg-cost">$0.00</span>`);
+        summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Avg Cost/Unit:</span><span id="summary-avg-cost">$0.00</span>`);
         summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Median Wage:</span><span id="loc-wage-display">${_currentWageDisplay}</span>`);
 
         // --- Bottom Ribbon ---
@@ -1862,6 +1932,14 @@ const LocationTab = (() => {
             .html(`Simulation: <strong>${holdingChartMode === 'inventory' ? 'Inventory' : 'Shipments'}</strong>`);
         ribbonHeader.append("div").attr("class", "bottom-ribbon-header-arrow")
             .html(isBottomRibbonOpen ? '▼' : '▲');
+        ribbonHeader.append("button")
+            .attr("class", "ribbon-export-btn")
+            .html("Export Schedule")
+            .attr("title", "Download daily simulation data")
+            .on("click", (event) => {
+                event.stopPropagation(); // Prevent ribbon from toggling
+                exportSimulationCSV();
+            });
 
         // Ribbon Content (collapsible)
         const ribbonContent = ribbonDiv.append("div").attr("class", "bottom-ribbon-content")
@@ -1893,14 +1971,29 @@ const LocationTab = (() => {
                 r: input.attr("data-breakdown-risk") || 0,
                 t: input.attr("data-estimated-total") || 0
             };
-            breakdownTooltip.style("opacity", 1).html(
-                `Est. Breakdown:<br>Capital: ${breakdown.c}%<br>Storage: ${breakdown.s}%<br>Administative: ${breakdown.v}%<br>Risk: ${breakdown.r}%<hr>Total: ${breakdown.t}%`
-            );
+
+            const html = `
+            <div class="tt-title">Estimated Breakdown</div>
+            <div class="tooltip-row"><span>Capital:</span><span>${breakdown.c}%</span></div>
+            <div class="tooltip-row"><span>Storage:</span><span>${breakdown.s}%</span></div>
+            <div class="tooltip-row"><span>Administrative:</span><span>${breakdown.v}%</span></div>
+            <div class="tooltip-row"><span>Risk:</span><span>${breakdown.r}%</span></div>
+            <hr>
+            <div class="tooltip-row tt-total"><span>Total Est:</span><span>${breakdown.t}%</span></div>`;
+
+            breakdownTooltip.style("opacity", 1).html(html);
+            if (typeof positionTooltip === 'function') positionTooltip(breakdownTooltip, event, 15, -28);
         })
-            .on("mousemove", (event) => breakdownTooltip
-                .style("left", (event.pageX + 15) + "px")
-                .style("top", (event.pageY - 28) + "px")
-            )
+            .on("mousemove", (event) => {
+                if (typeof positionTooltip === 'function') {
+                    positionTooltip(breakdownTooltip, event, 15, -28);
+                } else {
+                    // Fallback if helper isn't available
+                    breakdownTooltip
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                }
+            })
             .on("mouseout", () => breakdownTooltip.style("opacity", 0));
 
         const ppiGroup = costInputDiv.append("div").attr("class", "user-input-row");
