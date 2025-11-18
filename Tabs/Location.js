@@ -1100,30 +1100,86 @@ const LocationTab = (() => {
         const overageDays = d3.sum(metricData, d => d.isExceptionDay ? 1 : 0);
         const removedDays = d3.sum(metricData, d => d.isReductionDay ? 1 : 0);
 
+        // Helper to attach tooltip events
+        const attachMetricTooltip = (selection, text) => {
+            selection.style("cursor", "help")
+                .on("mouseover", (event) => {
+                    tooltip.style("opacity", 1).html(`<div class="tooltip-row">${text}</div>`);
+                    if (typeof positionTooltip === 'function') positionTooltip(tooltip, event, 15, -28);
+                    else tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
+                })
+                .on("mousemove", (event) => {
+                    if (typeof positionTooltip === 'function') positionTooltip(tooltip, event, 15, -28);
+                    else tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => tooltip.style("opacity", 0));
+        };
+
         // Update metrics panel
         if (holdingChartMode === 'inventory') {
             const invValuation = avgInventory * avgCogs;
-            metricsPlaceholder.append("div").attr('class', 'summary-row')
-                .html(`<span>Avg. Inventory:</span><span><strong>${formatInt(avgInventory)}</strong> units</span>`);
-            metricsPlaceholder.append("div").attr('class', 'summary-row')
-                .html(`<span>Inv. Valuation:</span><span><strong>${formatCurrency(invValuation)}</strong></span>`);
-            metricsPlaceholder.append("div").attr('class', 'summary-row total')
-                .html(`<span>Holding Costs:</span><span><strong>${formatCurrency(totalAnnualHoldingCost)}</strong></span>`);
-        } else {
-            metricsPlaceholder.html(
-                `<div class="summary-row filter-row"><label for="filter-overage"><input type="checkbox" id="filter-overage" ${showOverageHighlight ? "checked" : ""}> Overages:</label> <strong>${overageDays} days</strong></div>` +
-                `<div class="summary-row filter-row"><label for="filter-removed"><input type="checkbox" id="filter-removed" ${showRemovedHighlight ? "checked" : ""}> Days Removed:</label> <strong>${removedDays}</strong></div>` +
-                `<div class="summary-row total"><span>Exception Costs:</span> <strong style="color: ${failureColor};">${formatCurrency(totalExceptionCost)}</strong></div>`
-            );
 
-            metricsPlaceholder.select("#filter-overage").on("change", function () {
-                showOverageHighlight = this.checked;
-                drawHoldingCostChart(); // Redraw
-            });
-            metricsPlaceholder.select("#filter-removed").on("change", function () {
-                showRemovedHighlight = this.checked;
-                drawHoldingCostChart(); // Redraw
-            });
+            // 1. Avg Inventory
+            const row1 = metricsPlaceholder.append("div").attr('class', 'summary-row');
+            const label1 = row1.append("span").text("Avg. Inventory: ");
+            row1.append("span").html(`<strong>${formatInt(avgInventory)}</strong> units`);
+            attachMetricTooltip(label1, "The average number of units held in stock throughout the year.");
+
+            // 2. Inv Valuation
+            const row2 = metricsPlaceholder.append("div").attr('class', 'summary-row');
+            const label2 = row2.append("span").text("Inv. Valuation: ");
+            row2.append("span").html(`<strong>${formatCurrency(invValuation)}</strong>`);
+            attachMetricTooltip(label2, "The monetary value of the average inventory based on the weighted average Cost of Goods Sold (COGS).");
+
+            // 3. Holding Costs
+            const row3 = metricsPlaceholder.append("div").attr('class', 'summary-row total');
+            const label3 = row3.append("span").text("Holding Costs: ");
+            row3.append("span").html(`<strong>${formatCurrency(totalAnnualHoldingCost)}</strong>`);
+            attachMetricTooltip(label3, "Total annual cost to store inventory, including capital (opportunity), storage, service, and risk costs.");
+
+        } else {
+            // --- SHIPMENTS MODE ---
+
+            // 1. Overages Row
+            const row1 = metricsPlaceholder.append("div").attr("class", "summary-row filter-row");
+            const label1 = row1.append("label").attr("for", "filter-overage");
+
+            // Re-attach checkbox behavior
+            label1.append("input")
+                .attr("type", "checkbox")
+                .attr("id", "filter-overage")
+                .property("checked", showOverageHighlight)
+                .on("change", function () {
+                    showOverageHighlight = this.checked;
+                    drawHoldingCostChart();
+                });
+
+            const text1 = label1.append("span").text(" Overages: ");
+            row1.append("strong").text(`${overageDays} days`);
+            attachMetricTooltip(text1, "Days where production exceeded standard capacity (requiring Overtime) to meet a shipment deadline.");
+
+            // 2. Days Removed Row
+            const row2 = metricsPlaceholder.append("div").attr("class", "summary-row filter-row");
+            const label2 = row2.append("label").attr("for", "filter-removed");
+
+            label2.append("input")
+                .attr("type", "checkbox")
+                .attr("id", "filter-removed")
+                .property("checked", showRemovedHighlight)
+                .on("change", function () {
+                    showRemovedHighlight = this.checked;
+                    drawHoldingCostChart();
+                });
+
+            const text2 = label2.append("span").text(" Days Removed: ");
+            row2.append("strong").text(`${removedDays}`);
+            attachMetricTooltip(text2, "Days where standard production was canceled to reduce excess inventory slack or offset previous overtime costs.");
+
+            // 3. Exception Costs Row
+            const row3 = metricsPlaceholder.append("div").attr("class", "summary-row total");
+            const label3 = row3.append("span").text("Exception Costs: ");
+            row3.append("strong").style("color", failureColor).text(formatCurrency(totalExceptionCost));
+            attachMetricTooltip(label3, "The total financial penalty incurred from using Overtime (Overages).");
         }
 
         if (holdingChartMode === 'inventory') {
@@ -1828,8 +1884,25 @@ const LocationTab = (() => {
 
         const controlsDiv = controls.append("xhtml:div").attr("class", "location-controls");
 
+        // --- TOOLTIP SETUP ---
+        const generalTooltip = createTooltip('loc-general-tooltip');
+        const attachLabelTooltip = (element, text) => {
+            element.style("cursor", "help")
+                .on("mouseover", (e) => {
+                    generalTooltip.style("opacity", 1).html(`<div class="tooltip-row">${text}</div>`);
+                    if (typeof positionTooltip === 'function') positionTooltip(generalTooltip, e, 15, -28);
+                    else generalTooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY - 28) + "px");
+                })
+                .on("mousemove", (e) => {
+                    if (typeof positionTooltip === 'function') positionTooltip(generalTooltip, e, 15, -28);
+                    else generalTooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY - 28) + "px");
+                })
+                .on("mouseout", () => generalTooltip.style("opacity", 0));
+        };
+
         const cityGroup = controlsDiv.append("div").attr("class", "input-group");
-        cityGroup.append("label").text("Shipping Hub: City");
+        const cityLabel = cityGroup.append("label").text("Shipping Hub: City");
+        attachLabelTooltip(cityLabel, "The destination city to add to your logistics network.");
         const citySelect = cityGroup.append("select").attr("id", "city-select");
         if (typeof majorCities !== 'undefined') {
             Object.keys(majorCities).sort().forEach(city => citySelect.append("option").attr("value", city).text(city));
@@ -1838,12 +1911,16 @@ const LocationTab = (() => {
         }
 
         const demandGroup = controlsDiv.append("div").attr("class", "input-group");
-        demandGroup.append("label").text("Ship Qty");
+        const demandLabel = demandGroup.append("label").text("Ship Qty");
+        attachLabelTooltip(demandLabel, "The number of refrigerators sent in a single shipment to this city.");
+
         demandGroup.append("div").attr("class", "input-with-unit")
             .append("input").attr("type", "number").attr("id", "shipment-qty").attr("value", "200").attr("min", "1");
 
         const freqGroup = controlsDiv.append("div").attr("class", "input-group");
-        freqGroup.append("label").text("Freq (Days)");
+        const freqLabel = freqGroup.append("label").text("Freq (Days)");
+        attachLabelTooltip(freqLabel, "How often shipments are sent (e.g., every 7 days).");
+
         freqGroup.append("div").attr("class", "input-with-unit")
             .append("input").attr("type", "number").attr("id", "shipment-freq").attr("value", "7").attr("min", "1");
 
@@ -1882,7 +1959,7 @@ const LocationTab = (() => {
         const switchGroup = summaryDiv.append("div").attr("class", "inv-button-group");
 
 
-        switchGroup.append("button").attr("id", "loc-new-btn").text("New")
+        const newBtn = switchGroup.append("button").attr("id", "loc-new-btn").text("New")
             .classed('active', optimizationMode === 'New')
             .on('click', async () => {
                 if (optimizationMode !== 'New') {
@@ -1894,7 +1971,9 @@ const LocationTab = (() => {
                 }
             });
 
-        switchGroup.append("button").attr("id", "loc-existing-btn").text("Existing")
+        attachLabelTooltip(newBtn, "<strong>Greenfield Analysis:</strong>Calculates the optimal coordinates to minimize total transportation costs, regardless of existing infrastructure.");
+
+        const existBtn = switchGroup.append("button").attr("id", "loc-existing-btn").text("Existing")
             .classed('active', optimizationMode === 'Existing')
             .on('click', async () => {
                 if (optimizationMode !== 'Existing') {
@@ -1906,13 +1985,21 @@ const LocationTab = (() => {
                 }
             });
 
+        attachLabelTooltip(existBtn, "<strong>Brownfield Analysis:</strong>Evaluates only the specific city locations currently added to the map and selects the one that minimizes total costs.");
+
         summaryDiv.append("h4").text("Optimal Summary");
-        summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Location:</span><span id="summary-location">N/A</span>`);
-        summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Ship Cost:</span><span id="summary-ship-cost">$0</span>`);
-        summaryDiv.append("div").attr('class', 'summary-row').html(`<span># Shipments:</span><span id="summary-shipments">0</span>`);
-        summaryDiv.append("div").attr('class', 'summary-row summary-total').html(`<span>Total Cost:</span><span id="summary-total-cost">$0</span>`);
-        summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Avg Cost/Unit:</span><span id="summary-avg-cost">$0.00</span>`);
-        summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Median Wage:</span><span id="loc-wage-display">${_currentWageDisplay}</span>`);
+        const locationLbl = summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Location:</span><span id="summary-location">N/A</span>`);
+        attachLabelTooltip(locationLbl, "The Optimal Location for the Factory.");
+        const shipCostLbl = summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Ship Cost:</span><span id="summary-ship-cost">$0</span>`);
+        attachLabelTooltip(shipCostLbl, "The Estimated Annual Shipping Cost to all Distribution Centers.");
+        const shipLbl = summaryDiv.append("div").attr('class', 'summary-row').html(`<span># Shipments:</span><span id="summary-shipments">0</span>`);
+        attachLabelTooltip(shipLbl, "The Total Trucks needed to be scheduled over the Year.");
+        const costLbl = summaryDiv.append("div").attr('class', 'summary-row summary-total').html(`<span>Total Cost:</span><span id="summary-total-cost">$0</span>`);
+        attachLabelTooltip(costLbl, "The sum of Annual Shipping, Inventory Holding, and Production Exception Costs.");
+        const avgCostLbl = summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Avg Cost/Unit:</span><span id="summary-avg-cost">$0.00</span>`);
+        attachLabelTooltip(avgCostLbl, "The impact of these operational costs on each unit producted.");
+        const wagesLbl = summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Median Wage:</span><span id="loc-wage-display">${_currentWageDisplay}</span>`);
+        attachLabelTooltip(wagesLbl, "The Median Wage for Production Workers in the designated City.");
 
         // --- Bottom Ribbon ---
         const ribbonRect = layoutManager.getRibbonRect();
@@ -2094,14 +2181,16 @@ const LocationTab = (() => {
 
         // Ribbon Content: Right Panel (Demand)
         const demandDiv = ribbonContent.append("div").attr("class", "ribbon-demand-panel");
-        demandDiv.append("div").attr("id", "metrics-placeholder-in-demand"); // For sim metrics
-        demandDiv.append("h4").text("Annual Demand");
+        demandDiv.append("div").attr("id", "metrics-placeholder-in-demand");
+        const demandHeader = demandDiv.append("h4").text("Annual Demand");
+        attachLabelTooltip(demandHeader, "Annual Forecast metrics derived from the Investment Tab inputs.");
+
         demandDiv.append("div").attr('class', 'demand-row').html(`<span>P10:</span><span id="demand-p10">0</span>`);
         demandDiv.append("div").attr('class', 'demand-row').html(`<span>P50:</span><span id="demand-p50">0</span>`);
         demandDiv.append("div").attr('class', 'demand-row').html(`<span>P90:</span><span id="demand-p90">0</span>`);
-        demandDiv.append("div").attr('class', 'demand-row').html(`<span>Allocated:</span><span id="demand-allocated">0</span>`);
-        demandDiv.append("div").attr("class", "demand-bar-container")
-            .append("div").attr("class", "demand-bar").attr("id", "demand-bar-fill").text("0%");
+        const allocatedDemand = demandDiv.append("div").attr('class', 'demand-row').html(`<span>Allocated:</span><span id="demand-allocated">0</span>`);
+        attachLabelTooltip(allocatedDemand, "The sum of Annual Demand for all cities added to the map.");
+        demandDiv.append("div").attr("class", "demand-bar-container").append("div").attr("class", "demand-bar").attr("id", "demand-bar-fill").text("0%");
 
 
         // --- PPI Chart Modal (hidden by default) ---
