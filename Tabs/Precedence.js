@@ -21,6 +21,13 @@ const PrecedenceTab = (function () {
     let isKwLayoutActive = false;
     let kwTargetPositions = new Map();
 
+    // --- LEGEND BOUNDARIES (Configuration) ---
+    // We define these centrally to ensure both Force and K&W layouts respect them.
+    const LEGEND_AREAS = {
+        topRight: { width: 220 + 30, height: 125 + 20 }, // Width + margin, Height + margin
+        bottomLeft: { width: 150 + 30, height: 140 + 20 } // Approx height based on content
+    };
+
     // --- SANITIZER ---
     function sanitizeTooltipText(str) {
         if (!str && str !== 0) return "";
@@ -57,7 +64,6 @@ const PrecedenceTab = (function () {
     }
 
     function getShortenedLinkEndpoint(sourcePos, targetPos, targetNode) {
-        // Safety check
         if (!sourcePos || !targetPos) return { x: 0, y: 0 };
 
         const targetRadius = (targetNode.r || 12) + 3;
@@ -76,6 +82,7 @@ const PrecedenceTab = (function () {
     /**
      * Calculates positions for K&W layout.
      * Uses percentage-based padding to ensure grid scales with window.
+     * Includes logic to shift nodes out of Legend areas.
      */
     function precomputeKwPositions() {
         if (!nodes.length || !links.length || !svgWidth || !svgHeight) return;
@@ -101,17 +108,40 @@ const PrecedenceTab = (function () {
             if (depth > maxDepth) maxDepth = depth;
         });
 
-        // FIX: Use percentage padding (5%) instead of fixed pixels to prevent overflow
         const xPadding = svgWidth * 0.05;
         const yPadding = svgHeight * 0.05;
 
         const colWidth = (svgWidth - 2 * xPadding) / Math.max(1, maxDepth);
 
         nodesByDepth.forEach((colNodes, depth) => {
-            const x = xPadding + depth * colWidth;
+            let x = xPadding + depth * colWidth;
             const rowHeight = (svgHeight - 2 * yPadding) / Math.max(1, colNodes.length);
+
             colNodes.forEach((node, i) => {
-                const y = yPadding + (i * rowHeight) + (rowHeight / 2);
+                let y = yPadding + (i * rowHeight) + (rowHeight / 2);
+                const r = node.r || 25;
+
+                // --- K&W LEGEND AVOIDANCE ---
+
+                // Check Top-Right Legend (Task Flow)
+                const trBoundaryX = svgWidth - LEGEND_AREAS.topRight.width;
+                const trBoundaryY = LEGEND_AREAS.topRight.height;
+
+                if ((x + r) > trBoundaryX && (y - r) < trBoundaryY) {
+                    // Overlap detected in Top-Right. Push DOWN.
+                    y = Math.max(y, trBoundaryY + r + 10);
+                }
+
+                // Check Bottom-Left Legend (Build Ratios)
+                // Region: x < LegendW AND y > (Height - LegendH)
+                const blBoundaryX = LEGEND_AREAS.bottomLeft.width;
+                const blBoundaryY = svgHeight - LEGEND_AREAS.bottomLeft.height;
+
+                if ((x - r) < blBoundaryX && (y + r) > blBoundaryY) {
+                    // Overlap detected in Bottom-Left. Push UP.
+                    y = Math.min(y, blBoundaryY - r - 10);
+                }
+
                 kwTargetPositions.set(node.id, { x, y });
             });
         });
@@ -336,7 +366,7 @@ const PrecedenceTab = (function () {
             const id = +d.id;
 
             const r = rScale(getPertLaborTime(id));
-            d.r = r; // Important: update data radius for collision force
+            d.r = r;
 
             // Remove old circle to redraw
             g.select("circle.pert-node-hitbox").remove();
@@ -583,7 +613,6 @@ const PrecedenceTab = (function () {
         const switchBBox = switchUiGroup.node().getBBox();
         switchUiGroup.attr('transform', `translate(${(legendWidth - switchBBox.width) / 2}, 95)`);
 
-        // FIX: Added Tooltip to Switch
         switchUiGroup.on('mouseenter', (event) => {
             const kwDesc = "A Kilbridge and Wester Diagram arranges tasks by precedence depth (columns). It is essential for balancing mixed-model lines by identifying which tasks can be grouped into workstations without violating order constraints.";
             pertTooltip.style('opacity', 1)
@@ -596,7 +625,7 @@ const PrecedenceTab = (function () {
             .on("mousemove", tooltipMove)
             .on("mouseleave", tooltipHide)
             .on('click', () => {
-                tooltipHide(); // Hide on click
+                tooltipHide();
                 isKwLayoutActive = !isKwLayoutActive;
                 if (isKwLayoutActive) {
                     switchGroup.select('rect').attr('fill', getComputedStyle(root).getPropertyValue('--primary'));
@@ -629,8 +658,8 @@ const PrecedenceTab = (function () {
         const zoomPane = svg.select(".zoom-pane");
         zoomPane.attr("width", svgWidth).attr("height", svgHeight);
 
-        precomputeKwPositions(); // Recalculate grid based on new size
-        drawPERTNodePiesOnce();  // Recalculate node radius based on new size
+        precomputeKwPositions();
+        drawPERTNodePiesOnce();
 
         if (isKwLayoutActive) {
             simulation.stop();
@@ -655,7 +684,6 @@ const PrecedenceTab = (function () {
             });
         } else {
             simulation.force("center", d3.forceCenter(svgWidth / 2, svgHeight / 2).strength(0.1));
-            // FIX: Update collision radius to match the new node sizes
             simulation.force("collide", d3.forceCollide().radius(d => (d.r || 50) + 8).strength(1));
             simulation.alpha(0.3).restart();
         }
@@ -711,11 +739,48 @@ const PrecedenceTab = (function () {
         const mainGroup = svg.append("g");
         pertTooltip = createTooltip('pert-tooltip').style("position", "fixed");
 
+        // --- CUSTOM FORCE: AVOID LEGENDS ---
+        const forceAvoidLegends = (alpha) => {
+            const LEGEND_REPULSION_STRENGTH = 0.3;
+
+            nodes.forEach(d => {
+                const r = (d.r || 50) + 15; // node radius + buffer
+
+                // If node is right of (Width - LegendWidth) AND above (LegendHeight)
+                const trLimitX = svgWidth - LEGEND_AREAS.topRight.width;
+                const trLimitY = LEGEND_AREAS.topRight.height;
+
+                if ((d.x + r) > trLimitX && (d.y - r) < trLimitY) {
+                    const dx = (d.x + r) - trLimitX;
+                    const dy = trLimitY - (d.y - r);
+
+                    // Push left and down
+                    d.vx -= dx * LEGEND_REPULSION_STRENGTH * alpha^3;
+                    d.vy += dy * LEGEND_REPULSION_STRENGTH * alpha^3;
+                }
+
+                // Check Bottom Left Legend
+                // If node is left of (LegendWidth) AND below (Height - LegendHeight)
+                const blLimitX = LEGEND_AREAS.bottomLeft.width;
+                const blLimitY = svgHeight - LEGEND_AREAS.bottomLeft.height;
+
+                if ((d.x - r) < blLimitX && (d.y + r) > blLimitY) {
+                    const dx = blLimitX - (d.x - r);
+                    const dy = (d.y + r) - blLimitY;
+
+                    // Push right and up
+                    d.vx += dx * LEGEND_REPULSION_STRENGTH * alpha;
+                    d.vy -= dy * LEGEND_REPULSION_STRENGTH * alpha;
+                }
+            });
+        };
+
         simulation = d3.forceSimulation(nodes)
             .force("link", d3.forceLink(links).id(d => d.id).distance(40))
             .force("charge", d3.forceManyBody().strength(-500))
             .force("center", d3.forceCenter(svgWidth / 2, svgHeight / 2).strength(0.1))
-            .force("collide", d3.forceCollide().radius(d => (d.r || 50) + 8).strength(1));
+            .force("collide", d3.forceCollide().radius(d => (d.r || 50) + 12).strength(1))
+            .force("antiLegend", forceAvoidLegends);
 
         link = mainGroup.append("g").selectAll("line").data(links).join("line")
             .attr("class", "precedence-link");
@@ -776,7 +841,7 @@ const PrecedenceTab = (function () {
         precomputeKwPositions();
         renderPrecedenceLegend();
         createDagLegend();
-        drawPERTNodePiesOnce(); // Initializes radii
+        drawPERTNodePiesOnce();
         updatePrecedenceChartColors(invalidNodes);
         updatePrecedenceChartLinks(invalidNodes);
     }
