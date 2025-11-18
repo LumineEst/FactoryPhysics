@@ -608,10 +608,13 @@ const drawInvestmentPanel = (function () {
     }
 
     async function draw() {
+        // 1. Check if already drawn
         if (!d3.select("#investment-panel .inv-container").empty()) {
             setTimeout(() => updateProbabilisticValues('mean'), 0);
             return;
         }
+
+        // 2. Initialize dependencies
         if (!investmentState.isCalendarInitialized) {
             initializeDefaultWorkingDays(investmentState.currentYear);
         }
@@ -619,18 +622,27 @@ const drawInvestmentPanel = (function () {
         window.removeEventListener('appResize', handleInvestmentResize);
         window.addEventListener('appResize', handleInvestmentResize);
 
+        // 3. Setup Container
         const svg = d3.select("#investment-panel");
         svg.selectAll("*").remove();
-        const container = svg.append("foreignObject").attr("width", "100%").attr("height", "100%").append("xhtml:div").attr("class", "inv-container").style("overflow", "hidden");
+        const container = svg.append("foreignObject")
+            .attr("width", "100%")
+            .attr("height", "100%")
+            .append("xhtml:div")
+            .attr("class", "inv-container")
+            .style("overflow", "hidden");
+
         const inputColumn = container.append("div").attr("class", "inv-input-column");
         inputColumn.append("h3").attr("class", "inv-column-title").text("Economic Parameters");
         const inputArea = inputColumn.append("div").attr("class", "inv-inputs");
 
+        // 4. Load Inputs and Apply Tooltips
         try {
             const response = await fetch('Pages/investmentInputs.html');
             if (!response.ok) throw new Error(response.statusText);
             inputArea.html(await response.text());
 
+            // Working Days Button Logic
             const workingDaysInput = container.select("#inv-workingDays");
             const label = container.select(`label[for="inv-workingDays"]`);
             if (!workingDaysInput.empty() && !label.empty()) {
@@ -643,7 +655,11 @@ const drawInvestmentPanel = (function () {
                 }
                 const currentCount = investmentState.workingDays.length;
                 displayButton.textContent = `${currentCount} Days`;
-                workingDaysInput.style("display", "none").property("value", currentCount).attr("data-working-days-list", JSON.stringify(investmentState.workingDays));
+                workingDaysInput.style("display", "none")
+                    .property("value", currentCount)
+                    .attr("data-working-days-list", JSON.stringify(investmentState.workingDays));
+
+                // Re-attach listener by cloning
                 displayButton.replaceWith(displayButton.cloneNode(true));
                 displayButton = document.getElementById('inv-workingDays-button');
                 if (displayButton) {
@@ -656,6 +672,7 @@ const drawInvestmentPanel = (function () {
                 }
             }
 
+            // Apply Tooltips (Input Labels + New Buttons)
             setTimeout(() => {
                 const tooltips = {
                     'inv-analysisPeriod': 'Number of years over which the investment\'s cash flows are projected.',
@@ -678,19 +695,46 @@ const drawInvestmentPanel = (function () {
 
                 const tooltip = createTooltip("inv-tooltip");
                 const containerElement = container.node();
+
+                // 1. Attach to Input Labels
                 for (const [id, text] of Object.entries(tooltips)) {
                     const labelElement = containerElement.querySelector(`label[for="${id}"]`);
                     if (labelElement) {
                         d3.select(labelElement)
                             .on("mouseover", function (e) {
                                 tooltip.transition().duration(200).style("opacity", 1);
-                                tooltip.html(`<div class="tooltip-row">${text}</div>`)
-                                    .style("left", (e.pageX + 15) + "px")
-                                    .style("top", (e.pageY - 28) + "px");
+                                tooltip.html(`<div class="tooltip-row">${text}</div>`);
+                                if (typeof positionTooltip === 'function') positionTooltip(tooltip, e, 15, -28);
+                                else tooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY - 28) + "px");
                             })
                             .on("mousemove", function (e) {
-                                tooltip.style("left", (e.pageX + 15) + "px")
-                                    .style("top", (e.pageY - 28) + "px");
+                                if (typeof positionTooltip === 'function') positionTooltip(tooltip, e, 15, -28);
+                                else tooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY - 28) + "px");
+                            })
+                            .on("mouseout", function () {
+                                tooltip.transition().duration(500).style("opacity", 0);
+                            });
+                    }
+                }
+
+                // 2. Attach to Control Buttons (Base Case / Expansion Case)
+                const btnTooltips = {
+                    '#inv-baseCaseBtn': 'Building a new Assembly Line based on current configuration.',
+                    '#inv-expansionCaseBtn': 'Modifying an Assembly Line based on current configuration to its optimal configurations based on demand levels.'
+                };
+
+                for (const [selector, text] of Object.entries(btnTooltips)) {
+                    const btn = d3.select(selector);
+                    if (!btn.empty()) {
+                        btn.on("mouseover", function (e) {
+                            tooltip.transition().duration(200).style("opacity", 1);
+                            tooltip.html(`<div class="tooltip-row">${text}</div>`);
+                            if (typeof positionTooltip === 'function') positionTooltip(tooltip, e, 15, -28);
+                            else tooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY - 28) + "px");
+                        })
+                            .on("mousemove", function (e) {
+                                if (typeof positionTooltip === 'function') positionTooltip(tooltip, e, 15, -28);
+                                else tooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY - 28) + "px");
                             })
                             .on("mouseout", function () {
                                 tooltip.transition().duration(500).style("opacity", 0);
@@ -698,19 +742,26 @@ const drawInvestmentPanel = (function () {
                     }
                 }
             }, 10);
+
             setTimeout(() => updateProbabilisticValues('mean'), 0);
-        } catch (e) { inputArea.html('<p class="error">Could not load input form.</p>'); console.error(e); }
 
-        container.append("div").attr("class", "inv-results-column").html(`<div id="inv-results-placeholder" style="display: none;"></div><div id="inv-results-display"><div class="inv-scorecard-container"></div><div class="inv-chart-container"></div></div>`);
+        } catch (e) {
+            inputArea.html('<p class="error">Could not load input form.</p>');
+            console.error(e);
+        }
 
-        // Hydrate inputs from state
+        // 5. Setup Results Area
+        container.append("div").attr("class", "inv-results-column")
+            .html(`<div id="inv-results-placeholder" style="display: none;"></div><div id="inv-results-display"><div class="inv-scorecard-container"></div><div class="inv-chart-container"></div></div>`);
+
+        // 6. Hydrate inputs from state
         Object.keys(investmentState).forEach(key => {
             if (key === 'workingDays' || key === 'currentYear' || key === 'isCalendarInitialized') return;
             const el = document.getElementById(`inv-${key}`);
             if (el) el.value = investmentState[key];
         });
 
-        // Attach input listeners
+        // 7. Attach input listeners
         const invInputs = Array.from(container.node().querySelectorAll("input, select")).filter(el => el && el.id !== 'inv-workingDays');
         if (invInputs.length) {
             attachCommitBehavior(invInputs, (id, value) => {
@@ -733,15 +784,31 @@ const drawInvestmentPanel = (function () {
             });
         }
 
+        // 8. Create Controls (Buttons)
         const controlsArea = inputColumn.append("div").attr("class", "inv-analysis-controls");
         controlsArea.html(`<div class="inv-button-group"><button id="inv-baseCaseBtn">Base Case</button><button id="inv-expansionCaseBtn">Expansion Case</button></div>`);
-        controlsArea.select('#inv-baseCaseBtn').on('click', () => { if (investmentState.runExpansionCase) { investmentState.runExpansionCase = false; runFullAnalysis(); controlsArea.select('#inv-baseCaseBtn').classed('active', true); controlsArea.select('#inv-expansionCaseBtn').classed('active', false); } });
-        controlsArea.select('#inv-expansionCaseBtn').on('click', () => { if (!investmentState.runExpansionCase) { investmentState.runExpansionCase = true; runFullAnalysis(); controlsArea.select('#inv-baseCaseBtn').classed('active', false); controlsArea.select('#inv-expansionCaseBtn').classed('active', true); } });
+
+        // 9. Attach Button Logic
+        controlsArea.select('#inv-baseCaseBtn').on('click', () => {
+            if (investmentState.runExpansionCase) {
+                investmentState.runExpansionCase = false;
+                runFullAnalysis();
+                controlsArea.select('#inv-baseCaseBtn').classed('active', true);
+                controlsArea.select('#inv-expansionCaseBtn').classed('active', false);
+            }
+        });
+        controlsArea.select('#inv-expansionCaseBtn').on('click', () => {
+            if (!investmentState.runExpansionCase) {
+                investmentState.runExpansionCase = true;
+                runFullAnalysis();
+                controlsArea.select('#inv-baseCaseBtn').classed('active', false);
+                controlsArea.select('#inv-expansionCaseBtn').classed('active', true);
+            }
+        });
         controlsArea.select(investmentState.runExpansionCase ? '#inv-expansionCaseBtn' : '#inv-baseCaseBtn').classed('active', true);
 
         investmentTabListenersAttached = false;
         if (!investmentTabListenersAttached) {
-            // Main input listeners are handled globally in script.js
             investmentTabListenersAttached = true;
         }
     }
