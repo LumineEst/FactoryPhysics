@@ -1,3 +1,4 @@
+
 const ProfitTab = (function () {
     function draw() {
         // --- INITIAL SETUP ---
@@ -33,7 +34,7 @@ const ProfitTab = (function () {
             return;
         }
 
-        // --- LAYOUT GEOMETRY ---
+        // --- LAYOUT GEOMETRY (FIXED FOR NARROW RESOLUTIONS) ---
         const legendSpace = 70 * uiScale;
 
         const margin = {
@@ -43,7 +44,10 @@ const ProfitTab = (function () {
             left: 80 * uiScale
         };
 
-        const breakdownWidth = Math.max(280 * uiScale, width * 0.32);
+        // This ensures the line charts always have at least 60% of the space.
+        const calculatedBreakdownW = Math.max(280 * uiScale, width * 0.32);
+        const breakdownWidth = Math.min(width * 0.40, calculatedBreakdownW);
+
         const chartsWidth = width - breakdownWidth;
         const chartWidth = chartsWidth - margin.left - margin.right;
 
@@ -247,10 +251,10 @@ const ProfitTab = (function () {
 
 
         // ============================================================
-        // 2. LEGEND (CENTERED IN GAP)
+        // 2. LEGEND (SCALED & BOUND)
         // ============================================================
         const legendY = margin.top + chartHeight + (legendSpace / 2);
-        const legendG = chartsGroup.append("g").attr("transform", `translate(${margin.left}, ${legendY})`);
+        const legendG = chartsGroup.append("g");
 
         const legItems = [
             { type: 'icon', class: 'point-now', shape: 'circle', label: "Current profit/margin" },
@@ -258,73 +262,89 @@ const ProfitTab = (function () {
             { type: 'text', class: 'text-only', label: "Demand < 50: Use 3-Workstation Config", color: getComputedStyle(root).getPropertyValue('--secondary1').trim() }
         ];
 
+        // Create a temporary container to hold items for measurement
+        const legendContent = legendG.append("g");
+
         let currentX = 0;
         const itemGap = 30 * uiScale;
-
-        const measurer = legendG.append("text").attr("font-size", sizes.body).style("opacity", 0);
-
-        const renderedItems = legItems.map(item => {
-            measurer.text(item.label);
-            const textW = measurer.node().getComputedTextLength();
-            const iconW = item.type === 'icon' ? 12 * uiScale : 0;
-            const spacing = item.type === 'icon' ? 6 * uiScale : 0;
-            const totalW = iconW + spacing + textW;
-
-            const obj = { ...item, width: totalW, x: currentX };
-            currentX += totalW + itemGap;
-            return obj;
-        });
-        measurer.remove();
-
-        const totalLegendWidth = currentX - itemGap;
-        const startOffset = (chartWidth - totalLegendWidth) / 2;
-
         const boxPaddingX = 15 * uiScale;
         const boxPaddingY = 8 * uiScale;
 
-        legendG.append("rect")
-            .attr("x", startOffset - (boxPaddingX*1.5))
-            .attr("y", -boxPaddingY - (sizes.body / 2))
-            .attr("width", totalLegendWidth + (boxPaddingX * 3))
-            .attr("height", (sizes.body) + (boxPaddingY))
+        // Draw background rect first
+        const legendBg = legendContent.append("rect")
             .attr("fill", "none")
             .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim())
             .attr("stroke-width", 1)
             .attr("stroke-dasharray", "4 2")
             .attr("rx", 4);
 
-        const itemGroup = legendG.append("g").attr("transform", `translate(${startOffset}, 0)`);
+        const itemGroup = legendContent.append("g");
+        const measurer = svg.append("text").attr("font-size", sizes.body).style("opacity", 0);
 
-        renderedItems.forEach(d => {
-            const g = itemGroup.append("g").attr("transform", `translate(${d.x}, 0)`);
+        legItems.forEach(item => {
+            measurer.text(item.label);
+            const textW = measurer.node().getComputedTextLength();
+            const iconW = item.type === 'icon' ? 12 * uiScale : 0;
+            const spacing = item.type === 'icon' ? 6 * uiScale : 0;
+            const g = itemGroup.append("g").attr("transform", `translate(${currentX}, 0)`);
 
-            if (d.type === 'icon') {
-                if (d.shape === 'circle') {
-                    g.append("circle").attr("class", d.class).attr("r", 5 * uiScale).attr("cx", 5 * uiScale).attr("cy", -4 * uiScale);
+            if (item.type === 'icon') {
+                if (item.shape === 'circle') {
+                    g.append("circle").attr("class", item.class).attr("r", 5 * uiScale).attr("cx", 5 * uiScale).attr("cy", -uiScale);
                 } else {
-                    g.append("rect").attr("class", d.class).attr("x", 0).attr("y", -9 * uiScale).attr("width", 10 * uiScale).attr("height", 10 * uiScale);
+                    g.append("rect").attr("class", item.class).attr("x", 0).attr("y", -6 * uiScale).attr("width", 10 * uiScale).attr("height", 10 * uiScale);
                 }
                 g.append("text")
                     .attr("x", 16 * uiScale)
-                    .attr("y", 0)
+                    .attr("y", sizes.body/4)
                     .attr("font-size", sizes.body)
                     .attr("fill", getComputedStyle(root).getPropertyValue('--accent').trim())
-                    .text(d.label);
+                    .text(item.label);
             } else {
                 g.append("text")
                     .attr("x", 0)
-                    .attr("y", 0)
+                    .attr("y", sizes.body/4)
                     .attr("font-size", sizes.body)
                     .attr("font-weight", "bold")
-                    .attr("fill", d.color)
-                    .text(d.label);
+                    .attr("fill", item.color)
+                    .text(item.label);
             }
+
+            const totalItemW = iconW + spacing + textW;
+            currentX += totalItemW + itemGap;
         });
+        measurer.remove();
+
+        const totalLegendContentWidth = currentX - itemGap;
+
+        // Size the background box
+        legendBg
+            .attr("x", -boxPaddingX)
+            .attr("y", -boxPaddingY - (sizes.body / 4))
+            .attr("width", totalLegendContentWidth + (boxPaddingX * 3))
+            .attr("height", (sizes.body) + (boxPaddingY));
+
+        const fullLegendWidth = totalLegendContentWidth + (boxPaddingX * 2);
+
+        // --- SCALING LOGIC ---
+        // Check if the full legend fits within the chartWidth; if not, scale it down to fit.
+        let legendScale = 1;
+        if (fullLegendWidth > chartWidth) {
+            legendScale = chartWidth / fullLegendWidth;
+        }
+
+        // Center the legend relative to the chart area
+        const centeredX = margin.left + (chartWidth - (fullLegendWidth * legendScale)) / 2;
+
+        // Apply transform: Move to center, then Scale (around top-left 0,0 effectively after translate)
+        legendG.attr("transform", `translate(${centeredX}, ${legendY}) scale(${legendScale})`);
+        legendContent.attr("transform", `translate(${boxPaddingX}, 0)`);
+
 
         // ============================================================
         // 3. MARGIN CHART (BOTTOM)
         // ============================================================
-        const bottomChartY = margin.top + chartHeight + (legendSpace*1.1);
+        const bottomChartY = margin.top + chartHeight + (legendSpace * 1.1);
 
         const gM = chartsGroup.append("g").attr("transform", `translate(${margin.left},${bottomChartY})`);
         drawAxesWithGrid(gM, x, yMargin, false);
@@ -400,7 +420,7 @@ const ProfitTab = (function () {
 
         gM.append("text")
             .attr("x", chartWidth / 2)
-            .attr("y", chartHeight + (margin.bottom - (12*uiScale)))
+            .attr("y", chartHeight + (margin.bottom - (12 * uiScale)))
             .attr("text-anchor", "middle")
             .attr("font-size", sizes.axis)
             .attr("font-weight", "bold")
@@ -453,6 +473,8 @@ const ProfitTab = (function () {
 
         const totalProfit = d3.sum(perModel, d => d.profit);
         const totalRework = d3.sum(perModel, d => d.rework);
+
+        // Safe padding calculation
         const pad = Math.max(10 * uiScale, breakdownWidth * 0.05);
 
         const rightTotalH = height;
@@ -461,10 +483,12 @@ const ProfitTab = (function () {
 
         // ---------- PART A: PIE CHARTS ----------
         const topHalf = breakdownGroup.append("g");
+
+        // Limit width to breakdownWidth - pad and use Math.max to avoid negative
         topHalf.append("rect")
             .attr("class", "breakdown-border")
             .attr("x", pad / 2).attr("y", pad / 2)
-            .attr("width", breakdownWidth - pad)
+            .attr("width", Math.max(0, breakdownWidth - pad))
             .attr("height", pieSectionHeight - pad);
 
         topHalf.append("text")
@@ -497,9 +521,9 @@ const ProfitTab = (function () {
         const rowsP = Math.ceil(pies.length / cols);
         const cellW = innerW / cols;
         const cellH = innerH / rowsP;
-
-        // --- MODIFIED HERE: SHIFTED UP AND LARGER ---
         const rowPositions = [0.29, 0.69];
+
+        // Ensure radius doesn't overflow cellW in narrow modes
         const baseR = Math.min(cellW, cellH) * 0.36;
 
         pies.forEach((pd, i) => {
@@ -562,7 +586,7 @@ const ProfitTab = (function () {
                 .text(pd.title);
         });
 
-        // --- PIE LEGEND (Moved to bottom of topHalf) ---
+        // --- PIE LEGEND ---
         const legend2 = topHalf.append("g");
         const legendItems = [
             { label: "Profit", color: pieColors.Profit },
@@ -584,7 +608,7 @@ const ProfitTab = (function () {
         const col2Width = Math.max(itemWidth(legendItems[1].label), itemWidth(legendItems[3].label));
         const colGap = 28 * uiScale;
         const totalLegendWidth2 = col1Width + colGap + col2Width;
-        const startX = pad + (innerW - totalLegendWidth2) / 2;
+        const startX = Math.max(0, pad + (innerW - totalLegendWidth2) / 2);
 
         [
             { ...legendItems[0], col: 0, row: 0 },
@@ -602,13 +626,15 @@ const ProfitTab = (function () {
 
         // ---------- PART B: BAR CHARTS ----------
         const bottomHalf = breakdownGroup.append("g").attr("transform", `translate(0, ${pieSectionHeight})`);
+
+        // Ensure rect stays within bounds
         bottomHalf.append("rect")
             .attr("class", "breakdown-border")
             .attr("x", pad / 2).attr("y", pad / 2)
-            .attr("width", breakdownWidth - pad)
+            .attr("width", Math.max(0, breakdownWidth - pad))
             .attr("height", barSectionHeight - pad);
 
-        // --- MODIFIED: Adjusted margins and shifted chart up ---
+        // --- Adjusted margins and shifted chart up ---
         const barM = { top: 25 * uiScale, right: 10 * uiScale, bottom: 40 * uiScale, left: 10 * uiScale };
         bottomHalf.append("text")
             .attr("x", pad / 2 + (breakdownWidth - pad) / 2)
@@ -619,7 +645,7 @@ const ProfitTab = (function () {
             .text("Profit by Model");
 
         const barShiftX = 24;
-        const barH = barSectionHeight - pad - barM.top - (1.5*barM.bottom);
+        const barH = barSectionHeight - pad - barM.top - (1.5 * barM.bottom);
 
         const minP = d3.min(perModel, d => d.profit);
         const maxP = d3.max(perModel, d => d.profit);
@@ -637,7 +663,7 @@ const ProfitTab = (function () {
         tempText.remove();
 
         const yAxisSpace = maxLabelWidth + 15 * uiScale;
-        const barW = breakdownWidth - 2 * pad - barM.right - yAxisSpace - barShiftX;
+        const barW = Math.max(10, breakdownWidth - 2 * pad - barM.right - yAxisSpace - barShiftX); // Ensure non-negative width
 
         const gB = bottomHalf.append("g").attr("transform", `translate(${pad + barShiftX},${pad + barM.top})`);
         const xBand = d3.scaleBand()
@@ -731,9 +757,3 @@ const ProfitTab = (function () {
 
     return { draw, resize };
 })();
-
-window.addEventListener("resize", () => {
-    if (typeof ProfitTab !== "undefined" && ProfitTab.resize) {
-        ProfitTab.resize();
-    }
-});
