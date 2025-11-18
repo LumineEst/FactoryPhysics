@@ -703,7 +703,7 @@ function updateUI(options = {}) {
     }
 
     renderWorkstationSidebar(parseInt(numEmployeesInput.value));
-    setupDragAndDrop(); 
+    setupDragAndDrop();
 
     // --- Precedence Validation ---
     if (!options.skipPrecedence) {
@@ -930,7 +930,8 @@ function renderWorkstationSidebar(numEmployees) {
         title.className = 'workstation-title';
         const stationTotalElementTime = elementsInStation.reduce((s, tId) => s + (state.taskData.get(tId)?.elementTime || 0), 0);
         const stationLengthFt = stationTotalElementTime * 15;
-        title.textContent = `Workstation ${stationId} — ${stationLengthFt.toFixed(1)} ft`;
+        title.textContent = `Workstation ${stationId}`;
+        //title.textContent = `Workstation ${stationId} — ${stationLengthFt.toFixed(1)} ft`;
         workstationDiv.appendChild(title);
 
         const elementsContainer = document.createElement('div');
@@ -998,7 +999,7 @@ function renderWorkstationSidebar(numEmployees) {
             const wsLen = opts.wsLen != null ? opts.wsLen : (task._workstationLengthFt != null ? task._workstationLengthFt : null);
             const wsRow = wsLen != null ? `<div class="tooltip-row"><span class="tooltip-key">Workstation Length</span><span>${wsLen} ft</span></div>` : '';
             const wsIdRow = wsId ? `<div class="tooltip-row"><span class="tooltip-key">Workstation</span><span>${wsId}</span></div>` : '';
-            return `<div class="tt-title">Element ${task._id || ''}</div>${desc}${wsIdRow}${wsRow}${elLenRow}<div class="tt-stats">Element: ${et} min &nbsp;|&nbsp; Labor: ${lt} min</div>`;
+            return `<div class="tt-title">Element ${task._id || ''}</div>${desc}${wsIdRow}${wsRow}${elLenRow}<div class="tt-stats">Element: ${et} min &nbsp;|&nbsp; Avg Labor: ${lt} min</div>`;
         };
 
         workstationList.addEventListener('pointerover', (e) => {
@@ -1706,13 +1707,18 @@ function positionTooltip(tooltip, event, xOffset = 15, yOffset = 0) {
 
 function wireRightSidebarTooltips() {
     const tooltips = {
+        // --- Inputs ---
         'dailyDemand': 'Number of units which can be sold, or which producing more than needed is a liability. Production should match your demand.',
         'opHours': 'Number of hours the assembly line is running per day.',
         'numEmployees': 'Total number of employees working. Corresponds to the number of workstations.',
         'laborCost': 'Hourly labor cost per employee.',
+
+        // --- Financial Headers ---
         'sellPriceHeading': 'Selling price per unit (used to compute total revenue).',
         'materialCostHeading': 'Material / COGS per unit (used to compute cost of goods sold).',
-        'reworkCostHeading' : 'The Cost of Reworking units due to yield issues (used to compute CoPQ (Cost of Poor Quality)).',
+        'reworkCostHeading': 'The Cost of Reworking units due to yield issues (used to compute CoPQ).',
+
+        // --- Outputs (Metrics) ---
         'wip': 'Work in Progress. Number of incomplete products currently being worked on.',
         'throughput': 'Number of models built within a given time-period, usually an hour. Adjusted for quality yield.',
         'conveyorSpeed': 'Conveyor belt speed in feet per minute.',
@@ -1723,19 +1729,25 @@ function wireRightSidebarTooltips() {
         'idleTimeCv': 'Coefficient of variation of idle times across stations (%).',
         'grossProfit': 'Value of goods sold minus COGS. Represents the value a given product provides for the company, to sustain operations.',
         'profitMargin': 'Percentage of profit compared to total goods sold. Can be either net or gross.',
-        'CoPQ': 'The associated costs from quality yields, the cost of reworking non-compliant units.',
+
+        // --- NEW: CoPQ Tooltip ---
+        'copq': 'Cost of Poor Quality. The financial loss incurred from reworking units that failed to meet First Pass Yield standards.',
+
         'qualityYield': 'The percentage of produced units that meet quality standards. This is either calculated automatically or set by your manual override.',
         'qualityStDevPercentage': 'Coefficient of Variance (CV). Represents process instability. A higher CV increases the probability of task overruns, conveyor issues, and overtime, which all reduce quality yield.',
+
+        // --- Investment Metrics ---
         'npvMetric': 'Used to determine the profitability of an investment by comparing the present value of future cash inflows to the initial investment.',
         'irrMetric': 'Represents the annual rate of return an investment is expected to yield. Is the discount rate that makes the NPV of all cash flows from the investment equal to zero.',
         'paybackMetric': 'Length of time it takes for an investment to generate enough cash flow to recover its initial cost.'
     };
 
+    // Create tooltip element if it doesn't exist
     const tooltip = createTooltip('right-sidebar-tooltip');
     const sidebar = document.getElementById('right-sidebar');
     if (!sidebar) return;
-    const containerElement = sidebar;
 
+    const containerElement = sidebar;
     const finGrid = containerElement.querySelector('.fin-grid');
     const finSpans = finGrid ? Array.from(finGrid.querySelectorAll('span')) : [];
 
@@ -1743,33 +1755,57 @@ function wireRightSidebarTooltips() {
         const strongEl = containerElement.querySelector(`#${strongId}`);
         if (!strongEl) return null;
         const prev = strongEl.previousElementSibling;
+        // Check if previous sibling is a span (label)
         if (prev && prev.tagName && prev.tagName.toLowerCase() === 'span') return prev;
+        // Sometimes the label is text inside a parent div, depending on layout.
+        // This assumes the standard: <span>Label:</span> <span id="val">Value</span>
         return null;
     };
 
     for (const [id, text] of Object.entries(tooltips)) {
         let target = null;
-        target = containerElement.querySelector(`label[for="${id}"]`) || document.getElementById(id);
 
+        // 1. Try finding an input Label (standard <label for="id">)
+        target = containerElement.querySelector(`label[for="${id}"]`);
+
+        // 2. If no label[for] found (common for Output metrics like 'wip', 'copq'),
+        //    find the element by ID, then grab its PREVIOUS SIBLING (the text label).
         if (!target) {
-            if (id === 'sellPriceHeading' && finSpans.length >= 2) target = finSpans[1];
-            if (id === 'materialCostHeading' && finSpans.length >= 3) target = finSpans[2];
-            if (id === 'reworkCostHeading' && finSpans.length >= 4) target = finSpans[3];
+            const elementById = document.getElementById(id);
+
+            // Special headers logic
+            if (!elementById) {
+                if (id === 'sellPriceHeading' && finSpans.length >= 2) target = finSpans[1];
+                else if (id === 'materialCostHeading' && finSpans.length >= 3) target = finSpans[2];
+                else if (id === 'reworkCostHeading' && finSpans.length >= 4) target = finSpans[3];
+            } else {
+                // If it is an INPUT, attach to the element itself (since we missed the label check above)
+                if (elementById.tagName === 'INPUT' || elementById.tagName === 'SELECT') {
+                    target = elementById;
+                } else {
+                    // It is an OUTPUT (span/div). We want the LABEL (previous sibling), not the number.
+                    target = elementById.previousElementSibling || elementById;
+                }
+            }
         }
 
+        // Fallback: specialized function for bold tags if structure differs
         if (!target) {
             target = findLabelSpanForStrong(id);
         }
 
         if (target) {
+            target.style.cursor = "help"; // Visual cue that it has a tooltip
+
             target.addEventListener('mouseover', function (event) {
                 tooltip.transition().duration(200).style('opacity', 1);
-                tooltip.html(`<div class="tooltip-row">${text}</div>`)
+                tooltip.html(`<div class="tooltip-row">${text}</div>`);
             });
 
             target.addEventListener('mousemove', function (event) {
                 positionTooltip(tooltip, event, 15, -28);
             });
+
             target.addEventListener('mouseout', function () {
                 tooltip.transition().duration(500).style('opacity', 0);
             });
@@ -2242,7 +2278,7 @@ function calculateMaxDemand(hours, numEmployees) {
     const throughputTimeMinutes = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckTime;
     const totalOpMinutes = Math.floor(hours * 4) * 15;
     if (totalOpMinutes < (throughputTimeMinutes - 1e-9)) {
-        return 0; 
+        return 0;
     }
 
     const launchWindowMinutes = totalOpMinutes - throughputTimeMinutes;
@@ -2280,7 +2316,7 @@ function findBestEmployeeFit(requiredTaktTime, startingCount) {
         // Check if the bottleneck for this employee count meets the takt time
         if (calculateWorkstationDetails(i).bottleneckTime <= requiredTaktTime) return i;
     }
-    return 13; 
+    return 13;
 }
 
 /**
@@ -2290,7 +2326,8 @@ function findBestEmployeeFit(requiredTaktTime, startingCount) {
 function updateWorkstationOrder() {
     const numEmployees = parseInt(numEmployeesInput.value);
     const newConfig = {};
-    const workstationDivs = document.querySelectorAll('.workstation');
+    // Select only the workstation divs (ignoring potential Sortable.js drag mirrors)
+    const workstationDivs = document.querySelectorAll('#workstation-list .workstation');
 
     workstationDivs.forEach(workstationDiv => {
         const title = workstationDiv.querySelector('.workstation-title')?.textContent || '';
@@ -2301,26 +2338,20 @@ function updateWorkstationOrder() {
             const elements = [];
 
             const elementsContainer = workstationDiv.querySelector('.workstation-elements');
-
-            elementsContainer.querySelectorAll('.element-row').forEach(elRow => {
-                const taskId = parseInt(elRow.dataset.taskId);
-                if (!isNaN(taskId)) {
-                    elements.push(taskId);
-                }
-            });
-
+            if (elementsContainer) {
+                elementsContainer.querySelectorAll('.element-row').forEach(elRow => {
+                    const taskId = parseInt(elRow.dataset.taskId);
+                    if (!isNaN(taskId)) {
+                        elements.push(taskId);
+                    }
+                });
+            }
             newConfig[stationId] = elements;
         }
     });
 
     state.configData[numEmployees] = newConfig;
-    invalidPrecedenceNodes = validatePrecedence();
-
-    if (document.querySelector('.tab-btn[data-tab="precedence"].active')) {
-        PrecedenceTab.update(invalidPrecedenceNodes);
-    }
-
-    updateUI({ skipPrecedence: true });
+    updateUI();
 }
 
 /**
@@ -2731,8 +2762,8 @@ function renderActiveTab() {
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     if (activeTab === 'overview') drawOverviewPanel();
     else if (activeTab === 'precedence') drawPrecedenceChart(invalidPrecedenceNodes);
-    else if (activeTab === 'schedule') ScheduleTab.draw();
     else if (activeTab === 'efficiency') EfficiencyTab.draw();
+    else if (activeTab === 'schedule') ScheduleTab.draw();
     else if (activeTab === 'layout') LayoutTab.draw();
     else if (activeTab === 'profit') ProfitTab.draw();
     else if (activeTab === 'investment' && typeof InvestmentTab !== 'undefined') InvestmentTab.draw();
