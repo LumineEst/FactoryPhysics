@@ -11,7 +11,7 @@
 
 <section class="overview-section">
     <h3>The Problem Space & Constraints</h3>
-    <p>The simulation is built on a defined manufacturing scenario with foundational rules that cannot be broken:</p>
+    <p>The simulation is built on a defined scenario with foundational rules that cannot be altered:</p>
     <ul>
         <li>
             <strong>Product Mix</strong> – A fixed production ratio of three refrigerator models: 35% Super, 45% Ultra,
@@ -35,8 +35,8 @@
         </li>
         <li>
             <strong>Shipping Cube-Out</strong> – Due to having a fixed Build Ratio, shipments are assumed to also follow
-            as similar ratio of models, with the volume of all shipments being based on a 53' trailer which is loaded based
-            on assumed density and packing cube-out distributions which are seen in Backend Mechanics below.
+            this ratio of models, with the volume of all shipments being based on a 53' trailer which is loaded with an
+            assumed density and packing cube-out distribution which is shown in Backend Mechanics below.
         </li>
     </ul>
 </section>
@@ -54,8 +54,7 @@
             change Balance and Cycle Time. This is the primary way you will manually balance your assembly line.
         </li>
         <li>
-            <strong>Daily Demand:</strong> The number of units you must produce per day, which influences the required
-            Takt Time.
+            <strong>Daily Demand:</strong> The number of units you must produce per day, which influences Takt Time.
         </li>
         <li>
             <strong>Operating Hours:</strong> The available production time for a shift. Driving labor costs and
@@ -73,7 +72,11 @@
         </li>
         <li>
             <strong>Investment Factors:</strong> Many other variables must be accounted for to determine the long-term
-            value of the assembly line, these are self-contained within the investment and Location tabs.
+            value of the assembly line, these are self-contained within the Investment and Location tabs.
+        </li>
+        <li>
+            <strong>Location and Shipping:</strong> The choice of where to place the factory in order to meet a specific shipping schedule.
+            This involves balancing many variables across all tabs, in order to select a schedule and location which maximizes profit while meeting distribution demand.
         </li>
     </ul>
 </section>
@@ -81,41 +84,45 @@
 <section class="overview-section">
     <h3>Understanding the Tabs</h3>
     <p>
-        Each tab provides a unique lens for analyzing your line, moving from physical behaviors to financial outcomes:
+        Each tab provides a unique lens for analyzing your line, moving from physical behaviors to financial outcomes.
+        Tooltips are used to help clarify terminologies. The three different color groups build on each other, with a growing complexity from left to right.<br>
+        &nbsp;&nbsp;&nbsp;&nbsp; – <strong style="color: #eba21b; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Yellow</strong> tabs clarify core immutable aspects of the assembly process.<br> 
+        &nbsp;&nbsp;&nbsp;&nbsp; – <strong style="color: #009688; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Green</strong> tabs explore operational behaviors of the assembly line<br>
+        &nbsp;&nbsp;&nbsp;&nbsp; – <strong style="color: #7E57C2; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Purple</strong> tabs explore financial factors and outcomes of the assembly line.<br>
     </p>
     <ul>
         <li>
-            <strong>Precedence</strong> – Visualizes the "hard logic" of the assembly process. This network diagram
+            <strong style="color: #eba21b; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Precedence</strong> – Visualizes the "hard logic" of the assembly process. This network diagram
             shows which tasks must be completed before others can begin. Violating this logic will be flagged, as it
             creates a physically impossible sequence which lead to poor quality and customer satisfaction.
         </li>
         <li>
-            <strong>Efficiency</strong> – The primary dashboard for your line's performance. It provides a
+            <strong style="color: #009688; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Efficiency</strong> – The primary dashboard for your line's performance. It provides a
             workstation-by-workstation breakdown of productive time vs. idle time, highlighting the bottleneck and
             quantifying the overall Balance Loss.
         </li>
         <li>
-            <strong>Layout</strong> – Simulates the physical U-shaped factory floor. This view animates product flow,
+            <strong style="color: #009688; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Layout</strong> – Simulates the physical U-shaped factory floor. This view animates product flow,
             allowing you to visually identify where bottlenecks (pile-ups) and starvation (gaps) occur in your current
             configuration. It also visualizes how space is used, WIP, and the ideal build sequence of models.
         </li>
         <li>
-            <strong>Schedule</strong> – A dynamic Gantt chart that visualizes the production plan over time. It tracks
+            <strong style="color: #009688; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Schedule</strong> – A dynamic Gantt chart that visualizes the production plan over time. It tracks
             the progress of each unit through every task, showing the cascading consequences of delays at the bottleneck
             station. It provides a visual way to understand when employees will have work within their station.
         </li>
         <li>
-            <strong>Profit</strong> – Translates operational efficiency into financial results. This tab uses your
+            <strong style="color: #7E57C2; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Profit</strong> – Translates operational efficiency into financial results. This tab uses your
             line's throughput to calculate the Daily Gross Profit and Gross Profit Margin, directly connecting your
             design choices to the bottom line. It allows you to evaluate ideal product pricing and material costs.
         </li>
         <li>
-            <strong>Investment</strong> – A strategic planning tool for long-term analysis. It evaluates the financial
+            <strong style="color: #7E57C2; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Investment</strong> – A strategic planning tool for long-term analysis. It evaluates the financial
             viability of your current line (Base Case) or a re-optimized one (Expansion Case) against uncertain future
             demand using P10, P50, and P90 forecasts and standard financial metrics like NPV and IRR.
         </li>
         <li>
-            <strong>Location</strong> – A logistics and location planning tool to determine the optimal location in the
+            <strong style="color: #7E57C2; text-shadow: -0.5px -0.5px 0 rgba(0, 0, 0, 0.3), 0.5px -0.5px 0 rgba(0, 0, 0, 0.3), -0.5px 0.5px 0 rgba(0, 0, 0, 0.3), 0.5px 0.5px 0 rgba(0, 0, 0, 0.3);">Location</strong> – A logistics and location planning tool to determine the optimal location in the
             United States to minimize shipping costs between the new Factory and Existing Distribution Hubs. Optimize
             your Shipment allocations to balance meeting Demands and minimizing Inventory Holding Costs.
         </li>
@@ -281,9 +288,7 @@
 
 
 <section class="overview-section overview-intro">
-    <h3>Technical Documentation</h3>
-    <p>For a detailed breakdown of the mathematical formulas and algorithms powering this simulation, including
-        calculations for Takt Time, financial metrics, and optimization models, please see the full technical
-        documentation.</p>
+    <h3 style="text-align: center;">Technical Documentation</h3>
+    <p style="text-align: center;">For a detailed breakdown of the mathematical formulas and algorithms powering this simulation, please see the full technical documentation.</p>
     <a href="Pages/backend.html" class="tech-doc-link" target="_blank">View Backend Mechanics</a>
 </section>
