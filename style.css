@@ -2285,7 +2285,7 @@ input:checked+.slider:before {
 }
 
 #location-panel .city-info-box p {
-    margin: 4px 0;
+    margin: 4px 10px;
 }
 
 #location-panel .city-info-box button {
@@ -2308,13 +2308,13 @@ input:checked+.slider:before {
     height: 100%;
     background-color: rgba(255, 255, 255, 0.9);
     padding: 8px 10px;
+    font-size: 0.7rem;
     border-radius: 6px;
     box-shadow: var(--shadow);
     border: 1px solid var(--idle-color);
-    font-size: 0.8rem;
     justify-content: space-between;
     display: flex;
-    gap: 3px;
+    gap: 1px;
     flex-direction: column;
     box-sizing: border-box;
 }
@@ -2322,14 +2322,13 @@ input:checked+.slider:before {
 #location-panel .summary-panel h4 {
     flex-shrink: 0;
     text-align: center;
-    margin: 0;
-    padding-bottom: 3px;
     border-bottom: 1px solid #ccc;
 }
 
 #location-panel .summary-panel .inv-button-group {
     display: flex;
     width: 100%;
+    min-height: 1.2rem;
     border-radius: 6px;
     overflow: hidden;
     margin-top: 0px;
@@ -2367,10 +2366,17 @@ input:checked+.slider:before {
 #location-panel .summary-panel {
     min-width: 120px; /* ensure the panel has a usable minimum */
     max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 0.2rem;
 }
 
 #location-panel .summary-panel .summary-row {
     word-wrap: break-word;
+    margin-bottom: calc(4px * var(--scale));
+    padding: calc(2px * var(--scale)) 0;
+    line-height: calc(1.2 * var(--scale));
 }
 
 /* If the summary contents exceed vertical space, allow internal scrolling without breaking layout */
