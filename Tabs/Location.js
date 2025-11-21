@@ -144,7 +144,7 @@ const LocationTab = (() => {
             // Prefer placing near the rightAnchor but ensure it doesn't overflow.
             const preferredX = this.svgWidth * 0.6;
             const x = Math.min(Math.max(preferredX, controls.x + controls.width + gap), Math.max(0, this.svgWidth - width - this.topPanelMargin));
-            const height = this.svgHeight * 0.23;
+            const height = this.svgHeight * 0.24;
 
             return {
                 x: x,
@@ -1648,7 +1648,8 @@ const LocationTab = (() => {
             .attr("orient", "auto")
             .append("path")
             .attr("d", "M0,-5L10,0L0,5")
-            .attr("class", "arrowhead");
+            .attr("class", "arrowhead")
+            .attr("fill", "currentColor");;
 
         // --- Setup Map Layers (Groups) ---
         const mainMapGroup = svg.append("g").attr("class", "main-map-group");
