@@ -1574,37 +1574,11 @@ input:checked+.slider:before {
 }
 
 /* ============================================= */
-/* == Profit Tab Styles                       == */
+/* == Profit Tab Styles                       == */
 /* ============================================= */
 
 .profit-calculating-text {
     text-anchor: middle;
-    /* fill, font-size etc. can be added if needed */
-}
-
-.profit-grid-major line {
-    stroke: var(--idle-color);
-    stroke-width: 0.75px;
-}
-
-.profit-grid-major path {
-    display: none;
-}
-
-.profit-crosshair {
-    /* Vertical line */
-    stroke: var(--accent);
-    stroke-dasharray: 4 4;
-    /* display is dynamic */
-}
-
-.profit-crosshair-h {
-    /* Horizontal line */
-    stroke: var(--accent);
-    stroke-dasharray: 4 4;
-    opacity: 0.5;
-    /* Static opacity */
-    /* display is dynamic */
 }
 
 .profit-line-profit {
@@ -1621,38 +1595,16 @@ input:checked+.slider:before {
     stroke-width: 2.6px;
 }
 
-.profit-lost-area {
-    /* Area for unmet demand/lost profit */
+.lost-profit-area {
     fill: var(--failure-color);
     opacity: 0.4;
-    /* Static opacity */
 }
 
-.profit-point-now {
+.point-now { 
     /* Red dot for current config */
     fill: var(--failure-color);
     stroke: var(--white);
     stroke-width: 2px;
-}
-
-.profit-chart-title {
-    /* Titles above charts */
-    text-anchor: middle;
-    font-weight: 800;
-    /* Original: .style("font-weight", 800) */
-    /* fill can inherit or be set */
-}
-
-.profit-axis-label {
-    /* X-axis label "Daily Demand" */
-    text-anchor: middle;
-    /* Inherits from .vis-panel .axis-label? font-size, font-weight, fill */
-}
-
-.profit-hover-rect {
-    /* Invisible rect for hover interactions */
-    fill: transparent;
-    pointer-events: all;
 }
 
 .profit-connector-line {
@@ -1661,21 +1613,57 @@ input:checked+.slider:before {
     stroke-width: 1.5px;
 }
 
+.profit-grid-major line {
+    stroke: var(--idle-color);
+    stroke-width: 0.75px;
+}
+
+.profit-grid-major path {
+    display: none;
+}
+
+.profit-crosshair {
+    /* Vertical line */
+    stroke: var(--accent);
+    stroke-dasharray: 4 4;
+}
+
+.profit-crosshair-h {
+    /* Horizontal line */
+    stroke: var(--accent);
+    stroke-dasharray: 4 4;
+    opacity: 0.5;
+}
+
+.profit-chart-title {
+    /* Titles above charts */
+    text-anchor: middle;
+    font-weight: 800;
+}
+
+.profit-axis-label {
+    /* X-axis label "Daily Demand" */
+    text-anchor: middle;
+}
+
+.profit-hover-rect {
+    /* Invisible rect for hover interactions */
+    fill: transparent;
+    pointer-events: all;
+}
+
 /* --- Breakdown Panel Styles --- */
-.profit-breakdown-border {
+.breakdown-border {
     /* Dashed border rects */
     fill: none;
     stroke: var(--accent);
     stroke-width: 2px;
     stroke-dasharray: 5, 5;
-    /* rx handled by JS */
 }
 
 .profit-panel-title {
-    /* Titles: "Profit Margin Indicators", etc. */
     text-anchor: middle;
     font-weight: 800;
-    /* fill can inherit or be set */
 }
 
 .profit-legend-text {
@@ -1688,11 +1676,13 @@ input:checked+.slider:before {
     0%, 100% {
         stroke: var(--failure-color);
         stroke-width: 5px;
-        stroke-opacity: 1;
-    } 50% {
-        stroke: #ff9a9a;
-        stroke-width: 2px;
-        stroke-opacity: 0.4;
+        stroke-opacity: 0.7;
+    }
+
+    50% {
+        stroke: var(--failure-color);
+        stroke-width: 1px;
+        stroke-opacity: 0.2;
     }
 }
 
@@ -1706,15 +1696,15 @@ input:checked+.slider:before {
 }
 
 .profit-pie-title {
-    /* Titles above pie charts: "Overall", "Super", etc. */
     text-anchor: middle;
-    /* fill, font-size, font-weight from shared .pie-title? */
 }
 
-.profit-pie-slice {
-    /* Pie chart slices */
-    stroke: var(--accent);
-    stroke-width: 1.2px;
+.profit-pie-slice,
+.inner-cost-slice,
+.cost-slice
+{
+    stroke: var(--idle-color);
+    stroke-width: 0.05rem;
 }
 
 .profit-bar-baseline {
@@ -1728,13 +1718,10 @@ input:checked+.slider:before {
     /* Bars in the bottom chart */
     stroke: var(--accent);
     stroke-width: 1.5px;
-    /* fill, rx handled by JS */
 }
 
 .profit-bar-axis-label {
-    /* "Gross Profit", "Model" */
     text-anchor: middle;
-    /* Inherits from .vis-panel .axis-label? font-size, font-weight, fill */
 }
 
 /* ============================================= */
