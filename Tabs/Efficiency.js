@@ -292,9 +292,19 @@ const EfficiencyTab = (function () {
             const idleText = clockGroup.selectAll("text.clock-idle-text").data([idleHours]).join("text")
                 .attr("class", "clock-idle-text")
                 .attr("y", clockRadius + clockRadius * 0.5)
-                .style("font-size", `${Math.max(Math.min(clockRadius * 0.4, rowHeight * 0.06), 10)}px`)
-                .text(d => `${d.toFixed(1)}h Idle`);
-            idleText.exit().remove();
+                .style("font-size", `${Math.max(Math.min(clockRadius * 0.4, rowHeight * 0.06), 10)}px`);
+
+            // Numeric value tspan (animated)
+            const idleValueTspan = idleText.selectAll("tspan.clock-idle-value").data([idleHours]).join("tspan")
+                .attr("class", "clock-idle-value")
+                .text(d => `${d.toFixed(1)}h`);
+
+            // Label tspan (static)
+            idleText.selectAll("tspan.clock-idle-label").data([null]).join("tspan")
+                .attr("class", "clock-idle-label")
+                .text(" Idle");
+
+            animateValue(idleValueTspan.node(), idleHours, isResize ? 0 : 800, val => `${val.toFixed(1)}h`);
 
             // Make clock interactive: show exact idle minutes/hours on hover
             clockGroup.style("cursor", "default");

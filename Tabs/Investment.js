@@ -224,11 +224,12 @@ const drawInvestmentPanel = (function () {
 
         // Read Global Inputs (Daily Demand) - these always exist in sidebar
         const dailyDemandEl = document.getElementById('dailyDemand');
-        const meanDemand = (parseFloat(dailyDemandEl ? dailyDemandEl.value : 180) || 180) * investmentState.workingDays.length;
+        // Ensure we handle NaN gracefully if the field is temporarily empty
+        const rawDemand = parseFloat(dailyDemandEl ? dailyDemandEl.value : 180);
+        const meanDemand = (isNaN(rawDemand) ? 180 : rawDemand) * investmentState.workingDays.length;
 
         investmentState.p50Demand = meanDemand;
         let std;
-
         if (driver === 'p90') {
             if (investmentState.p90Demand < meanDemand) investmentState.p90Demand = meanDemand;
             std = (investmentState.p90Demand - meanDemand) / Z_SCORE_P90;
@@ -252,13 +253,12 @@ const drawInvestmentPanel = (function () {
             investmentState.p90Demand = meanDemand + halfWidth;
             investmentState.p10Demand = meanDemand - halfWidth;
         }
-
         // Safe UI update
         updateDemandUI();
 
-        // Debounce the heavy math
+        // Debounce the heavy math to prevent "swinging" on intermediate keystrokes
         clearTimeout(analysisDebounceTimer);
-        analysisDebounceTimer = setTimeout(runFullAnalysis, 0);
+        analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
     }
 
     // EXPOSE GLOBALLY

@@ -10,6 +10,7 @@ let isRecalculating = false;
 let autoAdjustEnabled = true;
 let investmentMetricsInitialized = false;
 let targetSalesDemand = 0;
+let allowInputCommitCallbacks = false; // Prevent onCommit callbacks during initialization
 
 const PRECEDENCE_DATA = [
     { id: 1, predecessors: [] }, { id: 2, predecessors: [1] }, { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] },
@@ -205,6 +206,16 @@ let currentView = 'current';
 async function main() {
     injectCustomStyles();
     await loadData();
+
+    // Pre-set committedValue on inputs AFTER loadData() to capture any value modifications
+    [dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput,
+        superSellInput, superCogsInput, superReworkInput,
+        ultraSellInput, ultraCogsInput, ultraReworkInput,
+        megaSellInput, megaCogsInput, megaReworkInput,
+        qualityYieldInput, qualityStDevPercentageInput].forEach(input => {
+            if (input) input.dataset.committedValue = input.value;
+        });
+
     setupEventListeners();
     setupUIEventListeners();
     setupVisibilityListener();
@@ -229,10 +240,16 @@ async function main() {
     }
 
     updateUI();
+
     if (typeof InvestmentTab !== 'undefined' && typeof InvestmentTab.calculate === 'function') {
         InvestmentTab.calculate();
     }
     runProfitCalculation();
+    // Ensure compare button reflects whether a saved configuration exists
+    try { if (typeof updateCompareBtn === 'function') updateCompareBtn(); } catch (e) { /* non-fatal */ }
+
+    // Enable input commit callbacks after initialization is complete
+    allowInputCommitCallbacks = true;
 }
 
 /**
@@ -274,9 +291,6 @@ async function loadData() {
         // Set the initial sales target to match the input's default value
         targetSalesDemand = parseInt(dailyDemandInput.value);
 
-        if (qualityYieldInput) {
-            qualityYieldInput.value = (parseFloat(qualityYieldInput.value) * 100.0).toFixed(1);
-        }
         originalInputs = {
             dailyDemand: parseInt(dailyDemandInput.value),
             opHours: parseFloat(opHoursInput.value),
@@ -335,29 +349,26 @@ function injectCustomStyles() {
     const primaryColor = getComputedStyle(root).getPropertyValue('--primary').trim();
     const style = document.createElement('style');
     style.textContent = `
-/* Target sidebars and SVG area for Firefox */
-#left-sidebar, #right-sidebar, #svg-container {
-scrollbar-width: thin;
-scrollbar-color: ${accentColor} transparent;
-}
-/* Target sidebars and SVG area for Webkit browsers (Chrome, Safari, etc.) */
-#left-sidebar::-webkit-scrollbar, #right-sidebar::-webkit-scrollbar, #svg-container::-webkit-scrollbar {
-width: 10px;
-height: 10px;
-}
-#left-sidebar::-webkit-scrollbar-track, #right-sidebar::-webkit-scrollbar-track, #svg-container::-webkit-scrollbar-track {
-background: transparent;
-}
-#left-sidebar::-webkit-scrollbar-thumb, #right-sidebar::-webkit-scrollbar-thumb, #svg-container::-webkit-scrollbar-thumb {
-background-color: ${accentColor};
-border-radius: 10px;
-border: 2px solid transparent;
-background-clip: content-box;
-}
-#left-sidebar::-webkit-scrollbar-thumb:hover, #right-sidebar::-webkit-scrollbar-thumb:hover, #svg-container::-webkit-scrollbar-thumb:hover {
-background-color: ${primaryColor};
-}
-`;
+        #left-sidebar, #right-sidebar, #svg-container {
+            scrollbar-width: thin;
+            scrollbar-color: ${accentColor} transparent;
+        }
+        #left-sidebar::-webkit-scrollbar, #right-sidebar::-webkit-scrollbar, #svg-container::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        #left-sidebar::-webkit-scrollbar-track, #right-sidebar::-webkit-scrollbar-track, #svg-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        #left-sidebar::-webkit-scrollbar-thumb, #right-sidebar::-webkit-scrollbar-thumb, #svg-container::-webkit-scrollbar-thumb {
+            background-color: ${accentColor};
+            border-radius: 10px;
+            border: 2px solid transparent;
+            background-clip: content-box;
+        }
+        #left-sidebar::-webkit-scrollbar-thumb:hover, #right-sidebar::-webkit-scrollbar-thumb:hover, #svg-container::-webkit-scrollbar-thumb:hover {
+            background-color: ${primaryColor};
+        }`;
     document.head.appendChild(style);
 }
 
@@ -390,9 +401,20 @@ function parseElementValue(element) {
         return NaN;
     }
 
-    const parsed = parseFloat(cleanedText);
+    let parsed = parseFloat(cleanedText);
 
+    // Robust fallback: if the cleaned text didn't produce a valid parse (due to
+    // trailing labels like "Idle" or "units"), try extracting the first numeric
+    // token found in the original text and parse that. This helps cases like
+    // "3.5h Idle" or "12 units" where previous code returned NaN.
     if (typeof parsed !== 'number' || !isFinite(parsed)) {
+        const match = text.match(/-?\d*\.?\d+(e[-+]?\d+)?/i);
+        if (match) {
+            parsed = parseFloat(match[0]);
+            if (typeof parsed === 'number' && isFinite(parsed)) {
+                return parsed;
+            }
+        }
         return NaN;
     }
 
@@ -802,7 +824,7 @@ function updateUI(options = {}) {
 
         switch (activeTab) {
             case 'overview':
-                if (isSavedMode && lastSavedConfig && lastSavedConfig.visualizationSnapshots[activeTAb]) {
+                if (isSavedMode && lastSavedConfig && lastSavedConfig.visualizationSnapshots[activeTab]) {
                     const panel = document.getElementById(`${activeTab}-panel`);
                     panel.innerHTML = lastSavedConfig.visualizationSnapshots[activeTab];
                 } else {
@@ -838,15 +860,20 @@ function updateUI(options = {}) {
                 }
                 break;
             case 'schedule':
-                if (isSavedMode && lastSavedConfig && lastSavedConfig.visualizationSnapshots[activeTab]) {
+                // Always draw the animated schedule view so the timeline continues
+                // to animate even when the user is viewing a saved configuration.
+                // Previously we replaced the panel HTML with a static snapshot when
+                // in saved mode which stopped requestAnimationFrame loops. To keep
+                // animation, prefer calling the ScheduleTab.draw() implementation.
+                if (typeof ScheduleTab !== 'undefined' && ScheduleTab.draw) {
+                    ScheduleTab.draw();
+                } else if (isSavedMode && lastSavedConfig && lastSavedConfig.visualizationSnapshots[activeTab]) {
+                    // Fallback: if the module isn't available, restore the static snapshot
+                    // (non-animated) so the user still sees something.
                     const panel = document.getElementById(`${activeTab}-panel`);
                     panel.innerHTML = lastSavedConfig.visualizationSnapshots[activeTab];
                 } else {
-                    if (typeof ScheduleTab !== 'undefined' && ScheduleTab.draw) {
-                        ScheduleTab.draw();
-                    } else {
-                        console.warn("ScheduleTab.draw not found.");
-                    }
+                    console.warn("ScheduleTab.draw not found.");
                 }
                 break;
             case 'efficiency':
@@ -869,7 +896,7 @@ function updateUI(options = {}) {
                 }
                 break;
             case 'investment':
-                if (typeof InvestmentTab.draw() === 'function') {
+                if (typeof InvestmentTab !== 'undefined' && typeof InvestmentTab.draw === 'function') {
                     InvestmentTab.draw();
                 }
                 break;
@@ -1099,36 +1126,35 @@ function setupEventListeners() {
             const formatPercent = (n) => `${(n * 100).toFixed(1)}%`;
 
             const html = `
-<div class="tt-title">Calculated Quality Loss</div>
-<div class="tooltip-row">
-<span>Workstation Stress:</span>
-<span>-${formatPercent(breakdown.workstationLoss)}</span>
-</div>
-<div class="tooltip-row">
-<span>Conveyor Fatigue:</span>
-<span>-${formatPercent(breakdown.conveyorLoss)}</span>
-</div>
-<div class="tooltip-row">
-<span>Overtime Stress:</span>
-<span>-${formatPercent(breakdown.overtimeLoss)}</span>
-</div>
-<div class="tooltip-row">
-<span>Wage Stress:</span>
-<span>-${formatPercent(breakdown.wageLoss)}</span>
-</div>
-<hr>
-<div class="tooltip-row tt-total">
-<span>Total Calculated Loss:</span>
-<span>-${formatPercent(breakdown.totalStress)}</span>
-</div>
-<div class="tooltip-row tt-total">
-<span>Calculated Yield:</span>
-<span>${formatPercent(1.0 - breakdown.totalStress)}</span>
-</div>
-`;
+                <div class="tt-title">Calculated Quality Loss</div>
+                <div class="tooltip-row">
+                    <span>Workstation Stress:</span>
+                    <span>-${formatPercent(breakdown.workstationLoss)}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span>Conveyor Fatigue:</span>
+                    <span>-${formatPercent(breakdown.conveyorLoss)}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span>Overtime Stress:</span>
+                    <span>-${formatPercent(breakdown.overtimeLoss)}</span>
+                </div>
+                <div class="tooltip-row">
+                    <span>Wage Stress:</span>
+                    <span>-${formatPercent(breakdown.wageLoss)}</span>
+                </div>
+                <hr>
+                <div class="tooltip-row tt-total">
+                    <span>Total Calculated Loss:</span>
+                    <span>-${formatPercent(breakdown.totalStress)}</span>
+                </div>
+                <div class="tooltip-row tt-total">
+                    <span>Calculated Yield:</span>
+                    <span>${formatPercent(1.0 - breakdown.totalStress)}</span>
+                </div>`;
+
             tooltip.html(html)
                 .style('opacity', 1);
-            positionTooltip(tooltip, e, 15, -28);
         });
         qualityYieldLabelElement.addEventListener('mousemove', (e) => {
             positionTooltip(tooltip, e, 15, -28);
@@ -1142,6 +1168,19 @@ function setupEventListeners() {
 function attachCommitBehavior(inputs, onCommit) {
     const timers = new WeakMap();
     const autoFlag = new WeakMap();
+
+    // Expose a global function to clear all pending input timers
+    window.clearInputCommitTimers = () => {
+        let clearedCount = 0;
+        inputs.forEach(input => {
+            const timer = timers.get(input);
+            if (timer) {
+                clearTimeout(timer);
+                timers.delete(input);
+                clearedCount++;
+            }
+        });
+    };
 
     const clearAllAutoFlags = () => {
         inputs.forEach(inp => autoFlag.set(inp, false));
@@ -1314,7 +1353,7 @@ function attachCommitBehavior(inputs, onCommit) {
                 const defaultValue = defaultValues[input.id];
                 if (defaultValue !== undefined) {
                     const min = input.hasAttribute('min') ? parseFloat(input.min) : -Infinity;
-                    const max = input.hasAttribute('max') ? parseFloat(input.max) : -Infinity;
+                    const max = input.hasAttribute('max') ? parseFloat(input.max) : Infinity;
                     const step = parseFloat(input.step) || 1;
 
                     input.value = Math.max(min, Math.min(max, defaultValue));
@@ -1368,7 +1407,7 @@ function commitInput(input, onCommit) {
     // Only invoke onCommit if the committed value actually changed.
     const previousCommitted = input.dataset.committedValue ?? '';
     input.dataset.committedValue = input.value;
-    if (typeof onCommit === 'function' && String(previousCommitted) !== String(input.dataset.committedValue)) {
+    if (allowInputCommitCallbacks && typeof onCommit === 'function' && String(previousCommitted) !== String(input.dataset.committedValue)) {
         try {
             setTimeout(() => {
                 try { onCommit(input.id, clamped); } catch (err) { console.error('onCommit handler failed:', err); }
@@ -1741,6 +1780,9 @@ function wireRightSidebarTooltips() {
         'irrMetric': 'Represents the annual rate of return an investment is expected to yield. Is the discount rate that makes the NPV of all cash flows from the investment equal to zero.',
         'paybackMetric': 'Length of time it takes for an investment to generate enough cash flow to recover its initial cost.'
     };
+    // --- Add Save & Compare tooltips for right-sidebar buttons ---
+    tooltips['saveConfigBtn'] = 'Save the current inputs and layout so you can compare them later; this stores a snapshot locally in your browser.';
+    tooltips['compareBtn'] = 'Switch between the current and saved configuration views to compare metrics and visualizations side-by-side.';
 
     // Create tooltip element if it doesn't exist
     const tooltip = createTooltip('right-sidebar-tooltip');
@@ -1779,8 +1821,10 @@ function wireRightSidebarTooltips() {
                 else if (id === 'materialCostHeading' && finSpans.length >= 3) target = finSpans[2];
                 else if (id === 'reworkCostHeading' && finSpans.length >= 4) target = finSpans[3];
             } else {
-                // If it is an INPUT, attach to the element itself (since we missed the label check above)
-                if (elementById.tagName === 'INPUT' || elementById.tagName === 'SELECT') {
+                // If it is an INPUT or SELECT or BUTTON, attach to the element itself
+                // (buttons should get their tooltip attached directly).
+                const tag = elementById.tagName;
+                if (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON') {
                     target = elementById;
                 } else {
                     // It is an OUTPUT (span/div). We want the LABEL (previous sibling), not the number.
@@ -1810,6 +1854,34 @@ function wireRightSidebarTooltips() {
                 tooltip.transition().duration(500).style('opacity', 0);
             });
         }
+    }
+
+    // Also wire any elements inside the right sidebar that use the
+    // CSS-only [data-tooltip] attribute so we can show a body-level
+    // tooltip (avoids being clipped by the sidebar's overflow).
+    try {
+        tooltip.style('position', 'fixed');
+        const dataTooltipEls = Array.from(containerElement.querySelectorAll('[data-tooltip]'));
+        dataTooltipEls.forEach(el => {
+            // Skip elements that were already wired above via explicit IDs
+            if (el._rf_hasTooltip) return;
+            el._rf_hasTooltip = true;
+            el.style.cursor = 'help';
+            const msg = el.getAttribute('data-tooltip');
+            el.addEventListener('mouseover', function (event) {
+                tooltip.transition().duration(120).style('opacity', 1);
+                tooltip.html(`<div class="tooltip-row">${msg}</div>`);
+            });
+            el.addEventListener('mousemove', function (event) {
+                positionTooltip(tooltip, event, 12, -28);
+            });
+            el.addEventListener('mouseout', function () {
+                tooltip.transition().duration(200).style('opacity', 0);
+            });
+        });
+    } catch (e) {
+        // Non-fatal — continue silently
+        console.debug('Failed to wire data-tooltip elements for right-sidebar:', e);
     }
 }
 
@@ -1882,6 +1954,11 @@ async function handleInputChange(driverId, context = {}) {
     if (isRecalculating) return;
     isRecalculating = true;
 
+    // When callers want to apply inputs without triggering the auto-adjust
+    // logic (for example when loading a saved configuration), they can pass
+    // { skipAutoAdjust: true } in the context object.
+    const skipAutoAdjust = context && context.skipAutoAdjust;
+
     const isFinancialDriver = ['laborCost', 'superSell', 'superCogs', 'ultraSell', 'ultraCogs', 'megaSell', 'megaCogs', 'qualityYieldInput', 'qualityStDevPercentage'].includes(driverId);
     const isOperationalDriver = ['dailyDemand', 'opHours', 'numEmployees'].includes(driverId);
 
@@ -1923,7 +2000,8 @@ async function handleInputChange(driverId, context = {}) {
             document.querySelectorAll('.element-row').forEach(row => row.classList.remove('precedence-error'));
         }
 
-        if (isOperationalDriver && autoAdjustEnabled) {
+        // Only auto-adjust when enabled and not explicitly skipped by caller
+        if (isOperationalDriver && autoAdjustEnabled && !skipAutoAdjust) {
 
             let productionTarget = parseInt(dailyDemandInput.value) || 1;
 
@@ -2079,8 +2157,10 @@ function calculateMetrics(op, fin, skipQualityYield = false) {
             // Only update the input if it's not being overridden
             if (qualityYieldInput) {
                 const newYieldValue = (calculatedQualityYield * 100.0).toFixed(1);
-                if (qualityYieldInput.value != - newYieldValue) {
+                if (qualityYieldInput.value !== newYieldValue) {
                     qualityYieldInput.value = newYieldValue;
+                    // Update committedValue to match so this change doesn't trigger a callback
+                    qualityYieldInput.dataset.committedValue = newYieldValue;
                     qualityYieldInput.dispatchEvent(new Event('input', {
                         bubbles: true
                     }));
@@ -2533,7 +2613,7 @@ function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
                 const failedUnits = requiredProductionTotal * totalStress;
                 const reworkCost = failedUnits * ((BUILD_RATIOS.super * finInputs.superRework) + (BUILD_RATIOS.ultra * finInputs.ultraRework) + (BUILD_RATIOS.mega * finInputs.megaRework));
                 const profitWithQuality = totalRevenue - totalCogs - reworkCost - totalDailyLaborCost;
-                const marginWithQuality = totalRevenue > 0 ? (profitWithQuality / totalRevenue) * 100 : 0;
+                const marginWithQuality = totalRevenue > 0 ? (profitWithQuality / totalRevenue) * 100 : (profitWithQuality !== 0 ? -100 : 0);
 
                 if (profitWithQuality > maxProfit) {
                     maxProfit = profitWithQuality;
@@ -2548,8 +2628,9 @@ function findOptimalConfigForDemand(demand, finInputs, maxDemandMap) {
         }
     }
 
-    const profitResult = { demand, value: isFinite(maxProfit) ? maxProfit : 0, config: maxProfitConfig };
-    const marginResult = { demand, value: isFinite(maxMargin) ? maxMargin : 0, config: maxMarginConfig };
+    // When no valid config found, use 0 for both value and config, otherwise use the calculated max
+    const profitResult = { demand, value: maxProfit !== -Infinity ? maxProfit : 0, config: maxProfitConfig };
+    const marginResult = { demand, value: maxMargin !== -Infinity ? maxMargin : 0, config: maxMarginConfig };
 
     return { profitResult, marginResult };
 }
@@ -2822,22 +2903,30 @@ function onSaveConfiguration() {
     const timestamp = new Date().toISOString();
 
     // --- Updated inputs object ---
+    const safeNum = (v, fallback = 0) => {
+        const n = parseFloat(String(v).replace(/[^0-9eE+\-.]/g, ''));
+        return Number.isFinite(n) ? n : fallback;
+    };
+
+    const qYieldRaw = (qualityYieldInput && (qualityYieldInput.value || '').trim()) || '';
+    const qYieldVal = safeNum(qYieldRaw, null);
     const inputs = {
-        dailyDemand: parseInt(dailyDemandInput.value),
-        opHours: parseFloat(opHoursInput.value),
-        numEmployees: parseInt(numEmployeesInput.value),
-        laborCost: parseFloat(laborCostInput.value),
-        superSell: parseFloat(superSellInput.value),
-        superCogs: parseFloat(superCogsInput.value),
-        superRework: parseFloat(superReworkInput.value),
-        ultraSell: parseFloat(ultraSellInput.value),
-        ultraCogs: parseFloat(ultraCogsInput.value),
-        ultraRework: parseFloat(ultraReworkInput.value),
-        megaSell: parseFloat(megaSellInput.value),
-        megaCogs: parseFloat(megaCogsInput.value),
-        megaRework: parseFloat(megaReworkInput.value),
-        qualityYieldInput: parseFloat(qualityYieldInput.value),
-        qualityStDevPercentage: parseFloat(qualityStDevPercentageInput.value)
+        dailyDemand: parseInt(dailyDemandInput.value) || 0,
+        opHours: safeNum(opHoursInput.value, 0),
+        numEmployees: parseInt(numEmployeesInput.value) || 0,
+        laborCost: safeNum(laborCostInput.value, 0),
+        superSell: safeNum(superSellInput.value, 0),
+        superCogs: safeNum(superCogsInput.value, 0),
+        superRework: safeNum(superReworkInput.value, 0),
+        ultraSell: safeNum(ultraSellInput.value, 0),
+        ultraCogs: safeNum(ultraCogsInput.value, 0),
+        ultraRework: safeNum(ultraReworkInput.value, 0),
+        megaSell: safeNum(megaSellInput.value, 0),
+        megaCogs: safeNum(megaCogsInput.value, 0),
+        megaRework: safeNum(megaReworkInput.value, 0),
+        // If the yield input is non-numeric (e.g. '---'), fall back to estimated yield
+        qualityYieldInput: qYieldVal !== null ? qYieldVal : (getEstimatedYield() * 100.0),
+        qualityStDevPercentage: safeNum(qualityStDevPercentageInput.value, 0)
     };
 
     // Collect investment inputs if they exist
@@ -2872,7 +2961,14 @@ function onSaveConfiguration() {
         investmentInputs,
         config,
         visualizationSnapshots,
-        cityData: window.getCityData ? window.getCityData() : []
+        cityData: window.getCityData ? window.getCityData() : [],
+        // snapshot a quick metrics summary so we know whether this config met demand
+        metricsSnapshot: (function () {
+            try {
+                const m = calculateMetrics({ dailyDemand: inputs.dailyDemand, opHours: inputs.opHours, numEmployees: inputs.numEmployees }, inputs, false);
+                return { meetsDemand: !!(m && m.meetsDemand), throughput: m ? m.throughputUnitsPerHour : null };
+            } catch (e) { return null; }
+        })()
     };
     localStorage.setItem(LOCAL_SAVE_KEY, JSON.stringify(lastSavedConfig));
 
@@ -2903,6 +2999,11 @@ function onCompareBtnClick() {
 }
 
 function updateCompareBtn() {
+    // Note: The compare button is intentionally disabled when there is no
+    // saved configuration (no data in localStorage). It becomes enabled after
+    // a successful save (see onSaveConfiguration which sets lastSavedConfig
+    // and calls this function). The button's disabled state is also set on
+    // initialization so it is not clickable before a save exists.
     if (currentView === 'current') {
         compareBtn.textContent = 'Current Configuration';
         compareBtn.className = 'current';
@@ -2950,6 +3051,13 @@ document.addEventListener('click', (e) => {
 
 function switchCompareView(view) {
     try {
+        // Clear any pending input commit timers to prevent duplicate callbacks
+        if (typeof window.clearInputCommitTimers === 'function') {
+            window.clearInputCommitTimers();
+        }
+        // Temporarily disable input commit callbacks to prevent duplicate updateUI calls
+        allowInputCommitCallbacks = false;
+
         isSavedMode = (view === 'saved');
         if (isSavedMode && lastSavedConfig) {
             // --- Save current state ---
@@ -3054,12 +3162,26 @@ function switchCompareView(view) {
     } catch (e) {
         console.error('Error in switchCompareView:', e);
     }
-    handleInputChange('dailyDemand');
+
+    // Update committed values to match the new input values to prevent spurious change detection
+    [dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput,
+        superSellInput, superCogsInput, superReworkInput,
+        ultraSellInput, ultraCogsInput, ultraReworkInput,
+        megaSellInput, megaCogsInput, megaReworkInput,
+        qualityYieldInput, qualityStDevPercentageInput].forEach(input => {
+            if (input) input.dataset.committedValue = input.value;
+        });
+
+    // Recalculate to refresh all displays; when switching compare views we
+    // want to avoid auto-adjusting the inputs to 'meet demand', so pass
+    // skipAutoAdjust=true here.
+    handleInputChange('dailyDemand', { skipAutoAdjust: true });
     currentView = view;
     updateCompareBtn();
-}
 
-async function fetchFipsFromLatLon(lat, lon, timeoutMs = 8000) {
+    // Re-enable input commit callbacks (safe now since we cleared all pending timers)
+    allowInputCommitCallbacks = true;
+} async function fetchFipsFromLatLon(lat, lon, timeoutMs = 8000) {
     const corsProxy = 'https://api.allorigins.win/raw?url=';
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);

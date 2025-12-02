@@ -22,6 +22,9 @@ const LocationTab = (() => {
 
     let _localWageStress = 0.0; // Local wage-based stress factor
     let _currentWageDisplay = 'N/A'; // Current wage display text
+    let _lastMedianHourly = null;
+
+    let selectedCityInDropdown = ""; // Preserve selected city in dropdown across redraws
 
     // --- Map & D3 State ---
     let mapInitialized = false; // Flag to prevent re-initializing the map
@@ -144,27 +147,13 @@ const LocationTab = (() => {
             // Prefer placing near the rightAnchor but ensure it doesn't overflow.
             const preferredX = this.svgWidth * 0.6;
             const x = Math.min(Math.max(preferredX, controls.x + controls.width + gap), Math.max(0, this.svgWidth - width - this.topPanelMargin));
-            const height = this.svgHeight * 0.24;
+            const height = this.svgHeight * 0.23;
 
             return {
                 x: x,
                 y: this.topPanelMargin,
                 width: width - this.topPanelMargin,
                 height: height
-            };
-        },
-
-        /**
-         * Get coordinates for the pop-up modal.
-         */
-        getModalRect() {
-            const x = (this.svgWidth - this.modalWidth) / 2;
-            const y = (this.svgHeight - this.modalHeight) / 2;
-            return {
-                x: Math.max(0, x),
-                y: Math.max(0, y),
-                width: this.modalWidth,
-                height: this.modalHeight,
             };
         },
 
@@ -183,6 +172,23 @@ const LocationTab = (() => {
                 y: mapY,
                 width: mainArea.width,
                 height: mapHeight
+            };
+        },
+
+        /**
+         * Get coordinates for the modal dialog (e.g., PPI chart).
+         */
+        getModalRect() {
+            const modalWidth = this.svgWidth * 0.8;
+            const modalHeight = this.svgHeight * 0.8;
+            const x = (this.svgWidth - modalWidth) / 2;
+            const y = (this.svgHeight - modalHeight) / 2;
+
+            return {
+                x: x,
+                y: y,
+                width: modalWidth,
+                height: modalHeight
             };
         }
     };
@@ -380,27 +386,62 @@ const LocationTab = (() => {
     async function updateLocalWageStress(currentLaborCost) {
         if (!optimalFactoryLocation) {
             _localWageStress = 0;
+            _lastMedianHourly = null;
+            lastCheckedLocation = null;
+            const displayEl = document.getElementById('loc-wage-display');
+            if (displayEl) displayEl.textContent = 'N/A';
             return;
         }
 
-        // re-calculate stress based on the new laborCost.
-        console.log("Recalculating wage stress with new labor cost...");
-
         const [lon, lat] = optimalFactoryLocation;
 
-        const { medianHouseholdIncome, medianHourly, stress } = await getLocalWageAndStress(lat, lon, currentLaborCost);
+        // Helper to perform the stress math once we have a median
+        const performCalculation = (median) => {
+            if (Number.isFinite(median) && median > 0) {
+                // Determine stress using the global helper from script.js
+                // Note: mapWageToStress must be available globally or imported
+                const stress = typeof mapWageToStress === 'function'
+                    ? mapWageToStress(median, currentLaborCost)
+                    : 0;
+
+                _localWageStress = stress;
+
+                const displayEl = document.getElementById('loc-wage-display');
+                if (displayEl) {
+                    const newValue = `$${median.toFixed(2)}/hr`;
+                    _currentWageDisplay = newValue;
+                    displayEl.textContent = newValue;
+                }
+            }
+        };
+
+        // Check if location has changed
+        if (lastCheckedLocation &&
+            lastCheckedLocation[0] === optimalFactoryLocation[0] &&
+            lastCheckedLocation[1] === optimalFactoryLocation[1] &&
+            _lastMedianHourly !== null) {
+
+            // Location hasn't changed, reuse cached median wage
+            performCalculation(_lastMedianHourly);
+            return Promise.resolve();
+        }
+
+        // Location changed (or first run), fetch from API
+        console.log("Recalculating wage stress (Fetching API)...");
+        lastCheckedLocation = [...optimalFactoryLocation];
+
+        const { medianHourly } = await getLocalWageAndStress(lat, lon, currentLaborCost);
 
         if (Number.isFinite(medianHourly) && medianHourly > 0) {
-            _localWageStress = stress; // Update the stress
-
-            const displayEl = document.getElementById('loc-wage-display');
-            if (displayEl) {
-                const newValue = `$${medianHourly.toFixed(2)}/hr`;
-                _currentWageDisplay = newValue;
-                displayEl.textContent = newValue;
-            }
+            _lastMedianHourly = medianHourly; // Cache it
+            performCalculation(medianHourly);
         } else {
-            console.warn("getLocalWageAndStress returned N/A, preserving last known wage and stress.");
+            console.warn("getLocalWageAndStress returned N/A.");
+            // Reset to safe defaults if API fails
+            _localWageStress = 0;
+            _currentWageDisplay = 'N/A';
+            const displayEl = document.getElementById('loc-wage-display');
+            if (displayEl) displayEl.textContent = 'N/A';
         }
     }
 
@@ -414,27 +455,18 @@ const LocationTab = (() => {
         const ppiInputEl = d3.select("#loc-ppi-input");
         const ppiInput = ppiInputEl.empty() ? null : ppiInputEl.property("value");
         PPI = ppiInput ? parseFloat(ppiInput) : 170;
-
         if (optimizationMode === 'New') {
-
-            // *** THIS IS THE FIX ***
             if (cities.length === 1) {
-                // If there is only one city, the optimal location *is* that city.
                 optimalFactoryLocation = cities[0].coordinates;
             } else if (cities.length < 2) {
-                // If there are 0 cities
                 optimalFactoryLocation = null;
             } else {
-                // *** END FIX ***
-
-                // (Original logic for 2+ cities)
                 cities.forEach(c => {
                     const shipmentDetails = getShipmentDetails(null, c, 1);
                     const costPerShipmentPerMile = shipmentDetails ? shipmentDetails.costPerShipment : 0;
                     const shipmentsPerYear = 365.2425 / c.freq;
                     c.monetaryWeight = costPerShipmentPerMile * shipmentsPerYear;
                 });
-
                 let sumLon = 0, sumLat = 0, totalMonetaryWeight = 0;
                 cities.forEach(c => {
                     if (c.monetaryWeight && isFinite(c.monetaryWeight)) {
@@ -443,7 +475,6 @@ const LocationTab = (() => {
                         totalMonetaryWeight += c.monetaryWeight;
                     }
                 });
-
                 if (totalMonetaryWeight <= 0) {
                     console.warn("Using geometric center (no valid monetary weights).");
                     sumLon = d3.sum(cities, c => c.coordinates[0]);
@@ -454,12 +485,9 @@ const LocationTab = (() => {
                         return Promise.resolve();
                     }
                 }
-
                 let currentLocation = [sumLon / totalMonetaryWeight, sumLat / totalMonetaryWeight];
-
                 for (let i = 0; i < 100; i++) {
                     let numLon = 0, numLat = 0, den = 0;
-
                     cities.forEach(city => {
                         const d = Math.max(0.001, greatCircleDistance(currentLocation, city.coordinates));
                         if (city.monetaryWeight && isFinite(city.monetaryWeight)) {
@@ -468,25 +496,19 @@ const LocationTab = (() => {
                             den += city.monetaryWeight / d;
                         }
                     });
-
                     if (den <= 0) {
-                        console.warn("Opt stopped: Invalid denominator.");
                         break;
                     }
-
                     const nextLocation = [numLon / den, numLat / den];
-
                     if (greatCircleDistance(currentLocation, nextLocation) < 0.1) {
                         currentLocation = nextLocation;
                         break;
                     }
                     currentLocation = nextLocation;
                 }
-
                 const newMedianLocation = [+currentLocation[0].toFixed(2), +currentLocation[1].toFixed(2)];
                 let minCost = calculateTotalCost(newMedianLocation, cities);
                 let bestLocation = newMedianLocation;
-
                 for (const potentialSite of cities) {
                     const currentCost = calculateTotalCost(potentialSite.coordinates, cities);
                     if (currentCost <= minCost) {
@@ -497,7 +519,6 @@ const LocationTab = (() => {
                 optimalFactoryLocation = bestLocation;
             }
         } else {
-            // --- 'Existing' (p-median) Optimization ---
             if (cities.length < 1) {
                 optimalFactoryLocation = null;
             } else {
@@ -524,28 +545,8 @@ const LocationTab = (() => {
         // --- API Call Logic ---
         return new Promise((resolve) => {
             setTimeout(async () => {
-                if (!optimalFactoryLocation) {
-                    // No location, reset stress and last checked location
-                    _localWageStress = 0;
-                    lastCheckedLocation = null;
-                    resolve();
-                    return;
-                }
-
-                // Only run the API call if the location has actually changed
-                if (lastCheckedLocation &&
-                    lastCheckedLocation[0] === optimalFactoryLocation[0] &&
-                    lastCheckedLocation[1] === optimalFactoryLocation[1]) {
-
-                    console.log("Skipping wage API call, location unchanged.");
-                    resolve();
-                    return;
-                }
-
-                // Location is new, update the last checked location before the call
-                lastCheckedLocation = [...optimalFactoryLocation];
                 const currentLaborCost = parseFloat(document.getElementById('laborCost')?.value) || 25;
-
+                // We always call the update function; it decides internally if it needs to fetch or use cache
                 await updateLocalWageStress(currentLaborCost);
                 resolve();
             }, 100);
@@ -1628,36 +1629,31 @@ const LocationTab = (() => {
     const initializeMap = (svg, width, height) => {
         if (mapInitialized) return;
         console.log("Initializing map...");
-
         layoutManager.update(width, height);
-
-        // --- 1. Setup Projection and Defs ---
         projection = d3.geoAlbersUsa();
         path = d3.geoPath().projection(projection);
 
         const defs = svg.append("defs");
 
-        // Arrowhead marker for connection lines
+        // Define the arrow marker
         defs.append("marker")
             .attr("id", "arrowhead")
             .attr("viewBox", "0 -5 10 10")
-            .attr("refX", 5)
+            .attr("refX", 7) // Adjusted refX slightly for better tip alignment
             .attr("refY", 0)
-            .attr("markerWidth", 4)
-            .attr("markerHeight", 4)
+            .attr("markerWidth", 5)
+            .attr("markerHeight", 5)
             .attr("orient", "auto")
             .append("path")
             .attr("d", "M0,-5L10,0L0,5")
             .attr("class", "arrowhead")
-            .attr("fill", "currentColor");;
+            .style("fill", "var(--secondary1)") // Explicit color
+            .style("stroke", "none");
 
-        // --- Setup Map Layers (Groups) ---
         const mainMapGroup = svg.append("g").attr("class", "main-map-group");
-
         mainMapGroup.append("g")
             .attr("class", "us-map")
             .on("click", () => {
-                // Click on map deselects city
                 d3.select(".city-info-box").style("display", "none");
                 if (selectedCityName !== null) {
                     selectedCityName = null;
@@ -1670,20 +1666,16 @@ const LocationTab = (() => {
         mainMapGroup.append("g").attr("class", "optimal-factory-container");
         mainMapGroup.append("g").attr("class", "city-markers");
 
-        // --- Load GeoJSON and Draw States ---
         d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json").then(us => {
-            // Filter out AK (02) and HI (15)
             continentalStatesFeatures = topojson.feature(us, us.objects.states)
                 .features.filter(d => d.id !== '02' && d.id !== '15');
-
             mainMapGroup.select(".us-map").selectAll("path")
                 .data(continentalStatesFeatures)
                 .enter().append("path")
                 .attr("d", path)
                 .attr("class", "state-boundary");
-
             mapInitialized = true;
-            updateDynamicMapElements(); // Fit map to size
+            updateDynamicMapElements();
             runOptimization();
         }).catch(error => {
             console.error("Error loading map topology:", error);
@@ -1730,6 +1722,13 @@ const LocationTab = (() => {
             .attr("width", layoutManager.getSummaryRect().width)
             .attr("height", layoutManager.getSummaryRect().height);
 
+        svg.selectAll("g.legend-panel-wrapper")
+            .attr("transform", () => {
+                const ribbonRect = layoutManager.getRibbonRect();
+                const legendY = ribbonRect.y - 150;
+                return `translate(10, ${legendY})`;
+            });
+
         svg.select("#ppi-chart-modal")
             .attr("x", layoutManager.getModalRect().x)
             .attr("y", layoutManager.getModalRect().y)
@@ -1756,7 +1755,7 @@ const LocationTab = (() => {
 
                 updateCityMarkers();
                 updateOptimalFactoryMarker();
-                updateConnectionLines();
+                setTimeout(() => updateConnectionLines(), 750);
 
             } else {
                 console.warn("updateDynamicMapElements skipped map update: mapBounds have zero dimensions.");
@@ -1795,9 +1794,10 @@ const LocationTab = (() => {
         }
 
         layoutManager.update(width, height, isBottomRibbonOpen); // Update layout manager FIRST
+        const isSvgEmpty = svg.select("defs").empty();
 
         // --- Initialize Map (if first time) ---
-        if (!mapInitialized) {
+        if (!mapInitialized || isSvgEmpty) {
             svg.selectAll("*").remove();
             d3.select("body").selectAll(".ppi-tooltip, .holding-cost-tooltip, .factory-tooltip, .city-calc-tooltip, .holding-cost-breakdown-tooltip, .ppi-ribbon-tooltip").remove(); // Clear old tooltips
             initializeMap(svg, width, height);
@@ -1873,6 +1873,7 @@ const LocationTab = (() => {
 
         // --- Draw UI Panels (using <foreignObject>) ---
         svg.selectAll("foreignObject").remove(); // Clear old UI
+        svg.selectAll(".legend-panel-wrapper").remove();
 
         // --- Top-Left Controls (Add City) ---
         const controlsRect = layoutManager.getControlsRect();
@@ -1910,24 +1911,45 @@ const LocationTab = (() => {
         } else {
             console.error("majorCities data is missing.");
         }
+        citySelect.property("value", selectedCityInDropdown)
+            .on("change", function () {
+                selectedCityInDropdown = this.value;
+            });
 
         const demandGroup = controlsDiv.append("div").attr("class", "input-group");
         const demandLabel = demandGroup.append("label").text("Ship Qty");
         attachLabelTooltip(demandLabel, "The number of refrigerators sent in a single shipment to this city.");
 
-        demandGroup.append("div").attr("class", "input-with-unit")
-            .append("input").attr("type", "number").attr("id", "shipment-qty").attr("value", "200").attr("min", "1");
+        demandGroup.append("div")
+            .attr("class", "input-with-unit")
+            .append("input")
+            .attr("type", "number")
+            .attr("id", "shipment-qty")
+            .attr("value", "200")
+            .attr("min", "1");
 
         const freqGroup = controlsDiv.append("div").attr("class", "input-group");
         const freqLabel = freqGroup.append("label").text("Freq (Days)");
         attachLabelTooltip(freqLabel, "How often shipments are sent (e.g., every 7 days).");
 
-        freqGroup.append("div").attr("class", "input-with-unit")
-            .append("input").attr("type", "number").attr("id", "shipment-freq").attr("value", "7").attr("min", "1");
-
-        controlsDiv.append("button").attr("class", "loc-control-btn").text("Add City")
+        freqGroup.append("div")
+            .attr("class", "input-with-unit")
+            .append("input")
+            .attr("type", "number")
+            .attr("id", "shipment-freq")
+            .attr("value", "7")
+            .attr("min", "1");
+        controlsDiv.append("button")
+            .attr("class", "loc-control-btn")
+            .text("Add City")
+            .style("transform", "translate(0px,9px)")
+            .style("height", "29px")
             .on("click", addCity);
-        controlsDiv.append("button").attr("class", "loc-control-btn remove-all-btn").text("Remove All")
+        controlsDiv.append("button")
+            .attr("class", "loc-control-btn remove-all-btn")
+            .text("Remove All")
+            .style("transform", "translate(0px,9px)")
+            .style("height", "29px")
             .on("click", removeAllCities);
 
         // --- City Info Box (hidden by default) ---
@@ -2001,6 +2023,90 @@ const LocationTab = (() => {
         attachLabelTooltip(avgCostLbl, "The impact of these operational costs on each unit producted.");
         const wagesLbl = summaryDiv.append("div").attr('class', 'summary-row').html(`<span>Median Wage:</span><span id="loc-wage-display">${_currentWageDisplay}</span>`);
         attachLabelTooltip(wagesLbl, "The Median Wage for Production Workers in the designated City.");
+
+        // --- Legend Panel ---
+        const legendRibbonRect = layoutManager.getRibbonRect();
+        const legendRect = {
+            x: 10,
+            y: legendRibbonRect.y - 150,
+            width: 200,
+            height: 140
+        };
+
+        // Legend group
+        const legend = svg.append("g")
+            .attr("class", "legend-panel-wrapper")
+            .attr("transform", `translate(${legendRect.x}, ${legendRect.y})`);
+
+        // Legend box
+        legend.append("rect")
+            .attr("x", 0)
+            .attr("y", 0)
+            .attr("width", 220)
+            .attr("height", 140)
+            .attr("rx", 5)
+            .classed("legend-box", true)
+            .style("pointer-events", "auto");
+
+        // Title
+        legend.append("text")
+            .text("Legend")
+            .attr("x", 110)
+            .attr("y", 20)
+            .classed("legend-title", true);
+
+        // --- 1. Fix coordinates in legendItems (x: 15 instead of -5) ---
+        const legendItems = [
+            { type: "star", label: "Optimal Factory Location", y: 40, x: 0 },
+            { type: "text", label: "City Size ∝ Annual Shipping Volume", y: 65 },
+            { type: "line", width: 2, label: "Low Cost", y: 90, x: 15 },
+            { type: "line", width: 6, label: "High Cost", y: 90, x: 115 },
+            { type: "text", label: "Line Width ∝ Annual Shipping Cost", y: 110 },
+            { type: "text", label: "Line Gaps ∝ Shipping Frequency", y: 130 }
+        ];
+
+        // --- 2. Update the rendering loop ---
+        legendItems.forEach(item => {
+            if (item.type === "line") {
+                const lineEndX = item.x + 30;
+
+                legend.append("line")
+                    .attr("x1", item.x)
+                    .attr("y1", item.y - 2)
+                    .attr("x2", lineEndX)
+                    .attr("y2", item.y - 2)
+                    .style("stroke", "var(--secondary1)")
+                    .style("stroke-width", item.width);
+
+                // Calculate dynamic arrow dimensions based on line width
+                const arrowLen = 4 + (2 * item.width);
+                const arrowHalfWidth = 2 + (1.7 * item.width);
+
+                // Manual Triangle (Arrowhead) at the end of the line
+                legend.append("path")
+                    .attr("d", `M-${arrowLen},-${arrowHalfWidth} L0,0 L-${arrowLen},${arrowHalfWidth}`) // Tip at 0,0
+                    .attr("transform", `translate(${lineEndX + item.width}, ${item.y - 2})`)
+                    .style("fill", "var(--secondary1)")
+                    .style("stroke", "none");
+
+            } else if (item.type === "star") {
+                const starGenerator = d3.symbol().type(d3.symbolStar).size(200);
+
+                legend.append("path")
+                    .attr("d", starGenerator())
+                    .attr("transform", `translate(25, ${item.y})`)
+                    .style("fill", "var(--secondary1)");
+            }
+
+            // Draw Label Text
+            legend.append("text")
+                .text(item.label)
+                .attr("x", item.type === "text" ? 10 : item.x + 40) 
+                .attr("y", item.y + 3)
+                .attr("font-weight", "bold")
+                .style("font-size", "0.75rem")
+                .classed("legend-item-text", true);
+        });
 
         // --- Bottom Ribbon ---
         const ribbonRect = layoutManager.getRibbonRect();
@@ -2666,8 +2772,8 @@ const LocationTab = (() => {
     }
 
     /**
-     * Updates the animated connection lines from the factory to the cities.
-     */
+ * Updates the animated connection lines from the factory to the cities.
+ */
     function updateConnectionLines() {
         if (!projection || !radiusScale || !mapInitialized) return;
 
@@ -2683,9 +2789,9 @@ const LocationTab = (() => {
         // --- Setup Scales based on cost ---
         const costs = cities.map(city => calculateTotalCostForCity(optimalFactoryLocation, city));
         const maxCost = d3.max(costs);
-        const widthScale = d3.scaleLinear().domain([0, maxCost || 1]).range([1, 8]).clamp(true); // Line width by cost
-        const dashScale = d3.scaleLinear().domain([1, TRUCK_CAPACITY_UNITS * 3]).range([5, 30]).clamp(true); // Dash length by qty
-        const gapScale = d3.scaleLinear().domain([1, 30]).range([15, 100]).clamp(true); // Gap length by freq
+        const widthScale = d3.scaleLinear().domain([0, maxCost || 1]).range([1, 8]).clamp(true);
+        const dashScale = d3.scaleLinear().domain([1, TRUCK_CAPACITY_UNITS * 3]).range([5, 30]).clamp(true);
+        const gapScale = d3.scaleLinear().domain([1, 30]).range([15, 100]).clamp(true);
 
         // --- D3 Data Join ---
         const groups = lineGroup.selectAll(".connection-group")
@@ -2700,7 +2806,7 @@ const LocationTab = (() => {
             .attr("class", "connection-group");
 
         enterGroups.append("line").attr("class", "connection-line-bg"); // Solid background line
-        enterGroups.append("line").attr("class", "connection-line"); // Animated dashed line
+        enterGroups.append("line").attr("class", "connection-line");    // Animated dashed line
 
         // --- Update (Enter + Merge) ---
         enterGroups.merge(groups).each(function (d) {
@@ -2722,86 +2828,94 @@ const LocationTab = (() => {
             // If factory is inside circle, hide line
             if (lineLength < radius) {
                 group.selectAll('line').style('display', 'none');
-                group.select(".connection-line").interrupt(); // Stop animation
+                group.select(".connection-line").interrupt();
                 return;
             } else {
                 group.selectAll('line').style('display', null);
             }
 
             // Calculate new end point at edge of circle
-            const newEndPointX = endPoint[0] - (dx / lineLength) * radius;
-            const newEndPointY = endPoint[1] - (dy / lineLength) * radius;
+            const targetX = endPoint[0] - (dx / lineLength) * radius;
+            const targetY = endPoint[1] - (dy / lineLength) * radius;
 
             const strokeWidth = widthScale(calculateTotalCostForCity(optimalFactoryLocation, d));
 
-            // Update background line
+            // Update background line (Instant update)
             group.select(".connection-line-bg")
                 .attr("x1", startPoint[0]).attr("y1", startPoint[1])
-                .attr("x2", newEndPointX).attr("y2", newEndPointY)
+                .attr("x2", targetX).attr("y2", targetY)
                 .attr("marker-end", "url(#arrowhead)")
+                .style("fill", "var(--secondary1")
+                .style("stroke", "var(--secondary1)")
                 .style("stroke-width", strokeWidth);
 
-            // Update animated line
-            const animLine = group.select(".connection-line")
-                .attr("x1", startPoint[0]).attr("y1", startPoint[1])
-                .attr("x2", newEndPointX).attr("y2", newEndPointY)
-                .style("stroke-width", strokeWidth)
-                .attr("marker-end", "url(#arrowhead)");
+            // --- Animated Line Logic ---
+            const animLine = group.select(".connection-line");
 
-            // --- Start/Restart Animation ---
-            animLine.interrupt();
+            // 1. Check if the line is already at the destination
+            const currentX2 = parseFloat(animLine.attr("x2"));
+            const currentY2 = parseFloat(animLine.attr("y2"));
+            const distToTarget = Math.sqrt(Math.pow(currentX2 - targetX, 2) + Math.pow(currentY2 - targetY, 2));
 
-            // Calculate pixel length for animation
-            const pixelLength = Math.sqrt(dx * dx + dy * dy);
+            // If we are already close enough (e.g., < 2px), DO NOT restart the animation.
+            // This prevents the "retriggers a second time" issue.
+            if (!isNaN(distToTarget) && distToTarget < 2.0) {
+                // Just update stroke/dash properties to match any data changes, but don't reset length
+                animLine
+                    .style("stroke-width", strokeWidth)
+                    .attr("x1", startPoint[0]).attr("y1", startPoint[1]);
+                return;
+            }
+
+            // 2. If we are NOT at the target (new city, or factory moved), reset and animate.
+            animLine.interrupt(); // Stop existing animations
 
             // Define dash pattern
             const dashArray = `${dashScale(d.qty)} ${gapScale(d.freq)}`;
             const dashTotal = dashScale(d.qty) + gapScale(d.freq);
 
-            // Dynamic growth duration
+            // Initialize dashed line collapsed at start (x2=x1, y2=y1)
+            animLine
+                .attr("x1", startPoint[0]).attr("y1", startPoint[1])
+                .attr("x2", startPoint[0]).attr("y2", startPoint[1]) // Reset length to 0
+                .style("stroke-width", strokeWidth)
+                .style("fill", "var(--secondary1")
+                .style("stroke", "var(--secondary1)")
+                .attr("marker-end", "url(#arrowhead)")
+                .attr("stroke-dasharray", dashArray)
+                .attr("stroke-dashoffset", 0);
+
+            // Calculate duration based on length
+            const pixelLength = Math.sqrt(dx * dx + dy * dy);
             const growDuration = Math.max(800, Math.min(4000, pixelLength * 2));
 
-            // Initialize dashed line collapsed at start
-            animLine
-                .attr("stroke-dasharray", dashArray)
-                .attr("stroke-dashoffset", 0) // dash visible immediately
-                .attr("x2", startPoint[0])
-                .attr("y2", startPoint[1]);
-
-            // Compute target position
-            const targetX = newEndPointX;
-            const targetY = newEndPointY;
-
-            // Start simultaneous animations
+            // Start Animation Sequence
             animateLine(animLine, targetX, targetY, growDuration, dashTotal);
-
-            function animateLine(line, targetX, targetY, growDuration, dashTotal) {
-                // 1️⃣ Animate the line length (x2,y2 grows from start → end)
-                line
-                    .transition("grow")
-                    .duration(growDuration)
-                    .attr("x2", targetX)
-                    .attr("y2", targetY)
-                    .on("end", function () {
-                        // Continue dash motion once fully extended
-                        repeatMotion(line, dashTotal);
-                    });
-
-                // 2️⃣ Animate dash motion *concurrently* with length growth
-                repeatMotion(line, dashTotal);
-            }
-
-            function repeatMotion(line, dashTotal) {
-                if (!line.node()?.isConnected) return;
-                line
-                    .attr("stroke-dashoffset", dashTotal)
-                    .transition("move")
-                    .ease(d3.easeLinear)
-                    .duration(600)
-                    .attr("stroke-dashoffset", 0)
-                    .on("end", () => repeatMotion(line, dashTotal));
-            }
         });
+
+        function animateLine(line, targetX, targetY, growDuration, dashTotal) {
+            // Animate the line length (x2,y2 grows from start → end)
+            line
+                .transition("grow")
+                .duration(growDuration)
+                .ease(d3.easeLinear)
+                .attr("x2", targetX)
+                .attr("y2", targetY);
+
+            // Start dash motion concurrently (continues indefinitely)
+            repeatMotion(line, dashTotal);
+        }
+
+        function repeatMotion(line, dashTotal) {
+            if (!line.node()?.isConnected) return;
+            line
+                .attr("stroke-dashoffset", dashTotal)
+                .transition("move")
+                .ease(d3.easeLinear)
+                .duration(600)
+                .attr("stroke-dashoffset", 0)
+                .on("end", () => repeatMotion(line, dashTotal));
+        }
     }
 
     /**

@@ -1,14 +1,41 @@
 const ProfitTab = (function () {
-    function draw() {
+    // Helper function to create the custom tooltip (assuming it's available globally or defined elsewhere)
+    function createTooltip(id) {
+        let tooltip = d3.select("body").select(`#${id}`);
+        if (tooltip.empty()) {
+            tooltip = d3.select("body").append("div")
+                .attr("class", `d3-tooltip ${id}`)
+                .attr("id", id)
+                .style("opacity", 0);
+        }
+        return tooltip;
+    }
+
+    // Assuming BUILD_RATIOS and root element reference are available in the scope
+    const root = document.documentElement;
+    // Cache to hold previous pie states so re-draws can animate from prior values
+    let profitPieStateCache = {};
+    let previousBaselineY = 0;
+
+    function draw(isResize = false) {
         // --- INITIAL SETUP ---
-        const svg = d3.select("#profit-panel");
         const container = document.getElementById('svg-container');
         const { clientWidth: width, clientHeight: height } = container;
-        svg.selectAll("*").remove();
 
-        svg.append("defs");
+        const svg = d3.select("#profit-panel");
 
-        const viewportW = Math.max(320, window.innerWidth || width);
+        // Clear previous drawing to prevent duplicates during rapid resizes
+        if (isResize) {
+            svg.selectAll("g#profit-root").remove();
+        }
+
+        const rootG = svg.selectAll("g#profit-root").data([null]).join("g").attr("id", "profit-root");
+
+        // Append defs if not exists
+        if (svg.select("defs").empty()) svg.append("defs");
+        const defs = svg.select("defs");
+
+        const viewportW = Math.max(320, width);
         const uiScale = Math.max(0.8, Math.min(2.0, viewportW / 1440));
 
         const sizes = {
@@ -21,9 +48,14 @@ const ProfitTab = (function () {
 
         document.documentElement.style.setProperty('--profit-ui-scale', uiScale);
 
+        // Standard transition used for axis & shape animations
+        const baseDuration = isResize ? 0 : 750;
+        const t = d3.transition().duration(baseDuration).ease(d3.easeCubicOut);
+
         const data = profitMaximizationCache.data;
         if (!data) {
             svg.append("text")
+                .attr("class", "loading-text")
                 .attr("x", width / 2)
                 .attr("y", height / 2)
                 .attr("text-anchor", "middle")
@@ -33,7 +65,10 @@ const ProfitTab = (function () {
             return;
         }
 
-        // --- LAYOUT GEOMETRY (FIXED FOR NARROW RESOLUTIONS) ---
+        // Remove loading text when data is available
+        svg.selectAll("text.loading-text").remove();
+
+        // --- LAYOUT GEOMETRY ---
         const legendSpace = 70 * uiScale;
 
         const margin = {
@@ -43,7 +78,6 @@ const ProfitTab = (function () {
             left: 80 * uiScale
         };
 
-        // This ensures the line charts always have at least 60% of the space.
         const calculatedBreakdownW = Math.max(280 * uiScale, width * 0.32);
         const breakdownWidth = Math.min(width * 0.40, calculatedBreakdownW);
 
@@ -53,8 +87,8 @@ const ProfitTab = (function () {
         const availableChartVerticalSpace = height - margin.top - margin.bottom - legendSpace;
         const chartHeight = availableChartVerticalSpace / 2;
 
-        const chartsGroup = svg.append("g");
-        const breakdownGroup = svg.append("g").attr("transform", `translate(${chartsWidth},0)`);
+        const chartsGroup = rootG.selectAll("g.charts-group").data([null]).join("g").attr("class", "charts-group");
+        const breakdownGroup = rootG.selectAll("g.breakdown-group").data([null]).join("g").attr("class", "breakdown-group").attr("transform", `translate(${chartsWidth},0)`);
 
         // --- INPUTS / METRICS ---
         const op = {
@@ -102,7 +136,6 @@ const ProfitTab = (function () {
         const bisect = d3.bisector(d => d.demand).left;
         const fmtMoney = d3.format("$,.0f");
         const fmtPct = v => `${d3.format(".1f")(v)}%`;
-        const fmtDec = d3.format(".1f");
 
         const actX = x(m.throughputUnitsPerDay);
 
@@ -117,62 +150,61 @@ const ProfitTab = (function () {
         const optimalProfitAtCurrentDemand = data.profitData[Math.max(0, bisect(data.profitData, op.dailyDemand, 1) - 1)].value;
         const currentDemandLostProfit = Math.max(0, optimalProfitAtCurrentDemand - m.dailyGrossProfit);
 
-        const missedProfitTooltipHtml = `<div class="tooltip-header">Missed Profit</div><div class="tooltip-row"><span class="tooltip-key">Max Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div><div class="tooltip-row"><span class="tooltip-key">Lost Profit</span><span>${fmtMoney(currentDemandLostProfit)}</span></div>`;
+        const missedProfitTooltipHtml = `<div class="tooltip-header">Missed Profit</div>
+            <div class="tooltip-row"><span class="tooltip-key">Max Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>
+            <div class="tooltip-row"><span class="tooltip-key">Lost Profit</span><span>${fmtMoney(currentDemandLostProfit)}</span></div>`;
 
-        function drawAxesWithGrid(g, xScale, yScale, isProfit) {
-            g.append("g")
-                .attr("class", "grid-major")
-                .call(d3.axisLeft(yScale).ticks(8).tickSizeOuter(0).tickSize(-chartWidth).tickFormat(""))
-                .selectAll("text")
-                .attr("font-size", sizes.small);
-            g.append("g")
-                .attr("class", "grid-major")
-                .attr("transform", `translate(0,${chartHeight})`)
-                .call(d3.axisBottom(xScale).ticks(12).tickSizeOuter(0).tickSize(-chartHeight).tickFormat(""))
-                .selectAll("text")
-                .attr("font-size", sizes.small);
-            g.append("g")
-                .attr("class", "axis")
-                .attr("transform", `translate(0,${chartHeight})`)
-                .call(d3.axisBottom(xScale).ticks(12).tickSizeOuter(0).tickFormat(d3.format("d")))
-                .selectAll("text")
-                .attr("font-size", sizes.axis);
-            g.append("g")
-                .attr("class", "axis")
-                .call(d3.axisLeft(yScale).ticks(6).tickSizeOuter(0).tickFormat(isProfit ? fmtMoney : d => fmtPct(d)))
-                .selectAll("text")
-                .attr("font-size", sizes.axis);
+        function drawAxesWithGrid(g, xScale, yScale, isProfit, transition) {
+            const yGrid = g.selectAll("g.grid-major-y").data([null]).join("g").attr("class", "grid-major grid-major-y");
+            if (transition) yGrid.transition(transition).call(d3.axisLeft(yScale).ticks(8).tickSizeOuter(0).tickSize(-chartWidth).tickFormat(""));
+            else yGrid.call(d3.axisLeft(yScale).ticks(8).tickSizeOuter(0).tickSize(-chartWidth).tickFormat(""));
+            yGrid.selectAll("text").attr("font-size", sizes.small);
+
+            const xGrid = g.selectAll("g.grid-major-x").data([null]).join("g").attr("class", "grid-major grid-major-x").attr("transform", `translate(0,${chartHeight})`);
+            if (transition) xGrid.transition(transition).call(d3.axisBottom(xScale).ticks(12).tickSizeOuter(0).tickSize(-chartHeight).tickFormat(""));
+            else xGrid.call(d3.axisBottom(xScale).ticks(12).tickSizeOuter(0).tickSize(-chartHeight).tickFormat(""));
+            xGrid.selectAll("text").attr("font-size", sizes.small);
+
+            const xAxis = g.selectAll("g.axis.x-axis").data([null]).join("g").attr("class", "axis x-axis").attr("transform", `translate(0,${chartHeight})`);
+            if (transition) xAxis.transition(transition).call(d3.axisBottom(xScale).ticks(12).tickSizeOuter(0).tickFormat(d3.format("d")));
+            else xAxis.call(d3.axisBottom(xScale).ticks(12).tickSizeOuter(0).tickFormat(d3.format("d")));
+            xAxis.selectAll("text").attr("font-size", sizes.axis);
+
+            const yAxis = g.selectAll("g.axis.y-axis").data([null]).join("g").attr("class", "axis y-axis");
+            if (transition) yAxis.transition(transition).call(d3.axisLeft(yScale).ticks(6).tickSizeOuter(0).tickFormat(isProfit ? fmtMoney : d => fmtPct(d)));
+            else yAxis.call(d3.axisLeft(yScale).ticks(6).tickSizeOuter(0).tickFormat(isProfit ? fmtMoney : d => fmtPct(d)));
+            yAxis.selectAll("text").attr("font-size", sizes.axis);
         }
 
         // ============================================================
-        // PROFIT CHART (TOP)
+        // 1. PROFIT CHART (TOP)
         // ============================================================
-        const gP = chartsGroup.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
-        drawAxesWithGrid(gP, x, yProfit, true);
+        const gP = chartsGroup.selectAll("g.profit-chart").data([null]).join("g").attr("class", "profit-chart").attr("transform", `translate(${margin.left},${margin.top})`);
+        drawAxesWithGrid(gP, x, yProfit, true, t);
 
-        const vGuideP = gP.append("line").attr("class", "crosshair").style("display", "none");
-        const hGuideP = gP.append("line").attr("class", "crosshair-h").style("display", "none");
-        const vGuideP2 = gP.append("line").attr("class", "crosshair").style("display", "none");
-        const hGuideP2 = gP.append("line").attr("class", "crosshair-h").style("display", "none");
+        const vGuideP = gP.selectAll("line.crosshair").data([null]).join("line").attr("class", "crosshair").style("display", "none");
+        const hGuideP = gP.selectAll("line.crosshair-h").data([null]).join("line").attr("class", "crosshair-h").style("display", "none");
+        const vGuideP2 = gP.selectAll("line.crosshair-2").data([null]).join("line").attr("class", "crosshair crosshair-2").style("display", "none");
+        const hGuideP2 = gP.selectAll("line.crosshair-h-2").data([null]).join("line").attr("class", "crosshair-h crosshair-h-2").style("display", "none");
 
-        const profitHoverRect = gP.append("rect")
+        const profitHoverRect = gP.selectAll("rect.profit-hover").data([null]).join("rect")
+            .attr("class", "profit-hover")
             .attr("width", chartWidth)
             .attr("height", chartHeight)
             .attr("fill", "transparent")
             .style("pointer-events", "all");
 
-        gP.append("path")
-            .datum(data.profitData.filter(d => d.demand > 50))
+        gP.selectAll("path.profit-line-profit").data([data.profitData.filter(d => d.demand > 50)]).join("path")
             .attr("class", "profit-line-profit")
-            .attr("d", d3.line().x(d => x(d.demand)).y(d => yProfit(d.value)));
+            .attr("fill", "none");
+        gP.selectAll("path.profit-line-profit").transition(t).attr("d", d3.line().x(d => x(d.demand)).y(d => yProfit(d.value)));
 
         const y_at_act_profit = yProfit(data.profitData[Math.max(0, bisect(data.profitData, m.throughputUnitsPerDay, 1) - 1)].value);
         const y_current_profit = yProfit(m.dailyGrossProfit);
 
-        gP.append("line")
-            .attr("class", "profit-connector-line")
-            .attr("x1", actX).attr("x2", actX)
-            .attr("y1", y_at_act_profit).attr("y2", y_current_profit);
+        gP.selectAll("line.profit-connector-line").data([null]).join("line").attr("class", "profit-connector-line")
+            .attr("x1", actX).attr("x2", actX);
+        gP.selectAll("line.profit-connector-line").transition(t).attr("y1", y_at_act_profit).attr("y2", y_current_profit);
 
         if (unmetExists) {
             const profitAreaGenerator = d3.area()
@@ -186,31 +218,35 @@ const ProfitTab = (function () {
             const startPoint = { demand: m.throughputUnitsPerDay, value: yProfit.invert(y_at_act_profit) };
             const endPoint = { demand: op.dailyDemand, value: yProfit.invert(yProfit(data.profitData[Math.max(0, bisect(data.profitData, op.dailyDemand, 1) - 1)].value)) };
 
-            gP.append("path")
-                .datum([startPoint, ...areaData.filter(d => d.demand > m.throughputUnitsPerDay && d.demand < op.dailyDemand), endPoint])
+            gP.selectAll("path.lost-profit-area").data([[startPoint, ...areaData.filter(d => d.demand > m.throughputUnitsPerDay && d.demand < op.dailyDemand), endPoint]]).join("path")
                 .attr("class", "lost-profit-area")
-                .attr("d", profitAreaGenerator)
                 .on("mousemove", (ev) => showTT(missedProfitTooltipHtml, ev))
                 .on("mouseleave", hideTT);
+            gP.selectAll("path.lost-profit-area").transition(t).attr("d", profitAreaGenerator);
+        } else {
+            gP.selectAll("path.lost-profit-area").remove();
         }
 
-        gP.append("circle")
+        const pointSel = gP.selectAll("circle.point-now").data([null]).join("circle")
             .attr("class", "point-now")
             .attr("cx", actX)
-            .attr("cy", y_current_profit)
             .attr("r", 5 * uiScale)
             .on("mouseenter", (ev) => {
                 if (unmetExists) {
                     showTT(missedProfitTooltipHtml, ev);
                 } else {
                     showTT(
-                        `<div class="tooltip-header">Current Profit</div><div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtMoney(m.dailyGrossProfit)}</span></div><div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
+                        `<div class="tooltip-header">Current Profit</div>
+                        <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtMoney(m.dailyGrossProfit)}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
                         ev);
                 }
             })
             .on("mouseleave", hideTT);
+        pointSel.transition(t).attr("cy", y_current_profit);
 
-        gP.append("text")
+        gP.selectAll("text.profit-title").data([null]).join("text")
+            .attr("class", "profit-title")
             .attr("x", chartWidth / 2)
             .attr("y", -10 * uiScale)
             .attr("text-anchor", "middle")
@@ -230,7 +266,10 @@ const ProfitTab = (function () {
             hGuideP2.style("display", null).attr("x1", 0).attr("x2", chartWidth).attr("y1", yProfit(d.value)).attr("y2", yProfit(d.value));
 
             showTT(
-                `<div class="tooltip-header">Demand: ${demandHover}</div><div class="tooltip-row"><span class="tooltip-key">Optimal Profit</span><span>${fmtMoney(d.value)}</span></div><div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${d.config.emp}</span></div><div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${d.config.hrs}</span></div>`,
+                `<div class="tooltip-header">Demand: ${demandHover}</div>
+                <div class="tooltip-row"><span class="tooltip-key">Optimal Profit</span><span>${fmtMoney(d.value)}</span></div>
+                <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${d.config.emp}</span></div>
+                <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${d.config.hrs}</span></div>`,
                 ev
             );
         }).on("mouseleave", () => {
@@ -243,10 +282,10 @@ const ProfitTab = (function () {
 
 
         // ============================================================
-        // LEGEND (SCALED & BOUND)
+        // 2. LEGEND (SCALED & BOUND)
         // ============================================================
         const legendY = margin.top + chartHeight + (legendSpace / 2);
-        const legendG = chartsGroup.append("g");
+        const legendG = chartsGroup.selectAll("g.legend-group").data([null]).join("g").attr("class", "legend-group");
 
         const legItems = [
             { type: 'icon', class: 'point-now', shape: 'circle', label: "Current profit/margin" },
@@ -254,112 +293,102 @@ const ProfitTab = (function () {
             { type: 'text', class: 'text-only', label: "Demand < 50: Use 3-Workstation Config", color: getComputedStyle(root).getPropertyValue('--secondary1').trim() }
         ];
 
-        // Create a temporary container to hold items for measurement
-        const legendContent = legendG.append("g");
+        const legendContent = legendG.selectAll("g.legend-content").data([null]).join("g").attr("class", "legend-content");
 
         let currentX = 0;
         const itemGap = 30 * uiScale;
         const boxPaddingX = 15 * uiScale;
         const boxPaddingY = 8 * uiScale;
 
-        // Draw background rect first
-        const legendBg = legendContent.append("rect")
-            .attr("class", "legend-bg-box")
-            .attr("x", -boxPaddingX)
-            .attr("y", -boxPaddingY - (sizes.body / 4))
+        const legendBg = legendContent.selectAll("rect.legend-bg").data([null]).join("rect").attr("class", "legend-bg")
             .attr("fill", "none")
             .attr("stroke", getComputedStyle(root).getPropertyValue('--accent').trim())
             .attr("stroke-width", 1)
             .attr("stroke-dasharray", "4 2")
             .attr("rx", 4);
 
-        const itemGroup = legendContent.append("g");
+        const itemGroup = legendContent.selectAll("g.item-group").data([null]).join("g").attr("class", "item-group");
         const measurer = svg.append("text").attr("font-size", sizes.body).style("opacity", 0);
 
-        legItems.forEach(item => {
+        const legItemsWithPos = legItems.map(item => {
             measurer.text(item.label);
             const textW = measurer.node().getComputedTextLength();
             const iconW = item.type === 'icon' ? 12 * uiScale : 0;
             const spacing = item.type === 'icon' ? 6 * uiScale : 0;
-            const g = itemGroup.append("g").attr("transform", `translate(${currentX}, 0)`);
-
-            if (item.type === 'icon') {
-                if (item.shape === 'circle') {
-                    g.append("circle").attr("class", item.class).attr("r", 5 * uiScale).attr("cx", 5 * uiScale).attr("cy", -uiScale);
-                } else {
-                    g.append("rect").attr("class", item.class).attr("x", 0).attr("y", -6 * uiScale).attr("width", 10 * uiScale).attr("height", 10 * uiScale);
-                }
-                g.append("text")
-                    .attr("x", 16 * uiScale)
-                    .attr("y", sizes.body / 4)
-                    .attr("font-size", sizes.body)
-                    .attr("fill", item.color)
-                    .text(item.label);
-            } else {
-                g.append("text")
-                    .attr("x", 0)
-                    .attr("y", sizes.body / 4)
-                    .attr("font-size", sizes.body)
-                    .attr("font-weight", "bold")
-                    .attr("fill", item.color)
-                    .text(item.label);
-            }
-
             const totalItemW = iconW + spacing + textW;
+            const xPos = currentX;
             currentX += totalItemW + itemGap;
+            return { ...item, x: xPos };
         });
+
+        const legendItemsSel = itemGroup.selectAll("g.legend-item").data(legItemsWithPos, d => d.label);
+        const legendItemsEnter = legendItemsSel.enter().append("g").attr("class", "legend-item");
+        const legendItemsMerge = legendItemsEnter.merge(legendItemsSel);
+        legendItemsMerge.attr("transform", d => `translate(${d.x},0)`);
+        legendItemsEnter.each(function (d) {
+            const g = d3.select(this);
+            if (d.type === 'icon') {
+                if (d.shape === 'circle') {
+                    g.append("circle").attr("class", d.class).attr("r", 5 * uiScale).attr("cx", 5 * uiScale).attr("cy", -uiScale);
+                } else {
+                    g.append("rect").attr("class", d.class).attr("x", 0).attr("y", -6 * uiScale).attr("width", 10 * uiScale).attr("height", 10 * uiScale);
+                }
+                g.append("text").attr("x", 16 * uiScale).attr("y", sizes.body / 4).attr("font-size", sizes.body).attr("fill", getComputedStyle(root).getPropertyValue('--accent').trim()).text(d.label);
+            } else {
+                g.append("text").attr("x", 0).attr("y", sizes.body / 4).attr("font-size", sizes.body).attr("font-weight", "bold").attr("fill", d.color).text(d.label);
+            }
+        });
+        legendItemsSel.exit().remove();
         measurer.remove();
 
         const totalLegendContentWidth = currentX - itemGap;
 
-        // Size the background box
         legendBg
+            .attr("x", -boxPaddingX)
+            .attr("y", -boxPaddingY - (sizes.body / 4))
             .attr("width", totalLegendContentWidth + (boxPaddingX * 3))
             .attr("height", (sizes.body) + (boxPaddingY));
 
         const fullLegendWidth = totalLegendContentWidth + (boxPaddingX * 2);
 
-        // Check if the full legend fits within the chartWidth; if not, scale it down to fit.
         let legendScale = 1;
         if (fullLegendWidth > chartWidth) {
             legendScale = chartWidth / fullLegendWidth;
         }
 
-        // Center the legend relative to the chart area
         const centeredX = margin.left + (chartWidth - (fullLegendWidth * legendScale)) / 2;
 
-        // Apply transform: Move to center, then Scale
         legendG.attr("transform", `translate(${centeredX}, ${legendY}) scale(${legendScale})`);
         legendContent.attr("transform", `translate(${boxPaddingX}, 0)`);
 
 
         // ============================================================
-        // MARGIN CHART (BOTTOM)
+        // 3. MARGIN CHART (BOTTOM)
         // ============================================================
         const bottomChartY = margin.top + chartHeight + (legendSpace * 1.1);
 
-        const gM = chartsGroup.append("g").attr("transform", `translate(${margin.left},${bottomChartY})`);
-        drawAxesWithGrid(gM, x, yMargin, false);
+        const gM = chartsGroup.selectAll("g.margin-chart").data([null]).join("g").attr("class", "margin-chart").attr("transform", `translate(${margin.left},${bottomChartY})`);
+        drawAxesWithGrid(gM, x, yMargin, false, t);
 
-        const vGuideM = gM.append("line").attr("class", "crosshair").style("display", "none");
-        const hGuideM = gM.append("line").attr("class", "crosshair-h").style("display", "none");
+        const vGuideM = gM.selectAll("line.crosshair").data([null]).join("line").attr("class", "crosshair").style("display", "none");
+        const hGuideM = gM.selectAll("line.crosshair-h").data([null]).join("line").attr("class", "crosshair-h").style("display", "none");
 
-        const marginHoverRect = gM.append("rect")
+        const marginHoverRect = gM.selectAll("rect.margin-hover").data([null]).join("rect")
+            .attr("class", "margin-hover")
             .attr("width", chartWidth)
             .attr("height", chartHeight)
             .attr("fill", "transparent")
             .style("pointer-events", "all");
 
-        gM.append("path")
-            .datum(filteredMarginData)
+        const marginLineSel = gM.selectAll("path.profit-line-margin").data([filteredMarginData]).join("path")
             .attr("class", "profit-line-margin")
-            .attr("d", d3.line().x(d => x(d.demand)).y(d => yMargin(d.value)));
+            .attr("fill", "none");
+        marginLineSel.transition(t).attr("d", d3.line().x(d => x(d.demand)).y(d => yMargin(d.value)));
 
         const y_at_act_margin = yMargin(data.marginData[Math.max(0, bisect(data.marginData, m.throughputUnitsPerDay, 1) - 1)].value);
         const y_current_margin = yMargin(m.grossProfitMargin);
 
-        gM.append("line")
-            .attr("class", "profit-connector-line")
+        gM.selectAll("line.profit-connector-line").data([null]).join("line").attr("class", "profit-connector-line")
             .attr("x1", actX).attr("x2", actX)
             .attr("y1", y_at_act_margin).attr("y2", y_current_margin);
 
@@ -375,31 +404,35 @@ const ProfitTab = (function () {
             const startPoint = { demand: m.throughputUnitsPerDay, value: yMargin.invert(y_at_act_margin) };
             const endPoint = { demand: op.dailyDemand, value: yMargin.invert(yMargin(data.marginData[Math.max(0, bisect(data.marginData, op.dailyDemand, 1) - 1)].value)) };
 
-            gM.append("path")
-                .datum([startPoint, ...areaData.filter(d => d.demand > m.throughputUnitsPerDay && d.demand < op.dailyDemand), endPoint])
+            gM.selectAll("path.lost-profit-area").data([[startPoint, ...areaData.filter(d => d.demand > m.throughputUnitsPerDay && d.demand < op.dailyDemand), endPoint]]).join("path")
                 .attr("class", "lost-profit-area")
                 .attr("d", marginAreaGenerator)
                 .on("mousemove", (ev) => showTT(missedProfitTooltipHtml, ev))
                 .on("mouseleave", hideTT);
+        } else {
+            gM.selectAll("path.lost-profit-area").remove();
         }
 
-        gM.append("circle")
+        const pM = gM.selectAll("circle.point-now").data([null]).join("circle")
             .attr("class", "point-now")
             .attr("cx", actX)
-            .attr("cy", y_current_margin)
             .attr("r", 5 * uiScale)
             .on("mouseenter", (ev) => {
                 if (unmetExists) {
                     showTT(missedProfitTooltipHtml, ev);
                 } else {
                     showTT(
-                        `<div class="tooltip-header">Current Margin</div><div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtPct(m.grossProfitMargin)}</span></div><div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
+                        `<div class="tooltip-header">Current Margin</div>
+                        <div class="tooltip-row"><span class="tooltip-key">Value</span><span>${fmtPct(m.grossProfitMargin)}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-key">Throughput</span><span>${m.throughputUnitsPerDay.toFixed(0)} units</span></div>`,
                         ev);
                 }
             })
             .on("mouseleave", hideTT);
+        pM.transition(t).attr("cy", y_current_margin);
 
-        gM.append("text")
+        gM.selectAll("text.margin-title").data([null]).join("text")
+            .attr("class", "margin-title")
             .attr("x", chartWidth / 2)
             .attr("y", -10 * uiScale)
             .attr("text-anchor", "middle")
@@ -407,7 +440,8 @@ const ProfitTab = (function () {
             .attr("font-weight", "bold")
             .text("Max Gross Profit Margin vs Daily Demand");
 
-        gM.append("text")
+        gM.selectAll("text.margin-x-label").data([null]).join("text")
+            .attr("class", "margin-x-label")
             .attr("x", chartWidth / 2)
             .attr("y", chartHeight + (margin.bottom - (12 * uiScale)))
             .attr("text-anchor", "middle")
@@ -424,7 +458,10 @@ const ProfitTab = (function () {
             vGuideM.style("display", null).attr("x1", x(dM.demand)).attr("x2", x(dM.demand)).attr("y1", 0).attr("y2", chartHeight);
             hGuideM.style("display", null).attr("x1", 0).attr("x2", chartWidth).attr("y1", yMargin(dM.value)).attr("y2", yMargin(dM.value));
             showTT(
-                `<div class="tooltip-header">Demand: ${demandHover}</div><div class="tooltip-row"><span class="tooltip-key">Optimal Margin</span><span>${fmtPct(dM.value)}</span></div><div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${dM.config.emp}</span></div><div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${dM.config.hrs}</span></div>`,
+                `<div class="tooltip-header">Demand: ${demandHover}</div>
+                <div class="tooltip-row"><span class="tooltip-key">Optimal Margin</span><span>${fmtPct(dM.value)}</span></div>
+                <div class="tooltip-row"><span class="tooltip-key"># Workstations</span><span>${dM.config.emp}</span></div>
+                <div class="tooltip-row"><span class="tooltip-key">Oper Hours</span><span>${dM.config.hrs}</span></div>`,
                 ev
             );
         }).on("mouseleave", () => {
@@ -435,11 +472,13 @@ const ProfitTab = (function () {
 
 
         // ============================================================
-        // BREAKDOWN PANEL (RIGHT SIDE)
+        // 4. BREAKDOWN PANEL (RIGHT SIDE)
         // ============================================================
         const totalLabor = op.numEmployees * op.opHours * fin.laborCost;
         const qualityYield = m.qualityYield;
         const totalStress = 1.0 - qualityYield;
+
+        const BUILD_RATIOS = window.BUILD_RATIOS || { super: 1 / 3, ultra: 1 / 3, mega: 1 / 3 };
 
         const perModel = ["super", "ultra", "mega"].map(key => {
             const units = m.throughputUnitsPerDay * BUILD_RATIOS[key];
@@ -448,261 +487,378 @@ const ProfitTab = (function () {
             const cogs = units * fin[`${key}Cogs`];
             const labor = totalLabor * BUILD_RATIOS[key];
             const rework = failedUnits * fin[`${key}Rework`];
-            const totalCosts = cogs + labor + rework;
-            const profit = sales - totalCosts;
+            const totalCost = cogs + labor + rework;
+            const netRevenue = sales;
+            const profit = netRevenue - totalCost;
 
             return {
                 label: key[0].toUpperCase() + key.slice(1),
-                sales, cogs, labor, profit, rework, totalCosts,
-                margin: sales > 0 ? (profit / sales) * 100 : 0
+                sales: sales,
+                cogs: cogs,
+                labor: labor,
+                rework: rework,
+                totalCost: totalCost,
+                netRevenue: netRevenue,
+                profit: profit,
+                margin: netRevenue > 0 ? (profit / netRevenue) * 100 : 0
             };
         });
 
         const totalProfit = d3.sum(perModel, d => d.profit);
-        const totalLaborCost = d3.sum(perModel, d => d.labor);
-        const totalMaterialCost = d3.sum(perModel, d => d.cogs);
-        const totalRework = d3.sum(perModel, d => d.rework);
-        const overallTotalCosts = totalLaborCost + totalMaterialCost + totalRework;
+        const totalSales = d3.sum(perModel, d => d.sales);
+        const totalCosts = d3.sum(perModel, d => d.totalCost);
 
         const pad = Math.max(10 * uiScale, breakdownWidth * 0.05);
+
         const rightTotalH = height;
         const pieSectionHeight = rightTotalH * 0.57;
         const barSectionHeight = rightTotalH * 0.43;
 
-        // ---------- PIE CHARTS ----------
-        const topHalf = breakdownGroup.append("g");
+        // ---------- PART A: ADVANCED PIE CHARTS ----------
+        const topHalf = breakdownGroup.selectAll("g.top-half").data([null]).join("g").attr("class", "top-half");
 
-        // Limit width to breakdownWidth
-        topHalf.append("rect")
+        topHalf.selectAll("rect.breakdown-border").data([null]).join("rect")
             .attr("class", "breakdown-border")
             .attr("x", pad / 2).attr("y", pad / 2)
             .attr("width", Math.max(0, breakdownWidth - pad))
             .attr("height", pieSectionHeight - pad);
 
-        // Vertical space taken by the section subtitle ("Cost & Profit Composition")
-        const sectionSubtitleReservedHeight = 20 * uiScale;
-        const sectionSubtitleY = pad / 2 + sectionSubtitleReservedHeight;
-
-        topHalf.append("text")
+        topHalf.selectAll("text.breakdown-title").data([null]).join("text")
+            .attr("class", "breakdown-title")
             .attr("x", pad / 2 + (breakdownWidth - pad) / 2)
-            .attr("y", sectionSubtitleY)
+            .attr("y", pad / 2 + 20 * uiScale)
             .attr("text-anchor", "middle")
             .attr("font-size", sizes.subtitle)
             .attr("font-weight", "bold")
-            .text("Cost & Profit Composition");
+            .text("Financial Breakdown by Area");
 
-        const revenueColors = {
+        const pieColors = {
             Profit: getComputedStyle(root).getPropertyValue('--primary').trim(),
+            Rework: getComputedStyle(root).getPropertyValue('--failure-color').trim(),
             Labor: getComputedStyle(root).getPropertyValue('--secondary1').trim(),
-            Material: getComputedStyle(root).getPropertyValue('--secondary2').trim(),
-            Rework: getComputedStyle(root).getPropertyValue('--failure-color').trim()
+            Material: getComputedStyle(root).getPropertyValue('--secondary2').trim()
         };
 
         const innerW = breakdownWidth - 2 * pad;
         const innerH = pieSectionHeight - 2 * pad;
 
-        // Pie generator with padding (segment separation)
-        const pieWithPadding = d3.pie()
-            .value(d => d.value)
-            .sort(null)
-            .padAngle(0.02);
-
         const ttPie = createTooltip('profit-pie-tooltip');
 
-        const pies = [
-            { title: "Overall", data: { Profit: totalProfit, Labor: totalLaborCost, Material: totalMaterialCost, Rework: totalRework } },
-            ...perModel.map(d => ({ title: d.label, data: { Profit: d.profit, Labor: d.labor, Material: d.cogs, Rework: d.rework } }))
+        const pieDataList = [
+            {
+                title: "Overall",
+                modelData: perModel,
+                sales: totalSales,
+                costs: totalCosts,
+                profit: totalProfit,
+                margin: m.grossProfitMargin
+            },
+            ...perModel.map(d => ({
+                title: d.label,
+                modelData: [d],
+                sales: d.sales,
+                costs: d.totalCost,
+                profit: d.profit,
+                margin: d.margin
+            }))
         ];
 
         const cols = 2;
-        const rowsP = Math.ceil(pies.length / cols);
+        const rowPositions = [0.3, 0.74];
         const cellW = innerW / cols;
-        const cellH = innerH / rowsP;
+        const cellH = innerH / (pieDataList.length > 2 ? 2 : 1);
 
-        const pieLegendReservedHeight = 20 * uiScale;
-        const pieChartAreaYStart = sectionSubtitleY + 10 * uiScale;
-        const chartGridHeight = innerH - pieChartAreaYStart - pieLegendReservedHeight;
-        const verticalSpacePerPieRow = chartGridHeight / rowsP;
-        const pieTitleReservedHeight = sizes.body + 8 * uiScale;
-        const dynamicMaxRadius = Math.min(cellW / 2, (verticalSpacePerPieRow - pieTitleReservedHeight) / 2);
-        const maxCellRadius = dynamicMaxRadius * 0.95;
+        const maxFinancialValue = d3.max(pieDataList, d => Math.max(0, d.sales, d.costs));
+        const maxRadius = Math.min(cellW, cellH) * 0.4;
 
-        const verticalCenterPositions = [];
-        for (let r = 0; r < rowsP; r++) {
-            verticalCenterPositions.push(
-                pieChartAreaYStart + (r * verticalSpacePerPieRow) + pieTitleReservedHeight + maxCellRadius
-            );
-        }
+        const radiusScale = d3.scaleSqrt()
+            .domain([0, maxFinancialValue])
+            .range([0, maxRadius])
+            .clamp(true);
 
-        pies.forEach((pd, i) => {
-            const row = Math.floor(i / cols);
-            const col = i % cols;
+        const anglePie = d3.pie().value(d => d.value).sort(null);
+        const halfPadding = 0.05;
 
-            const cx = pad + cellW * (col + 0.5);
-            const cy = verticalCenterPositions[row]; // Use dynamic center Y based on row
+        // The core complex drawing function
+        function drawAdvancedPieChart(g, data, isLoss, maxR) {
+            const { sales, costs, profit, modelData, title, margin } = data;
 
-            const baseR = maxCellRadius;
+            // Calculate radii
+            const R_profit = radiusScale(Math.max(0, profit));
+            const R_revenue = radiusScale(sales);
+            // Used for scaling the outer ring loss area
+            const R_costs = radiusScale(costs);
 
-            const g = topHalf.append("g").attr("transform", `translate(${cx}, ${cy})`);
+            const pieAnimDur = 750;
 
-            const totalCosts = pd.data.Labor + pd.data.Material + pd.data.Rework;
-            const totalRevenue = pd.data.Profit + totalCosts;
-            const isLoss = pd.data.Profit < 0;
+            // --- 1. Inner Ring: Profit Circle ---
+            const innerRadiusStart = Math.max(0, R_profit);
+            const prevState = profitPieStateCache && profitPieStateCache[title] ? profitPieStateCache[title] : null;
+            const prevCenterR = prevState ? (prevState.centerR || 0) : 0;
 
-            const maxAreaValue = isLoss ? totalCosts : totalRevenue; // Loss: scale to total costs. Profit: scale to total revenue.
-            const rScale = d3.scaleSqrt()
-                .domain([0, maxAreaValue])
-                .range([0, baseR]);
+            if (profit > 0) {
+                const centerSel = g.selectAll("circle.profit-center-circle").data([profit]);
+                const centerEnter = centerSel.enter().append("circle")
+                    .attr("class", "profit-pie-slice profit-center-circle")
+                    .attr("r", prevCenterR)
+                    .attr("fill", pieColors.Profit)
+                    .on("mousemove", (ev) => ttPie.html(
+                        `<div class="tooltip-header">${title}: Profit</div>
+                        <div class="tooltip-row"><span class="tooltip-key">Profit</span><span>${fmtMoney(profit)}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-key">Margin</span><span>${fmtPct(margin)}</span></div>`
+                    ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px").style("opacity", 1))
+                    .on("mouseleave", () => ttPie.style("opacity", 0));
 
-            const buffer = 2 * uiScale;
-
-            const costData = [
-                { label: "Labor", value: pd.data.Labor },
-                { label: "Material", value: pd.data.Material },
-                { label: "Rework", value: pd.data.Rework }
-            ].filter(d => d.value > 1e-6);
-
-            const costPie = pieWithPadding(costData);
-
-            // --- DRAWING LOGIC ---
-
-            if (!isLoss) {
-                // PROFITABLE SCENARIO: Nested Circle (Profit) + Doughnut (Cost Breakdown)
-
-                let innerRadius = rScale(pd.data.Profit);
-                const outerRadius = rScale(totalRevenue);
-
-                const donutArc = d3.arc().innerRadius(innerRadius + buffer).outerRadius(outerRadius);
-
-                // Doughnut Chart (Costs)
-                g.selectAll(".cost-slice")
-                    .data(costPie)
-                    .join("path")
-                    .attr("class", "cost-slice")
-                    .attr("d", donutArc)
-                    .attr("fill", d => revenueColors[d.data.label])
-                    .on("mouseenter", () => ttPie.style("opacity", 1))
-                    .on("mouseleave", () => ttPie.style("opacity", 0))
-                    .on("mousemove", (ev, d) => {
-                        const [mouseX, mouseY] = d3.pointer(ev);
-                        const distanceSq = mouseX * mouseX + mouseY * mouseY;
-
-                        if (distanceSq < innerRadius * innerRadius) {
-                            // Over the inner profit circle
-                            ttPie.html(
-                                `<div class="tooltip-header">${pd.title}: Gross Profit</div><div class="tooltip-row"><span class="tooltip-key">Amount</span><span>${fmtMoney(pd.data.Profit)}</span></div><div class="tooltip-row"><span class="tooltip-key">Margin</span><span>${(totalRevenue > 0 ? (pd.data.Profit / totalRevenue * 100) : 0).toFixed(1)}%</span></div>`
-                            ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
-                        } else {
-                            // Over the cost slice
-                            const costTotal = d3.sum(costData, r => r.value);
-                            ttPie.html(
-                                `<div class="tooltip-header">${pd.title}: ${d.data.label} Cost</div><div class="tooltip-row"><span class="tooltip-key">Amount</span><span>${fmtMoney(d.data.value)}</span></div><div class="tooltip-row"><span class="tooltip-key">Share of Total Costs</span><span>${(costTotal > 0 ? (d.data.value / costTotal * 100) : 0).toFixed(1)}%</span></div>`
-                            ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
-                        }
+                const centerMerged = centerEnter.merge(centerSel);
+                if (isResize) {
+                    centerMerged.attr("r", R_profit);
+                    centerMerged.each(function (d) { this._currentR = R_profit; });
+                } else {
+                    centerMerged.transition().duration(pieAnimDur).attrTween("r", function (d) {
+                        const startR = (typeof this._currentR !== 'undefined') ? this._currentR : prevCenterR || 0;
+                        const i = d3.interpolate(startR, R_profit);
+                        this._currentR = R_profit;
+                        return t => i(t);
                     });
-
-                // Inner Profit Circle (The colored part)
-                g.append("circle")
-                    .attr("class", "profit-circle")
-                    .attr("r", innerRadius)
-                    .attr("fill", revenueColors.Profit);
-
-                // Dedicated invisible circle for tooltip
-                g.append("circle")
-                    .attr("class", "profit-tooltip-target")
-                    .attr("r", innerRadius)
-                    .attr("fill", "transparent")
-                    .style("pointer-events", "all")
-                    .on("mouseenter", () => ttPie.style("opacity", 1))
-                    .on("mouseleave", hideTT)
-                    .on("mousemove", (ev) => {
-                        ttPie.html(
-                            `<div class="tooltip-header">${pd.title}: Gross Profit</div><div class="tooltip-row"><span class="tooltip-key">Amount</span><span>${fmtMoney(pd.data.Profit)}</span></div><div class="tooltip-row"><span class="tooltip-key">Margin</span><span>${(totalRevenue > 0 ? (pd.data.Profit / totalRevenue * 100) : 0).toFixed(1)}%</span></div>`
-                        ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
-                    });
-
-                // Outer Revenue Border
-                const totalArc = d3.arc().innerRadius(outerRadius + 1.5 * uiScale).outerRadius(outerRadius + 1.5 * uiScale);
-                g.append("path")
-                    .attr("class", "profit-pie-border")
-                    .attr("d", totalArc({ startAngle: 0, endAngle: 2 * Math.PI }));
-
+                }
+                centerSel.exit().transition().duration(pieAnimDur).attrTween("r", function () {
+                    const startR = (typeof this._currentR !== 'undefined') ? this._currentR : R_profit;
+                    const i = d3.interpolate(startR, 0);
+                    this._currentR = 0;
+                    return t => i(t);
+                }).remove();
             } else {
-                // LOSS SCENARIO: Inner Pie (Covered Costs) + Blinking Doughnut (Unrecovered Costs)
-
-                // Total Costs Ring
-                const outerRadius = rScale(totalCosts);
-                const innerRadius = rScale(totalRevenue);
-
-                const innerPieArc = d3.arc().innerRadius(0).outerRadius(innerRadius);
-                const outerDonutArc = d3.arc().innerRadius(innerRadius + buffer).outerRadius(outerRadius);
-
-                const unrecoveredCosts = totalCosts - totalRevenue;
-                const netLossMargin = totalRevenue > 0 ? (Math.abs(pd.data.Profit) / totalRevenue * 100) : 0;
-
-                // Inner Pie Chart (Displays proportional costs covered by Revenue)
-                g.selectAll(".inner-cost-slice")
-                    .data(costPie)
-                    .join("path")
-                    .attr("class", "inner-cost-slice")
-                    .attr("d", innerPieArc)
-                    .attr("fill", d => revenueColors[d.data.label])
-                    .on("mouseenter", () => ttPie.style("opacity", 1))
-                    .on("mouseleave", () => ttPie.style("opacity", 0))
-                    .on("mousemove", (ev, d) => {
-                        const shareOfTotalCost = (totalCosts > 0 ? (d.data.value / totalCosts * 100) : 0).toFixed(1);
-                        ttPie.html(
-                            `<div class="tooltip-header">${pd.title}: ${d.data.label} Cost</div><div class="tooltip-row"><span class="tooltip-key">Amount</span><span>${fmtMoney(d.data.value)}</span></div><div class="tooltip-row"><span class="tooltip-key">Share of Total Costs</span><span>${shareOfTotalCost}%</span></div>`
-                        ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
-                    });
-
-                // Outer Blinking Doughnut (Unrecovered Costs/Loss)
-                g.selectAll(".outer-cost-slice")
-                    .data(costPie)
-                    .join("path")
-                    .attr("class", "outer-cost-slice")
-                    .attr("d", outerDonutArc)
-                    .attr("fill", d => revenueColors[d.data.label])
-                    .style("opacity", 0.15)
-                    .on("mouseenter", () => ttPie.style("opacity", 1))
-                    .on("mouseleave", () => ttPie.style("opacity", 0))
-                    .on("mousemove", (ev, d) => {
-                        // Show Total Unrecovered Costs
-                        ttPie.html(
-                            `<div class="tooltip-header">${pd.title}: Total Unrecovered Loss</div><div class="tooltip-row"><span class="tooltip-key">Amount</span><span>${fmtMoney(unrecoveredCosts)}</span></div><div class="tooltip-row"><span class="tooltip-key">Net Loss Margin</span><span>${fmtPct(netLossMargin)}</span></div>`
-                        ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
-                    });
-
-                // Blinking Loss Border (Using the area defined by total costs)
-                const totalArc = d3.arc().innerRadius(outerRadius + 1.5 * uiScale).outerRadius(outerRadius + 1.5 * uiScale);
-                g.append("path")
-                    .attr("class", "profit-pie-border")
-                    .classed("blinking-failure", true) // Triggers your CSS blinking
-                    .attr("d", totalArc({ startAngle: 0, endAngle: 2 * Math.PI }));
+                g.selectAll("circle.profit-center-circle").data([]).exit().remove();
             }
 
+            // --- 2. Middle Ring: Covered Costs Breakdown ---
+            if (R_revenue > innerRadiusStart) {
+                const totalCostsData = modelData.reduce((acc, d) => {
+                    acc.Labor += d.labor;
+                    acc.Material += d.cogs;
+                    acc.Rework += d.rework;
+                    return acc;
+                }, { Labor: 0, Material: 0, Rework: 0 });
 
-            g.append("text")
-                // Position the title above the pie (relative to the pie center cy)
-                .attr("y", -baseR - 10 * uiScale)
+                const middleRingData = Object.entries(totalCostsData)
+                    .map(([label, value]) => ({ label, value }))
+                    .filter(d => d.value > 1e-6);
+
+                const midInner = innerRadiusStart + (innerRadiusStart > 0 ? (3 * uiScale) : uiScale);
+                const midOuter = R_revenue - (3 * uiScale);
+
+                const arcMiddle = d3.arc()
+                    .innerRadius(d => d.innerRadius)
+                    .outerRadius(d => d.outerRadius)
+                    .padAngle(halfPadding);
+
+                const midData = anglePie(middleRingData).map(d => ({ ...d, innerRadius: midInner, outerRadius: midOuter }));
+
+                const midSel = g.selectAll("path.middle-arc").data(midData, d => d.data.label);
+                const midEnter = midSel.enter().append("path")
+                    .attr("class", "profit-pie-slice middle-arc")
+                    .attr("fill", d => pieColors[d.data.label])
+                    .each(function (d) {
+                        const prevArc = prevState && prevState.middle && prevState.middle[d.data && d.data.label ? d.data.label : d.index];
+                        if (prevArc) {
+                            this._current = { ...prevArc };
+                        } else {
+                            this._current = { startAngle: d.startAngle, endAngle: d.startAngle, innerRadius: midInner, outerRadius: midInner };
+                        }
+                    })
+                    .attr("d", function (d) { return arcMiddle(this._current); });
+
+                const midMerged = midEnter.merge(midSel);
+
+                if (isResize) {
+                    midMerged.attr("d", d => arcMiddle({ startAngle: d.startAngle, endAngle: d.endAngle, innerRadius: midInner, outerRadius: midOuter }));
+                } else {
+                    midMerged.transition("shape").duration(pieAnimDur).attrTween("d", function (d) {
+                        const final = { startAngle: d.startAngle, endAngle: d.endAngle, innerRadius: midInner, outerRadius: midOuter };
+                        const i = d3.interpolate(this._current || final, final);
+                        this._current = i(1);
+                        return t => arcMiddle(i(t));
+                    });
+                }
+
+                midMerged.on("mousemove", (ev, d) => {
+                    const totalCostByType = d.data.value;
+                    const share = sales > 0 ? (totalCostByType / sales * 100) : 0;
+                    ttPie.html(
+                        `<div class="tooltip-header">${title}: ${d.data.label}</div>
+                        <div class="tooltip-row"><span class="tooltip-key">Total Cost</span><span>${fmtMoney(totalCostByType)}</span></div>
+                        <div class="tooltip-row"><span class="tooltip-key">% of Revenue</span><span>${share.toFixed(1)}%</span></div>`
+                    ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px").style("opacity", 1);
+                }).on("mouseleave", () => ttPie.style("opacity", 0));
+
+                if (isResize) {
+                    midSel.exit().attr("d", d => arcMiddle({ startAngle: d.startAngle, endAngle: d.startAngle, innerRadius: midInner, outerRadius: midInner })).remove();
+                } else {
+                    midSel.exit().transition().duration(pieAnimDur).attrTween("d", function (d) {
+                        const end = { startAngle: d.startAngle, endAngle: d.startAngle, innerRadius: midInner, outerRadius: midInner };
+                        const i = d3.interpolate(this._current || end, end);
+                        this._current = i(1);
+                        return t => arcMiddle(i(t));
+                    }).remove();
+                }
+            }
+
+            // --- 3. Outer Ring: Unrecovered Costs ---
+            const unrecoveredCost = costs - sales;
+
+            let outData = [];
+            let outOuter = 0;
+            let arcOuter = null;
+
+            // Only visible/calculated if profit is negative.
+            if (profit < 0) {
+                const totalCostsData = modelData.reduce((acc, d) => {
+                    acc.Labor += d.labor;
+                    acc.Material += d.cogs;
+                    acc.Rework += d.rework;
+                    return acc;
+                }, { Labor: 0, Material: 0, Rework: 0 });
+
+                const outerRingData = Object.entries(totalCostsData)
+                    .map(([label, value]) => ({ label, value }))
+                    .filter(d => d.value > 1e-6);
+
+                const outInner = R_revenue + (1 * uiScale);
+                // Scale outer radius based on Total Expenses (R_costs)
+                outOuter = Math.max(R_costs, outInner + (2 * uiScale));
+
+                arcOuter = d3.arc()
+                    .innerRadius(d => d.innerRadius)
+                    .outerRadius(d => d.outerRadius)
+                    .padAngle(halfPadding);
+
+                outData = anglePie(outerRingData).map(d => ({ ...d, innerRadius: outInner, outerRadius: outOuter }));
+            }
+
+            const outSel = g.selectAll("path.outer-arc").data(outData, d => d.data.label);
+
+            const outEnter = outSel.enter().append("path")
+                .attr("class", "profit-pie-slice outer-arc")
+                .each(function (d) {
+                    const prevArc = prevState && prevState.outer && prevState.outer[d.data && d.data.label ? d.data.label : d.index];
+                    if (prevArc) {
+                        this._current = { ...prevArc };
+                    } else {
+                        this._current = { startAngle: d.startAngle, endAngle: d.startAngle, innerRadius: d.innerRadius, outerRadius: d.outerRadius };
+                    }
+                })
+                .attr("d", function (d) { return arcOuter ? arcOuter(this._current) : ""; });
+
+            const outMerged = outEnter.merge(outSel);
+            outMerged
+                .attr("fill", d => pieColors[d.data.label])
+                .style("opacity", 0.3)
+                .classed("blinking-failure", true);
+
+            if (isResize) {
+                outMerged.attr("d", d => arcOuter({ startAngle: d.startAngle, endAngle: d.endAngle, innerRadius: d.innerRadius, outerRadius: d.outerRadius }));
+            } else {
+                outMerged.transition("shape").duration(pieAnimDur).attrTween("d", function (d) {
+                    const final = { startAngle: d.startAngle, endAngle: d.endAngle, innerRadius: d.innerRadius, outerRadius: d.outerRadius };
+                    const i = d3.interpolate(this._current || final, final);
+                    this._current = i(1);
+                    return t => arcOuter ? arcOuter(i(t)) : "";
+                });
+            }
+
+            // Using 'event' explicitly to prevent ReferenceErrors
+            outMerged.on("mousemove", (event) => {
+                const lossMarginDisplay = d3.format(".1f")(margin);
+                ttPie.html(
+                    `<div class="tooltip-header">${title}: Unrecovered Costs</div>
+                    <div class="tooltip-row"><span class="tooltip-key">Unrecovered</span><span>${fmtMoney(unrecoveredCost)}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-key">Loss Margin</span><span>${lossMarginDisplay}%</span></div>`
+                ).style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 24) + "px").style("opacity", 1);
+            })
+                .on("mouseleave", () => ttPie.style("opacity", 0));
+
+            if (isResize) {
+                outSel.exit().remove();
+            } else {
+                outSel.exit().transition().duration(pieAnimDur).style("opacity", 0).remove();
+            }
+
+            // Draw a final border/marker for the largest radius achieved
+            const finalArcRadius = Math.max(R_profit, R_revenue, outOuter);
+
+            const outerArcBorder = d3.arc().innerRadius(d => d.innerRadius).outerRadius(d => d.outerRadius);
+
+            if (finalArcRadius > 0) {
+                const borderSel = g.selectAll("path.profit-pie-border").data([{ innerRadius: finalArcRadius, outerRadius: finalArcRadius + 1.5 * uiScale }]);
+                const borderEnter = borderSel.enter().append("path")
+                    .attr("class", "profit-pie-border")
+                    .attr("d", outerArcBorder({ innerRadius: 0, outerRadius: 0, startAngle: 0, endAngle: 2 * Math.PI }));
+                const borderMerged = borderEnter.merge(borderSel);
+                borderMerged
+                    .classed("blinking-failure", unrecoveredCost > 0)
+                    .attr("d", d => outerArcBorder({ innerRadius: d.innerRadius, outerRadius: d.outerRadius, startAngle: 0, endAngle: 2 * Math.PI }));
+                borderSel.exit().remove();
+            }
+        }
+
+        // --- DRAW ALL PIE CHARTS ---
+        const pieCells = topHalf.selectAll("g.pie-cell").data(pieDataList, d => d.title);
+        const pieEnter = pieCells.enter().append("g").attr("class", "pie-cell").attr("data-profit-title", d => d.title);
+        const pieMerge = pieEnter.merge(pieCells);
+        pieMerge.each(function (d, i) {
+            const row = Math.floor(i / cols);
+            const col = i % cols;
+            const cx = pad + cellW * (col + 0.5);
+            const cy = pad + innerH * rowPositions[row];
+            const g = d3.select(this).attr("transform", `translate(${cx}, ${cy})`).attr("data-profit-title", d.title);
+            const isLoss = d.profit < 0;
+            drawAdvancedPieChart(g, d, isLoss, maxRadius);
+            const titleSel = g.selectAll("text.pie-title").data([d.title]).join("text").attr("class", "pie-title")
+                .attr("y", -maxRadius - (8 * uiScale))
                 .attr("text-anchor", "middle")
                 .attr("font-size", sizes.body)
                 .attr("font-weight", "bold")
-                .text(pd.title);
+                .text(pd => pd);
         });
+        pieCells.exit().remove();
 
-        // --- PIE LEGEND ---
-        const legend2 = topHalf.append("g");
+        try {
+            const newCache = {};
+            d3.selectAll('#profit-panel g[data-profit-title]').each(function () {
+                const g = d3.select(this);
+                const title = g.attr('data-profit-title');
+                if (!title) return;
+                const p = { centerR: 0, middle: {}, outer: {} };
+                const centerNode = this.querySelector('circle.profit-center-circle');
+                if (centerNode) p.centerR = (centerNode._currentR || +d3.select(centerNode).attr('r') || 0);
+                g.selectAll('path.middle-arc').each(function (d) {
+                    const lbl = d.data && d.data.label ? d.data.label : (d.index || 'slice');
+                    p.middle[lbl] = this._current || null;
+                });
+                g.selectAll('path.outer-arc').each(function (d) {
+                    const lbl = d.data && d.data.label ? d.data.label : (d.index || 'slice');
+                    p.outer[lbl] = this._current || null;
+                });
+                newCache[title] = p;
+            });
+            profitPieStateCache = newCache;
+        } catch (e) {
+        }
+
+        // ============================================================
+        // 5. PIE LEGEND
+        // ============================================================
+        const legend2 = topHalf.selectAll("g.pie-legend").data([null]).join("g").attr("class", "pie-legend");
         const legendItems = [
-            { label: "Profit", color: revenueColors.Profit },
-            { label: "Rework", color: revenueColors.Rework },
-            { label: "Labor", color: revenueColors.Labor },
-            { label: "Material", color: revenueColors.Material }
+            { label: "Profit", color: pieColors.Profit },
+            { label: "Rework", color: pieColors.Rework },
+            { label: "Labor", color: pieColors.Labor },
+            { label: "Material", color: pieColors.Material }
         ];
 
         const rowGapLegend = 18 * uiScale;
         const legendHeight = 2 * rowGapLegend;
-        const legendBaseY = pieSectionHeight - pad - (legendHeight + uiScale);
+        const legendBaseY = pieSectionHeight - pad - legendHeight - uiScale;
 
         const measurer2 = svg.append("text").style("opacity", 0).attr("font-size", sizes.body);
         function itemWidth(lbl) {
@@ -715,33 +871,36 @@ const ProfitTab = (function () {
         const totalLegendWidth2 = col1Width + colGap + col2Width;
         const startX = Math.max(0, pad + (innerW - totalLegendWidth2) / 2);
 
-        [
+        const legend2Data = [
             { ...legendItems[0], col: 0, row: 0 },
             { ...legendItems[1], col: 1, row: 0 },
             { ...legendItems[2], col: 0, row: 1 },
             { ...legendItems[3], col: 1, row: 1 },
-        ].forEach(item => {
-            const xCol = item.col === 0 ? startX : startX + col1Width + colGap;
-            const yRow = legendBaseY + item.row * rowGapLegend;
-            const g = legend2.append("g").attr("transform", `translate(${xCol}, ${yRow})`);
-            g.append("rect").attr("width", 12 * uiScale).attr("height", 12 * uiScale).attr("y", 3 * uiScale).attr("rx", 2).attr("fill", item.color);
-            g.append("text").attr("x", 18 * uiScale).attr("y", 13 * uiScale).attr("font-size", sizes.body).text(item.label);
+        ];
+        const legendRows = legend2.selectAll("g.legend-row").data(legend2Data, d => d.label);
+        const legendRowsEnter = legendRows.enter().append("g").attr("class", "legend-row");
+        const legendRowsMerge = legendRowsEnter.merge(legendRows);
+        legendRowsMerge.attr("transform", d => {
+            const xCol = d.col === 0 ? startX : startX + col1Width + colGap;
+            const yRow = legendBaseY + d.row * rowGapLegend;
+            return `translate(${xCol}, ${yRow})`;
         });
+        legendRowsEnter.append("rect").attr("width", 12 * uiScale).attr("height", 12 * uiScale).attr("y", 3 * uiScale).attr("rx", 2).attr("fill", d => d.color);
+        legendRowsEnter.append("text").attr("x", 18 * uiScale).attr("y", 13 * uiScale).attr("font-size", sizes.body).text(d => d.label);
+        legendRows.exit().remove();
         measurer2.remove();
 
-        // ---------- BAR CHARTS ----------
-        const bottomHalf = breakdownGroup.append("g").attr("transform", `translate(0, ${pieSectionHeight})`);
+        // ---------- PART B: BAR CHARTS ----------
+        const bottomHalf = breakdownGroup.selectAll("g.bottom-half").data([null]).join("g").attr("class", "bottom-half").attr("transform", `translate(0, ${pieSectionHeight})`);
 
-        // Ensure rect stays within bounds
-        bottomHalf.append("rect")
+        bottomHalf.selectAll("rect.breakdown-border").data([null]).join("rect")
             .attr("class", "breakdown-border")
             .attr("x", pad / 2).attr("y", pad / 2)
             .attr("width", Math.max(0, breakdownWidth - pad))
             .attr("height", barSectionHeight - pad);
 
-        // --- Adjusted margins and shifted chart up ---
         const barM = { top: 25 * uiScale, right: 10 * uiScale, bottom: 40 * uiScale, left: 10 * uiScale };
-        bottomHalf.append("text")
+        bottomHalf.selectAll("text.breakdown-title").data([null]).join("text")
             .attr("x", pad / 2 + (breakdownWidth - pad) / 2)
             .attr("y", pad / 2 + 20 * uiScale)
             .attr("text-anchor", "middle")
@@ -770,34 +929,39 @@ const ProfitTab = (function () {
         const yAxisSpace = maxLabelWidth + 15 * uiScale;
         const barW = Math.max(10, breakdownWidth - 2 * pad - barM.right - yAxisSpace - barShiftX);
 
-        const gB = bottomHalf.append("g").attr("transform", `translate(${pad + barShiftX},${pad + barM.top})`);
+        const gB = bottomHalf.selectAll("g.bars-group").data([null]).join("g").attr("class", "bars-group").attr("transform", `translate(${pad + barShiftX},${pad + barM.top})`);
         const xBand = d3.scaleBand()
             .domain(perModel.map(d => d.label))
             .range([yAxisSpace, yAxisSpace + barW])
             .padding(0.25);
 
-        gB.append("g")
-            .attr("transform", `translate(${yAxisSpace},0)`)
-            .call(d3.axisLeft(yBar).ticks(5).tickFormat(d3.format("~s")))
-            .selectAll("text")
-            .attr("font-size", sizes.axis);
+        const gBY = gB.selectAll("g.y-axis").data([null]).join("g").attr("class", "y-axis").attr("transform", `translate(${yAxisSpace},0)`);
+        if (t) gBY.transition(t).call(d3.axisLeft(yBar).ticks(5).tickFormat(d3.format("~s")));
+        else gBY.call(d3.axisLeft(yBar).ticks(5).tickFormat(d3.format("~s")));
+        gBY.selectAll("text").attr("font-size", sizes.axis);
 
-        gB.append("g")
-            .attr("transform", `translate(0,${barH})`)
-            .call(d3.axisBottom(xBand))
-            .selectAll("text")
-            .attr("font-size", sizes.axis);
+        const gBX = gB.selectAll("g.x-axis").data([null]).join("g").attr("class", "x-axis").attr("transform", `translate(0,${barH})`);
+        if (t) gBX.transition(t).call(d3.axisBottom(xBand));
+        else gBX.call(d3.axisBottom(xBand));
+        gBX.selectAll("text").attr("font-size", sizes.axis);
 
         const zeroY = yBar(0);
-        gB.append("line")
-            .attr("class", "profit-bar-baseline")
-            .attr("x1", yAxisSpace).attr("x2", yAxisSpace + barW)
-            .attr("y1", zeroY).attr("y2", zeroY);
+        const baseline = gB.selectAll("line.profit-bar-baseline").data([null]).join("line").attr("class", "profit-bar-baseline");
+        baseline.attr("x1", yAxisSpace).attr("x2", yAxisSpace + barW);
 
-        const clipId = `clip-bars-${Math.random().toString(36).slice(2)}`;
-        gB.append("defs").append("clipPath")
-            .attr("id", clipId)
-            .append("rect")
+        const currentBaselinePos = baseline.attr("y1") ? +baseline.attr("y1") : zeroY;
+        const oldBaselineY = (previousBaselineY === 0) ? currentBaselinePos : previousBaselineY;
+
+        if (previousBaselineY === 0) {
+            baseline.attr("y1", zeroY).attr("y2", zeroY);
+        }
+
+        previousBaselineY = zeroY;
+
+        const clipId = `profit-bars-clip`;
+        const svgDefs = defs;
+        const clipPathSel = svgDefs.selectAll(`clipPath#${clipId}`).data([null]).join("clipPath").attr("id", clipId);
+        clipPathSel.selectAll("rect").data([null]).join("rect")
             .attr("x", yAxisSpace)
             .attr("y", 0)
             .attr("width", barW)
@@ -810,26 +974,262 @@ const ProfitTab = (function () {
         };
         const ttBar = createTooltip('profit-bar-tooltip');
 
-        const barsG = gB.append("g").attr("clip-path", `url(#${clipId})`);
-        barsG.selectAll("rect")
-            .data(perModel)
-            .join("rect")
+        const barsG = gB.selectAll("g.bars-clip").data([null]).join("g").attr("class", "bars-clip").attr("clip-path", `url(#${clipId})`);
+        const barSelection = barsG.selectAll("rect.profit-bar")
+            .data(perModel, d => d.label);
+
+        const barEnter = barSelection.enter().append("rect")
             .attr("class", "profit-bar")
             .attr("x", d => xBand(d.label))
             .attr("width", xBand.bandwidth())
-            .attr("y", d => (d.profit >= 0 ? yBar(d.profit) : zeroY))
-            .attr("height", d => Math.abs(yBar(d.profit) - zeroY))
+            .attr("y", zeroY)
+            .attr("height", 0)
             .attr("rx", 4)
             .attr("fill", d => modelColor[d.label] || getComputedStyle(root).getPropertyValue('--accent'))
             .on("mouseenter", () => ttBar.style("opacity", 1))
             .on("mouseleave", () => ttBar.style("opacity", 0))
             .on("mousemove", (ev, d) => {
                 ttBar.html(
-                    `<div class="tooltip-header">${d.label}</div><div class="tooltip-row"><span class="tooltip-key">Profit</span><span>${fmtMoney(d.profit)}</span></div><div class="tooltip-row"><span class="tooltip-key">Margin</span><span>${fmtPct(d.margin)}</span></div>`
+                    `<div class="tooltip-header">${d.label}</div>
+                    <div class="tooltip-row"><span class="tooltip-key">Profit</span><span>${fmtMoney(d.profit)}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-key">Margin</span><span>${fmtPct(d.margin)}</span></div>`
                 ).style("left", (ev.clientX + 14) + "px").style("top", (ev.clientY - 24) + "px");
+            })
+            .each(function () { this.__wasEntered = true; })
+            .style("fill-opacity", 1)
+            .style("display", null);
+
+        barEnter.transition(t)
+            .attr("y", d => {
+                const yVal = yBar(d.profit);
+                const safeY = Number.isFinite(yVal) ? yVal : zeroY;
+                return Math.min(safeY, zeroY);
+            })
+            .attr("height", d => {
+                const yVal = yBar(d.profit);
+                const safeY = Number.isFinite(yVal) ? yVal : zeroY;
+                return Math.abs(safeY - zeroY);
+            })
+            .on("end", function () { this._currentProfit = d3.select(this).datum().profit; });
+
+        const barUpdate = barSelection.merge(barEnter);
+
+        let anySignChange = false;
+        barSelection.each(function (d) {
+            const node = this;
+            const prevProfit = (typeof node._currentProfit !== 'undefined') ? node._currentProfit : 0;
+            if ((prevProfit >= 0) !== (d.profit >= 0)) {
+                anySignChange = true;
+            }
+        });
+
+        const sharedTransition = d3.transition()
+            .duration(anySignChange ? Math.round(baseDuration / 2) : baseDuration)
+            .ease(d3.easeLinear);
+
+        baseline.interrupt();
+        if (anySignChange && baseDuration > 0) {
+            baseline.transition(sharedTransition).attr("y1", zeroY).attr("y2", zeroY);
+        } else if (baseDuration > 0) {
+            baseline.transition(sharedTransition).attr("y1", zeroY).attr("y2", zeroY);
+        } else {
+            baseline.attr("y1", zeroY).attr("y2", zeroY);
+        }
+
+        barUpdate
+            .attr("x", d => xBand(d.label))
+            .attr("width", xBand.bandwidth())
+            .attr("fill", d => modelColor[d.label] || getComputedStyle(root).getPropertyValue('--accent'))
+            .style("fill-opacity", 1)
+            .style("display", null)
+            .each(function (d, i, nodes) {
+                const node = this;
+                if (node.__wasEntered) {
+                    delete node.__wasEntered;
+                    node._currentProfit = d.profit;
+                    return;
+                }
+                d3.select(node).interrupt();
+                const prevProfit = (typeof node._currentProfit !== 'undefined') ? node._currentProfit : 0;
+                const prevSign = (prevProfit >= 0);
+                const yVal = yBar(d.profit);
+                const safeY = Number.isFinite(yVal) ? yVal : zeroY;
+                const targetY = Math.min(safeY, zeroY);
+                const targetH = Math.abs(safeY - zeroY);
+
+                if (prevSign === (d.profit >= 0)) {
+                    const currentH = +d3.select(node).attr("height");
+                    d3.select(node).transition(sharedTransition)
+                        .attrTween("y", function () {
+                            const baselineInterpolator = d3.interpolate(oldBaselineY, zeroY);
+                            return function (t) {
+                                const currentBaselineY = baselineInterpolator(t);
+                                if (d.profit >= 0) {
+                                    return currentBaselineY - currentH;
+                                } else {
+                                    return currentBaselineY;
+                                }
+                            };
+                        })
+                        .attr("height", currentH);
+
+                    const transDuration = anySignChange ? Math.round(baseDuration / 2) : baseDuration;
+                    d3.select(node).transition().delay(transDuration).duration(baseDuration).ease(d3.easeCubicOut)
+                        .attr("height", targetH)
+                        .attr("y", targetY)
+                        .on("end", () => { node._currentProfit = d.profit; });
+                } else {
+                    const halfDur = Math.round(baseDuration / 2);
+                    const currentH = +d3.select(node).attr("height");
+                    d3.select(node).transition(sharedTransition)
+                        .attrTween("y", function () {
+                            const baselineInterpolator = d3.interpolate(oldBaselineY, zeroY);
+                            const heightInterpolator = d3.interpolate(currentH, 0);
+                            return function (t) {
+                                const currentBaselineY = baselineInterpolator(t);
+                                const h = heightInterpolator(t);
+                                if (prevSign) {
+                                    return currentBaselineY - h;
+                                } else {
+                                    return currentBaselineY;
+                                }
+                            };
+                        })
+                        .attrTween("height", function () {
+                            return d3.interpolate(currentH, 0);
+                        });
+
+                    const transDuration = anySignChange ? halfDur : baseDuration;
+                    d3.select(node).transition().delay(transDuration).duration(halfDur).ease(d3.easeCubicOut)
+                        .attr("y", targetY)
+                        .attr("height", targetH)
+                        .on("end", function () {
+                            this._currentProfit = d.profit;
+                        });
+                }
             });
 
-        gB.append("text")
+        barSelection.exit().remove();
+
+        const overlaySelection = barsG.selectAll("rect.profit-bar-overlay")
+            .data(perModel, d => d.label);
+
+        const overlayEnter = overlaySelection.enter().append("rect")
+            .attr("class", "profit-bar-overlay")
+            .attr("x", d => xBand(d.label))
+            .attr("width", xBand.bandwidth())
+            .attr("y", zeroY)
+            .attr("height", 0)
+            .attr("rx", 4)
+            .attr("fill", getComputedStyle(root).getPropertyValue('--failure-color').trim())
+            .style("opacity", d => d.profit < 0 ? 0.3 : 0)
+            .style("pointer-events", "none");
+
+        overlayEnter.transition(t)
+            .attr("y", d => {
+                const yVal = yBar(d.profit);
+                const safeY = Number.isFinite(yVal) ? yVal : zeroY;
+                return Math.min(safeY, zeroY);
+            })
+            .attr("height", d => {
+                const yVal = yBar(d.profit);
+                const safeY = Number.isFinite(yVal) ? yVal : zeroY;
+                return Math.abs(safeY - zeroY);
+            })
+            .on("end", function (d) { this._currentProfit = d.profit; d3.select(this).style("opacity", d.profit < 0 ? 0.3 : 0); });
+
+        const overlayUpdate = overlaySelection.merge(overlayEnter);
+
+        overlayUpdate
+            .attr("x", d => xBand(d.label))
+            .attr("width", xBand.bandwidth())
+            .each(function (d) {
+                const node = this;
+                if (node.__wasEntered) {
+                    delete node.__wasEntered;
+                    node._currentProfit = d.profit;
+                    return;
+                }
+                d3.select(node).interrupt();
+                const prevProfit = (typeof node._currentProfit !== 'undefined') ? node._currentProfit : 0;
+                const prevSign = (prevProfit >= 0);
+                const newSign = (d.profit >= 0);
+                const yVal = yBar(d.profit);
+                const safeY = Number.isFinite(yVal) ? yVal : zeroY;
+                const targetY = Math.min(safeY, zeroY);
+                const targetH = Math.abs(safeY - zeroY);
+
+                if (prevSign === newSign) {
+                    const currentH = +d3.select(node).attr("height");
+                    d3.select(node).transition(sharedTransition)
+                        .attrTween("y", function () {
+                            const baselineInterpolator = d3.interpolate(oldBaselineY, zeroY);
+                            return function (t) {
+                                const currentBaselineY = baselineInterpolator(t);
+                                if (d.profit >= 0) {
+                                    return currentBaselineY - currentH;
+                                } else {
+                                    return currentBaselineY;
+                                }
+                            };
+                        })
+                        .attr("height", currentH);
+
+                    const transDuration = anySignChange ? Math.round(baseDuration / 2) : baseDuration;
+                    d3.select(node).transition().delay(transDuration).duration(baseDuration).ease(d3.easeCubicOut)
+                        .attr("height", targetH)
+                        .attr("y", targetY)
+                        .on("start", function (d) {
+                            d3.select(this).style("opacity", d.profit < 0 ? 0.3 : 0);
+                        })
+                        .on("end", () => { node._currentProfit = d.profit; });
+                } else {
+                    const halfDur = Math.round(baseDuration / 2);
+                    const currentH = +d3.select(node).attr("height");
+                    const shrinkTransition = d3.select(node).transition(sharedTransition)
+                        .attrTween("y", function () {
+                            const baselineInterpolator = d3.interpolate(oldBaselineY, zeroY);
+                            const heightInterpolator = d3.interpolate(currentH, 0);
+                            return function (t) {
+                                const currentBaselineY = baselineInterpolator(t);
+                                const h = heightInterpolator(t);
+                                if (prevSign) {
+                                    return currentBaselineY - h;
+                                } else {
+                                    return currentBaselineY;
+                                }
+                            };
+                        })
+                        .attrTween("height", function () {
+                            return d3.interpolate(currentH, 0);
+                        });
+
+                    if (d.profit >= 0) {
+                        shrinkTransition.on("end", function () {
+                            d3.select(this).style("opacity", 0);
+                        });
+                    }
+
+                    const transDuration = anySignChange ? halfDur : baseDuration;
+                    const expandTransition = d3.select(node).transition().delay(transDuration).duration(halfDur).ease(d3.easeCubicOut)
+                        .attr("y", targetY)
+                        .attr("height", targetH)
+                        .on("end", function () {
+                            this._currentProfit = d.profit;
+                        });
+
+                    if (d.profit < 0) {
+                        expandTransition.on("start", function (d) {
+                            d3.select(this).style("opacity", 0.3);
+                        });
+                    }
+                }
+            });
+
+        overlaySelection.exit().remove();
+
+        gB.selectAll("text.y-label").data([null]).join("text")
+            .attr("class", "y-label")
             .attr("transform", "rotate(-90)")
             .attr("x", -barH / 2)
             .attr("y", yAxisSpace - 36 * uiScale)
@@ -838,7 +1238,8 @@ const ProfitTab = (function () {
             .attr("font-weight", "bold")
             .text("Gross Profit");
 
-        gB.append("text")
+        gB.selectAll("text.x-label").data([null]).join("text")
+            .attr("class", "x-label")
             .attr("x", yAxisSpace + barW / 2)
             .attr("y", barH + barM.bottom + uiScale)
             .attr("text-anchor", "middle")
@@ -855,7 +1256,7 @@ const ProfitTab = (function () {
     }
 
     function resize() {
-        draw();
+        draw(true);
     }
 
     return { draw, resize };

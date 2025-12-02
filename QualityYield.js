@@ -174,14 +174,14 @@ function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, worksta
     overtimeStress = isFinite(overtimeStress) ? Math.max(0, Math.min(1, overtimeStress)) : 0;
     wageStress = isFinite(wageStress) ? Math.max(0, Math.min(1, wageStress)) : 0;
 
-    console.log("--- Calculating Quality Stress Breakdown (Compensation Logic) ---");
+    // console.log("--- Calculating Quality Stress Breakdown (Compensation Logic) ---");
 
     // --- Calculate individual stress factors ---
 
     // Workstation Stress (Probabilistic, State-Based)
     // This now calls the NEW (COMPENSATION) function
     const workstationStress = calculateWorkstationStress(workstationDetails, taktTime, stDevPercentage, buildRatios);
-    console.log(`[Quality] 1. Workstation Stress (Raw): ${workstationStress.toFixed(4)}`);
+    // console.log(`[Quality] 1. Workstation Stress (Raw): ${workstationStress.toFixed(4)}`);
 
 
     // Conveyor Fatigue (Probabilistic)
@@ -195,17 +195,17 @@ function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, worksta
     } else if (conveyorSpeed > MAX_CONVEYOR_SPEED) {
         conveyorFatigue = 1; // If mean is already over max, stress is 1
     }
-    console.log(`[Quality] 2. Conveyor Fatigue (Raw): ${conveyorFatigue.toFixed(4)} (Mean: ${conveyorSpeed.toFixed(2)}, Z: ${z_speed.toFixed(2)}, P(X > 15))`);
+    // console.log(`[Quality] 2. Conveyor Fatigue (Raw): ${conveyorFatigue.toFixed(4)} (Mean: ${conveyorSpeed.toFixed(2)}, Z: ${z_speed.toFixed(2)}, P(X > 15))`);
 
 
     // Overtime Stress (from Location tab)
     const overtimeStressFactor = overtimeStress || 0;
-    console.log(`[Quality] 3. Overtime Stress (Raw): ${overtimeStressFactor.toFixed(4)}`);
+    // console.log(`[Quality] 3. Overtime Stress (Raw): ${overtimeStressFactor.toFixed(4)}`);
 
 
     // 4. Wage Stress (from Location tab)
     const wageStressFactor = wageStress || 0;
-    console.log(`[Quality] 4. Wage Stress (Raw): ${wageStressFactor.toFixed(4)}`);
+    // console.log(`[Quality] 4. Wage Stress (Raw): ${wageStressFactor.toFixed(4)}`);
 
 
     // --- Calculate Weighted Loss Breakdown ---
@@ -225,7 +225,7 @@ function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, worksta
 
     // Clamp total stress to a max of 1.0 (100% loss)
     breakdown.totalStress = Math.min(1.0, breakdown.totalStress);
-
+/*
     console.log(`[Quality] Breakdown (Weighted):
 Workstation: ${breakdown.workstationLoss.toFixed(4)} (40%)
 Conveyor: ${breakdown.conveyorLoss.toFixed(4)} (20%)
@@ -233,7 +233,7 @@ Overtime: ${breakdown.overtimeLoss.toFixed(4)} (20%)
 Wage: ${breakdown.wageLoss.toFixed(4)} (20%)
 ---------------------
 Total Stress (Loss): ${breakdown.totalStress.toFixed(4)}`);
-
+*/
     return breakdown;
 }
 

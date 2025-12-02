@@ -656,7 +656,6 @@ const ScheduleTab = (function () {
             .attr("y", metricsBaseY + fontSize)
             .attr("fill", getComputedStyle(root).getPropertyValue('--accent').trim())
             .style("font-size", `${fontSize}px`)
-            .style("font-weight", "600")
             .text(`Cycle Time: ${averageCycleTimeMinutes !== null ? formatMinutesToClock(averageCycleTimeMinutes) : "N/A"}`);
 
         // Process times (one row per model) with responsive spacing
@@ -670,7 +669,6 @@ const ScheduleTab = (function () {
             .attr("y", metricsBaseY + fontSize + (index + 1) * rowLineHeight)
             .attr("fill", getComputedStyle(root).getPropertyValue('--accent').trim())
             .style("font-size", `${fontSize}px`)
-            .style("font-weight", "500")
             .text(`Process Time (${label}): ${value}`);
         });
 
@@ -1280,7 +1278,7 @@ const ScheduleTab = (function () {
         const legendX = containerWidth - 200;
         const legendY = boxY;
         const legend = infoGroup.append("g")
-            .attr("transform", `translate(${legendX + 30}, ${legendY - 20})`);
+            .attr("transform", `translate(${legendX + 30}, ${legendY - 40})`);
 
         // Legend box
         legend.append("rect")
