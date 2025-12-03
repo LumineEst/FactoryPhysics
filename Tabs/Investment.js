@@ -44,8 +44,19 @@ const drawInvestmentPanel = (function () {
     let lastAnalysisResults = null;
     let investmentTabListenersAttached = false;
 
-    function formatNumberWithCommas(num) { return (num === null || num === undefined) ? '' : num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
-    function parseFormattedNumber(str) { return (typeof str !== 'string') ? str : (parseFloat(str.replace(/,/g, '')) || 0); }
+    // --- FORMATTING HELPERS ---
+    function formatNumberWithCommas(num) {
+        if (num === null || num === undefined || isNaN(num)) return '';
+        const parts = num.toString().split(".");
+        parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        return parts.join(".");
+    }
+
+    function parseFormattedNumber(str) {
+        if (typeof str === 'number') return str;
+        if (!str) return 0;
+        return parseFloat(str.replace(/,/g, '')) || 0;
+    }
 
     // --- Calendar Helper Functions ---
     function toIsoDateString(date) {
@@ -196,12 +207,25 @@ const drawInvestmentPanel = (function () {
 
     // --- SAFE UI UPDATE ---
     function updateDemandUI() {
-        const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = formatNumberWithCommas(Math.round(val)); };
+        const setVal = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) {
+                const rounded = Math.round(val);
+                if (el.type === 'number') {
+                    el.value = rounded;
+                } else {
+                    el.value = formatNumberWithCommas(rounded);
+                }
+                el.dataset.committedValue = el.value;
+            }
+        };
         setVal('inv-std', investmentState.std);
         setVal('inv-p90Demand', investmentState.p90Demand);
         setVal('inv-p10Demand', investmentState.p10Demand);
+
         const cvEl = document.getElementById('inv-cv');
         if (cvEl) cvEl.value = investmentState.cv.toFixed(1);
+
         const p50El = document.getElementById('inv-p50Demand');
         if (p50El) p50El.textContent = formatNumberWithCommas(Math.round(investmentState.p50Demand));
     }
@@ -224,7 +248,6 @@ const drawInvestmentPanel = (function () {
 
         // Read Global Inputs (Daily Demand) - these always exist in sidebar
         const dailyDemandEl = document.getElementById('dailyDemand');
-        // Ensure we handle NaN gracefully if the field is temporarily empty
         const rawDemand = parseFloat(dailyDemandEl ? dailyDemandEl.value : 180);
         const meanDemand = (isNaN(rawDemand) ? 180 : rawDemand) * investmentState.workingDays.length;
 
@@ -322,8 +345,9 @@ const drawInvestmentPanel = (function () {
 
         if (!runExpansionCase) {
             const dailyDemand = annualUnitDemand / workingDaysCount;
+            // Pass suppressUI: true to prevent UI updates during calculation
             const metrics = (typeof calculateMetrics === 'function')
-                ? calculateMetrics({ dailyDemand, opHours: baseOpHours, numEmployees: currentEmployees }, finInputs)
+                ? calculateMetrics({ dailyDemand, opHours: baseOpHours, numEmployees: currentEmployees }, finInputs, { suppressUI: true })
                 : { throughputUnitsPerDay: dailyDemand };
 
             const maxAnnualCapacity = metrics.throughputUnitsPerDay * workingDaysCount;
@@ -410,6 +434,13 @@ const drawInvestmentPanel = (function () {
 
         finInputs.laborCost = isNaN(finInputs.laborCost) ? 25 : finInputs.laborCost;
 
+        // Pre-fetch Location Stress Factors ---
+        const overtimeStress = typeof LocationTab !== 'undefined' && LocationTab.getOvertimeStress ? LocationTab.getOvertimeStress() : 0;
+        const wageStress = typeof LocationTab !== 'undefined' && LocationTab.getLocalWageStress ? LocationTab.getLocalWageStress() : 0;
+
+        // Add suppressUI: true to prevent loop from overwriting UI inputs
+        const metricOptions = { overtimeStress, wageStress, skipQualityYield: false, suppressUI: true };
+
         let maxNPV = -Infinity;
         let bestConfig = { emp: 0, hrs: 0 };
         const dailyDemand = Math.ceil(annualUnitDemand / workingDaysCount);
@@ -421,58 +452,70 @@ const drawInvestmentPanel = (function () {
 
             const tempConfig = { ...state.configData };
             state.configData = originalConfigData;
+
+            // Calculate bottleneck once per employee count
             const { bottleneckTime, fastestTime } = calculateWorkstationDetails(numEmployees);
             state.configData = tempConfig;
+
             if (bottleneckTime <= 0 || !isFinite(fastestTime) || fastestTime <= 0) continue;
 
+            // Calculate minimum required hours mathematically
             const productSpacing = fastestTime * 15;
             const throughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckTime;
             const totalRequiredMinutes = (dailyDemand > 1 ? (dailyDemand - 1) * bottleneckTime : 0) + throughputTime;
             const minRequiredHours = totalRequiredMinutes / 60;
+
             if (minRequiredHours > 24) continue;
 
-            let optimalOpHours = -1;
-            for (let opHours = roundUpToQuarter(minRequiredHours); opHours <= 24; opHours += 0.25) {
-                const metrics = calculateMetrics({ dailyDemand, opHours, numEmployees }, finInputs);
-                if (metrics && metrics.throughputUnitsPerDay >= dailyDemand) {
-                    optimalOpHours = opHours;
-                    break;
+            // Start loop from the minimum required quarter-hour
+            const startHours = roundUpToQuarter(minRequiredHours);
+
+            // Iterate through all hours to find the true max NPV (Labor vs. Rework tradeoff)
+            for (let opHours = startHours; opHours <= 24; opHours += 0.25) {
+
+                // Check physical feasibility using fast metrics call
+                const metrics = calculateMetrics({ dailyDemand, opHours, numEmployees }, finInputs, metricOptions);
+                if (!metrics || metrics.throughputUnitsPerDay < dailyDemand) continue;
+
+                // If feasible, calculate NPV
+                const configForAnalysis = { empCount: numEmployees, opHours: opHours };
+
+                const oldLineCost = (costPerFootStraight * ASSEMBLY_LINE_LENGTH) + (costPerBend * ((4 * currentEmployees) - (currentEmployees % 2 === 0 ? 2 : 0)));
+                const newLineCost = (costPerFootStraight * ASSEMBLY_LINE_LENGTH) + (costPerBend * ((4 * configForAnalysis.empCount) - (configForAnalysis.empCount % 2 === 0 ? 2 : 0)));
+                const adjustment = newLineCost < oldLineCost ? -(salvageValue * ((oldLineCost - newLineCost) / oldLineCost)) : (newLineCost - oldLineCost);
+                const equipmentCostForDepreciation = newLineCost < oldLineCost ? 0 : adjustment + installationCost;
+                const initialInvestment = -(installationCost + adjustment);
+                const cashFlows = [initialInvestment];
+                const avgPrice = (finInputs.superSell * BUILD_RATIOS.super) + (finInputs.ultraSell * BUILD_RATIOS.ultra) + (finInputs.megaSell * BUILD_RATIOS.mega);
+                const scaledMfgOverhead = investmentState.mfgOverhead * (configForAnalysis.opHours > 15 ? configForAnalysis.opHours / 15 : 1);
+                const scaledSgaExpenses = investmentState.sgaExpenses * (configForAnalysis.opHours > 15 ? configForAnalysis.opHours / 15 : 1);
+                const macrsSchedule = MACRS_RATES['5-year'];
+
+                for (let t = 1; t <= investmentState.analysisPeriod; t++) {
+                    const revenue = annualUnitDemand * avgPrice;
+                    const totalMaterialCost = annualUnitDemand * ((finInputs.superCogs * BUILD_RATIOS.super) + (finInputs.ultraCogs * BUILD_RATIOS.ultra) + (finInputs.megaCogs * BUILD_RATIOS.mega));
+                    const laborCost = configForAnalysis.empCount * configForAnalysis.opHours * finInputs.laborCost * workingDaysCount;
+
+                    // Rework cost depends on the specific metrics of this hour/employee config
+                    const totalStress = 1.0 - metrics.qualityYield;
+                    const failedUnits = annualUnitDemand * totalStress;
+                    const reworkCost = failedUnits * ((BUILD_RATIOS.super * finInputs.superRework) + (BUILD_RATIOS.ultra * finInputs.ultraRework) + (BUILD_RATIOS.mega * finInputs.megaRework));
+
+                    const taxDepreciation = (t - 1 < macrsSchedule.length && equipmentCostForDepreciation > 0) ? equipmentCostForDepreciation * macrsSchedule[t - 1] : 0;
+                    const ebit = revenue - (totalMaterialCost + laborCost + reworkCost + scaledMfgOverhead + investmentState.freightExpense + scaledSgaExpenses + taxDepreciation);
+                    const nopat = ebit - (ebit > 0 ? ebit * (investmentState.taxRate / 100) : 0);
+                    cashFlows.push(nopat + taxDepreciation);
                 }
-            }
-            if (optimalOpHours === -1) continue;
 
-            const configForAnalysis = { empCount: numEmployees, opHours: optimalOpHours };
+                if (equipmentCostForDepreciation > 0 && investmentState.analysisPeriod > 0) {
+                    cashFlows[investmentState.analysisPeriod] += salvageValue * (1 - (investmentState.taxRate / 100));
+                }
 
-            const oldLineCost = (costPerFootStraight * ASSEMBLY_LINE_LENGTH) + (costPerBend * ((4 * currentEmployees) - (currentEmployees % 2 === 0 ? 2 : 0)));
-            const newLineCost = (costPerFootStraight * ASSEMBLY_LINE_LENGTH) + (costPerBend * ((4 * configForAnalysis.empCount) - (configForAnalysis.empCount % 2 === 0 ? 2 : 0)));
-            const adjustment = newLineCost < oldLineCost ? -(salvageValue * ((oldLineCost - newLineCost) / oldLineCost)) : (newLineCost - oldLineCost);
-            const equipmentCostForDepreciation = newLineCost < oldLineCost ? 0 : adjustment + installationCost;
-            const initialInvestment = -(installationCost + adjustment);
-            const cashFlows = [initialInvestment];
-            const avgPrice = (finInputs.superSell * BUILD_RATIOS.super) + (finInputs.ultraSell * BUILD_RATIOS.ultra) + (finInputs.megaSell * BUILD_RATIOS.mega);
-            const scaledMfgOverhead = investmentState.mfgOverhead * (configForAnalysis.opHours > 15 ? configForAnalysis.opHours / 15 : 1);
-            const scaledSgaExpenses = investmentState.sgaExpenses * (configForAnalysis.opHours > 15 ? configForAnalysis.opHours / 15 : 1);
-            const macrsSchedule = MACRS_RATES['5-year'];
-
-            for (let t = 1; t <= investmentState.analysisPeriod; t++) {
-                const revenue = annualUnitDemand * avgPrice;
-                const totalMaterialCost = annualUnitDemand * ((finInputs.superCogs * BUILD_RATIOS.super) + (finInputs.ultraCogs * BUILD_RATIOS.ultra) + (finInputs.megaCogs * BUILD_RATIOS.mega));
-                const laborCost = configForAnalysis.empCount * configForAnalysis.opHours * finInputs.laborCost * workingDaysCount;
-                const reworkCost = 0;
-                const taxDepreciation = (t - 1 < macrsSchedule.length && equipmentCostForDepreciation > 0) ? equipmentCostForDepreciation * macrsSchedule[t - 1] : 0;
-                const ebit = revenue - (totalMaterialCost + laborCost + reworkCost + scaledMfgOverhead + investmentState.freightExpense + scaledSgaExpenses + taxDepreciation);
-                const nopat = ebit - (ebit > 0 ? ebit * (investmentState.taxRate / 100) : 0);
-                cashFlows.push(nopat + taxDepreciation);
-            }
-
-            if (equipmentCostForDepreciation > 0 && investmentState.analysisPeriod > 0) {
-                cashFlows[investmentState.analysisPeriod] += salvageValue * (1 - (investmentState.taxRate / 100));
-            }
-
-            const currentNPV = calculateNPV(cashFlows, marr / 100);
-            if (currentNPV > maxNPV) {
-                maxNPV = currentNPV;
-                bestConfig = { emp: numEmployees, hrs: optimalOpHours };
+                const currentNPV = calculateNPV(cashFlows, marr / 100);
+                if (currentNPV > maxNPV) {
+                    maxNPV = currentNPV;
+                    bestConfig = { emp: numEmployees, hrs: opHours };
+                }
             }
         }
         return bestConfig;
@@ -514,7 +557,6 @@ const drawInvestmentPanel = (function () {
         scorecardsMerge.select(".inv-scorecard-label").text(d => d.label);
         scorecardsMerge.select(".inv-scorecard-value").style("color", d => d.isError ? 'var(--failure-color)' : null).text(d => d.value);
 
-        // --- FIX: Use positionTooltip helper + Instant Opacity ---
         scorecardsMerge.on("mouseover", function (e, d) {
             tooltip.style("opacity", 1);
             tooltip.html(`<div class="tooltip-row">${d.tooltip}</div>`);
@@ -586,7 +628,26 @@ const drawInvestmentPanel = (function () {
         const lines = chartG.selectAll(".inv-line").data(cumulativeData);
         lines.enter().append("path").attr("class", "inv-line").merge(lines).style("stroke", d => colorScale(d.name)).style("stroke-width", d => d.name.includes('P50') ? '6px' : '2px').transition(t).attr("d", d => lineGen(d.values));
 
-        chartG.select(".inv-break-even").attr("y1", y(0)).attr("y2", y(0)).attr("x1", 0).attr("x2", 0).transition(t).attr("x2", width);
+        const breakEvenLine = chartG.select(".inv-break-even");
+        const currentX2 = parseFloat(breakEvenLine.attr("x2")) || 0;
+        // Break-Even Line Animations
+        if (currentX2 <= 0) {
+            // Initial Load: Animate width from 0 to width
+            breakEvenLine
+                .attr("y1", y(0))
+                .attr("y2", y(0))
+                .attr("x1", 0)
+                .attr("x2", 0)
+                .transition(t)
+                .attr("x2", width);
+        } else {
+            // Updates: Just shift Y position and update width (no drawing animation)
+            breakEvenLine
+                .transition(t)
+                .attr("y1", y(0))
+                .attr("y2", y(0))
+                .attr("x2", width);
+        }
 
         const chartTooltip = createTooltip("inv-chart-tooltip");
         const hitboxes = chartG.selectAll(".inv-hitbox").data(cumulativeData);
@@ -610,6 +671,10 @@ const drawInvestmentPanel = (function () {
     async function draw() {
         // 1. Check if already drawn
         if (!d3.select("#investment-panel .inv-container").empty()) {
+            if (lastAnalysisResults) {
+                renderInvestmentResults(lastAnalysisResults);
+                return;
+            }
             setTimeout(() => updateProbabilisticValues('mean'), 0);
             return;
         }
@@ -659,7 +724,6 @@ const drawInvestmentPanel = (function () {
                     .property("value", currentCount)
                     .attr("data-working-days-list", JSON.stringify(investmentState.workingDays));
 
-                // Re-attach listener by cloning
                 displayButton.replaceWith(displayButton.cloneNode(true));
                 displayButton = document.getElementById('inv-workingDays-button');
                 if (displayButton) {
@@ -672,7 +736,7 @@ const drawInvestmentPanel = (function () {
                 }
             }
 
-            // Apply Tooltips (Input Labels + New Buttons)
+            // Apply Tooltips
             setTimeout(() => {
                 const tooltips = {
                     'inv-analysisPeriod': 'Number of years over which the investment\'s cash flows are projected.',
@@ -694,11 +758,9 @@ const drawInvestmentPanel = (function () {
                 };
 
                 const tooltip = createTooltip("inv-tooltip");
-                const containerElement = container.node();
 
-                // 1. Attach to Input Labels
                 for (const [id, text] of Object.entries(tooltips)) {
-                    const labelElement = containerElement.querySelector(`label[for="${id}"]`);
+                    const labelElement = container.node().querySelector(`label[for="${id}"]`);
                     if (labelElement) {
                         d3.select(labelElement)
                             .on("mouseover", function (e) {
@@ -717,7 +779,6 @@ const drawInvestmentPanel = (function () {
                     }
                 }
 
-                // 2. Attach to Control Buttons (Base Case / Expansion Case)
                 const btnTooltips = {
                     '#inv-baseCaseBtn': 'Building a new Assembly Line based on current configuration.',
                     '#inv-expansionCaseBtn': 'Modifying an Assembly Line based on current configuration to its optimal configurations based on demand levels.'
@@ -755,30 +816,71 @@ const drawInvestmentPanel = (function () {
             .html(`<div id="inv-results-placeholder" style="display: none;"></div><div id="inv-results-display"><div class="inv-scorecard-container"></div><div class="inv-chart-container"></div></div>`);
 
         // 6. Hydrate inputs from state
+        const spinnerFields = new Set(['analysisPeriod', 'marr', 'taxRate', 'costPerFootStraight', 'costPerBend', 'cv']);
+
         Object.keys(investmentState).forEach(key => {
             if (key === 'workingDays' || key === 'currentYear' || key === 'isCalendarInitialized') return;
             const el = document.getElementById(`inv-${key}`);
-            if (el) el.value = investmentState[key];
+            if (el) {
+                // Skip formatting for dropdowns (e.g. Confidence Interval)
+                if (el.tagName === 'SELECT') {
+                    el.value = investmentState[key];
+                    return;
+                }
+
+                if (spinnerFields.has(key)) {
+                    // Spinner Behavior (Number)
+                    el.type = 'number';
+                    el.value = investmentState[key];
+                    el.style.paddingRight = ''; // Clear padding
+                } else {
+                    // Text Behavior (Commas + Align with Spinner)
+                    el.type = 'text';
+                    el.value = formatNumberWithCommas(investmentState[key]);
+                    el.style.paddingRight = '0.9rem';
+
+                    el.addEventListener('focus', function () {
+                        const raw = parseFormattedNumber(this.value);
+                        this.value = raw;
+                    });
+                    el.addEventListener('blur', function () {
+                        const raw = parseFormattedNumber(this.value);
+                        this.value = formatNumberWithCommas(raw);
+                    });
+                }
+            }
         });
 
         // 7. Attach input listeners
         const invInputs = Array.from(container.node().querySelectorAll("input, select")).filter(el => el && el.id !== 'inv-workingDays');
         if (invInputs.length) {
             attachCommitBehavior(invInputs, (id, value) => {
+                const cleanValue = typeof value === 'string' ? parseFormattedNumber(value) : value;
+
                 const key = id.replace('inv-', '');
                 if (key in investmentState) {
-                    investmentState[key] = value;
+                    investmentState[key] = cleanValue;
                 }
                 if (['std', 'cv', 'p90Demand', 'p10Demand', 'ciLevel'].includes(key)) {
                     updateProbabilisticValues(key.replace('Demand', ''));
                 } else {
+                    const isGlobalInput = !(key in investmentState);
+                    const debounceTime = isGlobalInput ? 800 : 500;
+
                     clearTimeout(analysisDebounceTimer);
-                    analysisDebounceTimer = setTimeout(runFullAnalysis, 500);
+                    analysisDebounceTimer = setTimeout(() => {
+                        if (window.isRecalculating) {
+                            analysisDebounceTimer = setTimeout(runFullAnalysis, 200);
+                            return;
+                        }
+                        runFullAnalysis();
+                    }, debounceTime);
                 }
             });
+
             // Attach Middle Drag
             invInputs.forEach(inp => {
-                if (inp.tagName.toLowerCase() === 'input' && (inp.type === 'number' || inp.type === 'range' || (inp.dataset && inp.dataset.type === 'currency'))) {
+                if (inp.tagName.toLowerCase() === 'input') {
                     try { enableMiddleDragNumberInput(inp, 1, 1); } catch (e) { }
                 }
             });
@@ -813,7 +915,32 @@ const drawInvestmentPanel = (function () {
         }
     }
 
-    return { draw, calculate };
+    // --- Public State Updater ---
+    function updateState(key, value) {
+        if (key in investmentState) {
+            investmentState[key] = value;
+
+            const el = document.getElementById(`inv-${key}`);
+            if (el) {
+                const currentVal = parseFormattedNumber(el.value);
+                if (currentVal !== parseFloat(value)) {
+                    if (el.type === 'number') {
+                        el.value = value;
+                    } else {
+                        el.value = formatNumberWithCommas(value);
+                    }
+                    el.dataset.committedValue = el.value;
+                }
+            }
+
+            if (document.getElementById('investment-panel').style.display === 'block') {
+                clearTimeout(analysisDebounceTimer);
+                analysisDebounceTimer = setTimeout(runFullAnalysis, 100);
+            }
+        }
+    }
+
+    return { draw, calculate, updateState };
 })();
 
 const InvestmentTab = drawInvestmentPanel;

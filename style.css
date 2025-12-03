@@ -391,7 +391,7 @@ h4 {
 .input-group-slider {
     margin-bottom: 0.5rem;
     display: grid;
-    grid-template-columns: 0.5fr 0.7fr;
+    grid-template-columns: 0.45fr 0.55fr;
     justify-content: space-between;
     align-items: center;
     flex-grow: 1;
@@ -401,7 +401,7 @@ h4 {
 .input-group-slider label {
     display: inline;
     font-size: 0.9rem;
-    margin-right: 0.5rem;
+    margin-right: 0.4rem;
     opacity: 0.9;
 }
 
@@ -916,31 +916,6 @@ input:checked+.slider {
 
 input:checked+.slider:before {
     transform: translate(80%, -50%);
-}
-
-/* Ensure sidebar mask overlays its contents */
-/* Sidebar overlay layer to ensure mask renders above all sidebar content */
-#workstation-list {
-    position: relative;
-    z-index: 0;
-    /* establish stacking context */
-}
-
-#workstation-list .sidebar-overlay {
-    position: absolute;
-    inset: 0;
-    /* full coverage of sidebar */
-    pointer-events: none;
-    z-index: 2147483647;
-    /* dominate within sidebar context */
-}
-
-#workstation-list .sidebar-overlay .sidebar-mask {
-    position: absolute;
-    left: 0;
-    right: 0;
-    background: var(--white);
-    pointer-events: none;
 }
 
 /* Legend Styles for Standardization */
@@ -1599,36 +1574,6 @@ input:checked+.slider:before {
 /* == Profit Tab Styles                       == */
 /* ============================================= */
 
-.profit-calculating-text {
-    text-anchor: middle;
-    /* fill, font-size etc. can be added if needed */
-}
-
-.profit-grid-major line {
-    stroke: var(--idle-color);
-    stroke-width: 0.75px;
-}
-
-.profit-grid-major path {
-    display: none;
-}
-
-.profit-crosshair {
-    /* Vertical line */
-    stroke: var(--accent);
-    stroke-dasharray: 4 4;
-    /* display is dynamic */
-}
-
-.profit-crosshair-h {
-    /* Horizontal line */
-    stroke: var(--accent);
-    stroke-dasharray: 4 4;
-    opacity: 0.5;
-    /* Static opacity */
-    /* display is dynamic */
-}
-
 .profit-line-profit {
     /* Optimal profit line */
     stroke: var(--primary);
@@ -1643,67 +1588,10 @@ input:checked+.slider:before {
     stroke-width: 2.6px;
 }
 
-.profit-lost-area {
-    /* Area for unmet demand/lost profit */
-    fill: var(--failure-color);
-    opacity: 0.4;
-    /* Static opacity */
-}
-
-.profit-point-now {
-    /* Red dot for current config */
-    fill: var(--failure-color);
-    stroke: var(--white);
-    stroke-width: 2px;
-}
-
-.profit-chart-title {
-    /* Titles above charts */
-    text-anchor: middle;
-    font-weight: 800;
-    /* Original: .style("font-weight", 800) */
-    /* fill can inherit or be set */
-}
-
-.profit-axis-label {
-    /* X-axis label "Daily Demand" */
-    text-anchor: middle;
-    /* Inherits from .vis-panel .axis-label? font-size, font-weight, fill */
-}
-
-.profit-hover-rect {
-    /* Invisible rect for hover interactions */
-    fill: transparent;
-    pointer-events: all;
-}
-
 .profit-connector-line {
     /* Line connecting optimal to current point */
     stroke: var(--accent);
     stroke-width: 1.5px;
-}
-
-/* --- Breakdown Panel Styles --- */
-.profit-breakdown-border {
-    /* Dashed border rects */
-    fill: none;
-    stroke: var(--accent);
-    stroke-width: 2px;
-    stroke-dasharray: 5, 5;
-    /* rx handled by JS */
-}
-
-.profit-panel-title {
-    /* Titles: "Profit Margin Indicators", etc. */
-    text-anchor: middle;
-    font-weight: 800;
-    /* fill can inherit or be set */
-}
-
-.profit-legend-text {
-    /* Text in top legend */
-    font-size: 12px;
-    font-weight: 600;
 }
 
 @keyframes blink-failure-stroke {
@@ -1727,12 +1615,6 @@ input:checked+.slider:before {
     pointer-events: none;
 }
 
-.profit-pie-title {
-    /* Titles above pie charts: "Overall", "Super", etc. */
-    text-anchor: middle;
-    /* fill, font-size, font-weight from shared .pie-title? */
-}
-
 .profit-pie-slice {
     /* Pie chart slices */
     stroke: var(--accent);
@@ -1751,12 +1633,6 @@ input:checked+.slider:before {
     stroke: var(--accent);
     stroke-width: 1.5px;
     /* fill, rx handled by JS */
-}
-
-.profit-bar-axis-label {
-    /* "Gross Profit", "Model" */
-    text-anchor: middle;
-    /* Inherits from .vis-panel .axis-label? font-size, font-weight, fill */
 }
 
 /* ============================================= */
@@ -1908,7 +1784,7 @@ input:checked+.slider:before {
     margin-top: auto;
     padding-top: 10px;
     border-top: 1px solid #eee;
-    background: #ffffff;
+    background: var(--white);
 }
 
 #investment-panel .inv-button-group {
@@ -2273,9 +2149,16 @@ input:checked+.slider:before {
 #location-panel .location-controls .input-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     flex: 0 0 auto;
     min-width: 70px;
+}
+
+#location-panel .location-controls .input-group #city-select {
+    height: 26px;
+    font-size: 0.85rem;
+    margin-top: 0.3rem;
+    margin-bottom: 0.2rem;
 }
 
 #location-panel .location-controls .input-with-unit {

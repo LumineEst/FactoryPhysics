@@ -153,11 +153,16 @@ An overview video introducing the Project is embedded within the top of the Over
 ```
 ## 👨‍💻 Developers
 
-This project was designed and developed by:
+This project was designed and developed for CS 6630 (Visualization for Data Science), taught by Paul Rosen, Ph.D - Associate Professor, University of Utah.
 
-- **Joel Wood** - MS in Engineering Management (MEM)
+The Project Team was:
+- **Joel Wood** - MS in Engineering Management (MEM), University of Utah
 - **Dhruv Ram** - MS in Computing (Graphics and Visualization Track), University of Utah
 - **Sumaiya Azad** - MS in Computing (Database Management Track), University of Utah
+
+The core premise of this website is an extension of content provided for the Final Project of ME-EN 6182 (Design of Production and Service Systems).  
+This is used with the expressed permission of Pedro Huebner Ph.D. - Associate Professor and Director of Systems Engineering Programs, University of Utah.  
+For additional details on data shown, consult Pages/backend.html which introduces base constraints, algorithms, and calculations used to derive results.  
 
 📫 For questions or collaboration inquiries, feel free to reach out!
 

@@ -8,7 +8,146 @@
 window.stDevPercentage = 0.15;
 
 /**
- * --- MODIFIED ---
+ * --- WageManager (Background Service) ---
+ * Handles async fetching of wage data so the main UI thread isn't blocked.
+ */
+const WageManager = (() => {
+    let _currentStress = 0;
+    let _currentMedianHourly = 0;
+    let _lastParams = { lat: null, lon: null, cost: null };
+
+    // --- API HELPER FUNCTIONS ---
+    async function fetchFipsFromLatLon(lat, lon, timeoutMs = 8000) {
+        const corsProxy = 'https://corsproxy.io/?';
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            // Try Block Level
+            const targetUrl = `https://geo.fcc.gov/api/census/block/find?format=json&latitude=${lat}&longitude=${lon}&showall=true`;
+            const res = await fetch(`${corsProxy}${encodeURIComponent(targetUrl)}`, { signal: controller.signal });
+
+            if (!res.ok) throw new Error(`FCC block lookup failed: ${res.status}`);
+
+            const json = await res.json();
+            clearTimeout(id);
+
+            const blockFIPS = (json.Block && json.Block.FIPS) ? json.Block.FIPS : null;
+
+            if (blockFIPS) {
+                return {
+                    stateFips: (json.State && json.State.FIPS) ? json.State.FIPS : null,
+                    countyFips: (json.County && json.County.FIPS) ? json.County.FIPS : null,
+                    tract: blockFIPS.substring(0, 11),
+                };
+            }
+        } catch (err) {
+
+        } finally {
+            clearTimeout(id);
+        }
+        return null;
+    }
+
+    async function fetchMedianHouseholdIncome({ stateFips, countyFips, tract }, censusApiKey = '') {
+        const corsProxy = 'https://corsproxy.io/?';
+        const year = '2021';
+        const varName = 'B19013_001E';
+        const commonKey = censusApiKey ? `&key=${encodeURIComponent(censusApiKey)}` : '';
+
+        const safeFetch = async (targetUrl) => {
+            try {
+                const res = await fetch(`${corsProxy}${encodeURIComponent(targetUrl)}`);
+                if (res.ok) return await res.json();
+                console.warn(`Census API Error ${res.status}:`, targetUrl);
+            } catch (e) { return null; }
+        };
+
+        const buildUrl = (forParam, inParam) => {
+            return `https://api.census.gov/data/${year}/acs/acs5?get=${varName}&for=${forParam}&in=${inParam}${commonKey}`;
+        };
+
+        // Try Tract
+        if (stateFips && countyFips && tract) {
+            const countyCode = countyFips.slice(-3);
+            const tractCode = tract.substring(5, 11);
+            const url = buildUrl(`tract:${tractCode}`, `state:${stateFips}%20county:${countyCode}`);
+            const data = await safeFetch(url);
+            if (data && data[1] && !isNaN(data[1][0]) && data[1][0] > 0) return Number(data[1][0]);
+        }
+
+        // Fallback to County
+        if (stateFips && countyFips) {
+            const countyCode = countyFips.slice(-3);
+            const url = buildUrl(`county:${countyCode}`, `state:${stateFips}`);
+            const data = await safeFetch(url);
+            if (data && data[1] && !isNaN(data[1][0]) && data[1][0] > 0) return Number(data[1][0]);
+        }
+        return null;
+    }
+
+    function mapWageToStress(medianHourly, setLaborCost) {
+        if (!medianHourly || medianHourly <= 0) return 0;
+        if (setLaborCost >= medianHourly) return 0;
+        const lowBound = medianHourly * 0.6;
+        if (setLaborCost <= lowBound) return 1;
+        return (medianHourly - setLaborCost) / (medianHourly - lowBound);
+    }
+
+    // --- PUBLIC METHODS ---
+
+    async function update(lat, lon, laborCost) {
+        // 1. Cache Check
+        if (_lastParams.lat === lat && _lastParams.lon === lon && _lastParams.cost === laborCost && _currentMedianHourly > 0) {
+            return { medianHourly: _currentMedianHourly, stress: _currentStress };
+        }
+
+        // 2. Fetch Logic (Only if location changed)
+        let newMedianHourly = 0;
+
+        if (lat !== _lastParams.lat || lon !== _lastParams.lon) {
+            const fips = await fetchFipsFromLatLon(lat, lon);
+            if (fips) {
+                const income = await fetchMedianHouseholdIncome(fips);
+                if (income) {
+                    newMedianHourly = income / (52 * 40);
+                }
+            }
+        } else {
+            newMedianHourly = _currentMedianHourly;
+        }
+
+        // 3. State Update Logic
+        if (newMedianHourly > 0) {
+            _currentMedianHourly = newMedianHourly;
+            _currentStress = mapWageToStress(newMedianHourly, laborCost);
+        } else {
+            // Failure: Keep old wage if available, but recalc stress with new cost
+            if (_currentMedianHourly > 0) {
+                _currentStress = mapWageToStress(_currentMedianHourly, laborCost);
+            } else {
+                _currentStress = 0;
+            }
+        }
+
+        // 4. Update Cache Params
+        _lastParams = { lat, lon, cost: laborCost };
+
+        return { medianHourly: _currentMedianHourly, stress: _currentStress };
+    }
+
+    return {
+        update,
+        getStress: () => _currentStress,
+        getMedianHourly: () => _currentMedianHourly
+    };
+})();
+
+// Expose WageManager to other tabs
+window.WageManager = WageManager;
+
+
+/**
  * Helper function to calculate the probabilistic details
  * for a single model type within a single workstation.
  */
@@ -17,10 +156,8 @@ function getModelProbabilistics(elementTimes, taktTime, stDevPercentage) {
         return { mean: 0, stdDev: 0, probOverage: 0 };
     }
 
-    // Calculate the mean total time for this model
     const mean = elementTimes.reduce((sum, t) => sum + t, 0);
 
-    // Calculate the total workstation stDev for this model
     const variance = elementTimes.reduce((sum, t) => {
         const taskStDev = t * stDevPercentage;
         const taskVariance = taskStDev * taskStDev;
@@ -28,10 +165,8 @@ function getModelProbabilistics(elementTimes, taktTime, stDevPercentage) {
     }, 0);
     const stdDev = Math.sqrt(variance);
 
-    // Calculate probability of exceeding takt time
     let probOverage = 0.0;
     if (!isFinite(stdDev) || stdDev <= 0) {
-        // No variability, stress is 0 unless the mean is already over takt.
         probOverage = (mean > taktTime) ? 1.0 : 0.0;
     } else {
         const z = (taktTime - mean) / stdDev;
@@ -45,23 +180,12 @@ function getModelProbabilistics(elementTimes, taktTime, stDevPercentage) {
     };
 }
 
-/**
- * Defines the transition probabilities P(j | i)
- * P(Next Model | Current Model)
- */
 const transitionProbs = {
-    super: { super: 0.0, ultra: 0.7143, mega: 0.2857 }, // From Super
-    ultra: { super: 0.5618, ultra: 0.2135, mega: 0.2247 }, // From Ultra
-    mega: { super: 0.50, ultra: 0.0, mega: 0.50 }  // From Mega
+    super: { super: 0.0, ultra: 0.7143, mega: 0.2857 },
+    ultra: { super: 0.5618, ultra: 0.2135, mega: 0.2247 },
+    mega: { super: 0.50, ultra: 0.0, mega: 0.50 }
 };
 
-
-/**
- * --- REFACTORED (w/ New Logic) ---
- * Calculates the average workstation stress across the entire line.
- * It iterates through each workstation and finds the weighted-average stress
- * based on the new "failure to compensate" logic.
- */
 function calculateWorkstationStress(workstationDetails, taktTime, stDevPercentage, buildRatios) {
     if (!workstationDetails || workstationDetails.length === 0 || !taktTime || taktTime <= 0 || !buildRatios) {
         return 0;
@@ -74,20 +198,17 @@ function calculateWorkstationStress(workstationDetails, taktTime, stDevPercentag
     for (let i = 0; i < workstationDetails.length; i++) {
         const ws = workstationDetails[i];
 
-        // 1. Get probabilistics for each model
         const p = {
             super: getModelProbabilistics(ws.superElementTimes, taktTime, stDevPercentage),
             ultra: getModelProbabilistics(ws.ultraElementTimes, taktTime, stDevPercentage),
             mega: getModelProbabilistics(ws.megaElementTimes, taktTime, stDevPercentage)
         };
 
-        // 2. Calculate P(Failure | given current model 'i')
         let pFailGiven = { super: 0, ultra: 0, mega: 0 };
 
-        for (const i_key of modelKeys) { // Current model (e.g., 'super')
+        for (const i_key of modelKeys) {
             const prob_i_overruns = p[i_key].probOverage;
 
-            // If the current model never overruns, it can't cause this type of failure
             if (prob_i_overruns === 0) {
                 pFailGiven[i_key] = 0;
                 continue;
@@ -95,15 +216,11 @@ function calculateWorkstationStress(workstationDetails, taktTime, stDevPercentag
 
             let pNextFailsToCompensate = 0;
 
-            for (const j_key of modelKeys) { // Next model (e.g., 'ultra')
+            for (const j_key of modelKeys) {
                 const prob_i_to_j = transitionProbs[i_key][j_key];
                 if (prob_i_to_j === 0) continue;
 
                 const model_j = p[j_key];
-
-                // We need P(j doesn't underrun by Overage_i)
-                // Approx: P(Time_j > Takt - (Mean_i - Takt)) = P(Time_j > 2*Takt - Mean_i)
-                // This is the "compensation takt time" j must beat.
                 const compensationTakt = 2 * taktTime - p[i_key].mean;
 
                 let p_j_fails_comp = 0.0;
@@ -111,20 +228,15 @@ function calculateWorkstationStress(workstationDetails, taktTime, stDevPercentag
                     p_j_fails_comp = (model_j.mean > compensationTakt) ? 1.0 : 0.0;
                 } else {
                     const z_comp = (compensationTakt - model_j.mean) / model_j.stdDev;
-                    // P(Time_j > compensationTakt)
                     p_j_fails_comp = 1 - normalCDF(z_comp);
                 }
 
-                // Add this to the weighted sum for the 'i' model
                 pNextFailsToCompensate += p_j_fails_comp * prob_i_to_j;
             }
 
-            // P(Failure | i) = P(i overruns) * P(Next fails to compensate | i)
             pFailGiven[i_key] = prob_i_overruns * pNextFailsToCompensate;
         }
 
-        // 3. Calculate total workstation stress using buildRatios (stationary distribution)
-        // P(Stress) = P(Super) * P(Fail | Super) + P(Ultra) * P(Fail | Ultra) + P(Mega) * P(Fail | Mega)
         const workstationStress = (buildRatios.super * pFailGiven.super) +
             (buildRatios.ultra * pFailGiven.ultra) +
             (buildRatios.mega * pFailGiven.mega);
@@ -137,9 +249,6 @@ function calculateWorkstationStress(workstationDetails, taktTime, stDevPercentag
     return averageStress;
 }
 
-/**
- * Approximation of the cumulative distribution function for standard normal distribution.
- */
 function normalCDF(z) {
     if (!isFinite(z)) {
         return z > 0 ? 1 : 0;
@@ -151,65 +260,31 @@ function normalCDF(z) {
     return Math.max(0, Math.min(1, result));
 }
 
-/**
- * Calculates the quality loss (stress) from all factors and returns a breakdown.
- * (This function is UNCHANGED, it just receives the new workstationStress value)
- *
- * @param {number} stDevPercentage - Standard deviation as a percentage of mean (e.g., 0.1)
- * @param {number} conveyorSpeed - Conveyor speed in ft/min
- * @param {Array} workstationDetails - Array of workstation objects
- * @param {number} taktTime - Required takt time in minutes
- * @param {number} overtimeStress - Overtime stress factor (0-1)
- * @param {number} wageStress - Local wage stress factor (0-1)
- * @param {Object} buildRatios - The {super: 0.35, ultra: 0.45, mega: 0.20} object
- * @returns {Object} A breakdown of quality loss.
- */
 function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, workstationDetails, taktTime, overtimeStress, wageStress, buildRatios) {
     const MAX_CONVEYOR_SPEED = 15;
 
-    // --- Input Validation ---
     if (!isFinite(stDevPercentage) || stDevPercentage < 0) { stDevPercentage = 0; }
     if (!isFinite(conveyorSpeed) || conveyorSpeed < 0) { conveyorSpeed = 10; }
     if (!isFinite(taktTime) || taktTime <= 0) { taktTime = 2.5; }
     overtimeStress = isFinite(overtimeStress) ? Math.max(0, Math.min(1, overtimeStress)) : 0;
     wageStress = isFinite(wageStress) ? Math.max(0, Math.min(1, wageStress)) : 0;
 
-    // console.log("--- Calculating Quality Stress Breakdown (Compensation Logic) ---");
-
-    // --- Calculate individual stress factors ---
-
-    // Workstation Stress (Probabilistic, State-Based)
-    // This now calls the NEW (COMPENSATION) function
     const workstationStress = calculateWorkstationStress(workstationDetails, taktTime, stDevPercentage, buildRatios);
-    // console.log(`[Quality] 1. Workstation Stress (Raw): ${workstationStress.toFixed(4)}`);
 
-
-    // Conveyor Fatigue (Probabilistic)
     let conveyorFatigue = 0;
     const speedStDev = conveyorSpeed * stDevPercentage;
-    let z_speed = Infinity; // For logging
+    let z_speed = Infinity;
 
     if (speedStDev > 0) {
         z_speed = (MAX_CONVEYOR_SPEED - conveyorSpeed) / speedStDev;
         conveyorFatigue = 1 - normalCDF(z_speed);
     } else if (conveyorSpeed > MAX_CONVEYOR_SPEED) {
-        conveyorFatigue = 1; // If mean is already over max, stress is 1
+        conveyorFatigue = 1;
     }
-    // console.log(`[Quality] 2. Conveyor Fatigue (Raw): ${conveyorFatigue.toFixed(4)} (Mean: ${conveyorSpeed.toFixed(2)}, Z: ${z_speed.toFixed(2)}, P(X > 15))`);
 
-
-    // Overtime Stress (from Location tab)
     const overtimeStressFactor = overtimeStress || 0;
-    // console.log(`[Quality] 3. Overtime Stress (Raw): ${overtimeStressFactor.toFixed(4)}`);
-
-
-    // 4. Wage Stress (from Location tab)
     const wageStressFactor = wageStress || 0;
-    // console.log(`[Quality] 4. Wage Stress (Raw): ${wageStressFactor.toFixed(4)}`);
 
-
-    // --- Calculate Weighted Loss Breakdown ---
-    // Weights: WorkStation 40%, Conveyor 20%, Overtime 20%, Wage 20%
     const breakdown = {
         workstationLoss: 0.4 * workstationStress,
         conveyorLoss: 0.2 * conveyorFatigue,
@@ -217,25 +292,14 @@ function calculateQualityStressBreakdown(stDevPercentage, conveyorSpeed, worksta
         wageLoss: 0.2 * wageStressFactor
     };
 
-    // Calculate total stress (sum of losses)
     breakdown.totalStress = breakdown.workstationLoss +
         breakdown.conveyorLoss +
         breakdown.overtimeLoss +
         breakdown.wageLoss;
 
-    // Clamp total stress to a max of 1.0 (100% loss)
     breakdown.totalStress = Math.min(1.0, breakdown.totalStress);
-/*
-    console.log(`[Quality] Breakdown (Weighted):
-Workstation: ${breakdown.workstationLoss.toFixed(4)} (40%)
-Conveyor: ${breakdown.conveyorLoss.toFixed(4)} (20%)
-Overtime: ${breakdown.overtimeLoss.toFixed(4)} (20%)
-Wage: ${breakdown.wageLoss.toFixed(4)} (20%)
----------------------
-Total Stress (Loss): ${breakdown.totalStress.toFixed(4)}`);
-*/
+
     return breakdown;
 }
 
-// Make the functions globally available
 window.calculateQualityStressBreakdown = calculateQualityStressBreakdown;

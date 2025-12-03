@@ -11,27 +11,26 @@ const ProfitTab = (function () {
         return tooltip;
     }
 
-    // Assuming BUILD_RATIOS and root element reference are available in the scope
     const root = document.documentElement;
-    // Cache to hold previous pie states so re-draws can animate from prior values
     let profitPieStateCache = {};
     let previousBaselineY = 0;
 
     function draw(isResize = false) {
-        // --- INITIAL SETUP ---
-        const container = document.getElementById('svg-container');
-        const { clientWidth: width, clientHeight: height } = container;
-
         const svg = d3.select("#profit-panel");
 
-        // Clear previous drawing to prevent duplicates during rapid resizes
+        // If resizing, temporarily collapse the SVG to 0x0.
         if (isResize) {
+            svg.attr("width", 0).attr("height", 0);
             svg.selectAll("g#profit-root").remove();
         }
 
+        // --- INITIAL SETUP ---
+        const container = document.getElementById('svg-container');
+        const { clientWidth: width, clientHeight: height } = container;
+        svg.attr("width", width).attr("height", height);
+
         const rootG = svg.selectAll("g#profit-root").data([null]).join("g").attr("id", "profit-root");
 
-        // Append defs if not exists
         if (svg.select("defs").empty()) svg.append("defs");
         const defs = svg.select("defs");
 
@@ -53,20 +52,6 @@ const ProfitTab = (function () {
         const t = d3.transition().duration(baseDuration).ease(d3.easeCubicOut);
 
         const data = profitMaximizationCache.data;
-        if (!data) {
-            svg.append("text")
-                .attr("class", "loading-text")
-                .attr("x", width / 2)
-                .attr("y", height / 2)
-                .attr("text-anchor", "middle")
-                .attr("font-size", sizes.body)
-                .attr("font-weight", "bold")
-                .text("Calculating profit data, please wait...");
-            return;
-        }
-
-        // Remove loading text when data is available
-        svg.selectAll("text.loading-text").remove();
 
         // --- LAYOUT GEOMETRY ---
         const legendSpace = 70 * uiScale;
@@ -284,7 +269,7 @@ const ProfitTab = (function () {
         // ============================================================
         // 2. LEGEND (SCALED & BOUND)
         // ============================================================
-        const legendY = margin.top + chartHeight + (legendSpace / 2);
+        const legendY = margin.top + chartHeight + (legendSpace / 2) + (5 * uiScale);
         const legendG = chartsGroup.selectAll("g.legend-group").data([null]).join("g").attr("class", "legend-group");
 
         const legItems = [
@@ -579,15 +564,13 @@ const ProfitTab = (function () {
         const anglePie = d3.pie().value(d => d.value).sort(null);
         const halfPadding = 0.05;
 
-        // The core complex drawing function
         function drawAdvancedPieChart(g, data, isLoss, maxR) {
             const { sales, costs, profit, modelData, title, margin } = data;
 
             // Calculate radii
             const R_profit = radiusScale(Math.max(0, profit));
             const R_revenue = radiusScale(sales);
-            // Used for scaling the outer ring loss area
-            const R_costs = radiusScale(costs);
+            const R_costs = radiusScale(costs); // Used for scaling the outer ring loss area
 
             const pieAnimDur = 750;
 
@@ -1052,12 +1035,13 @@ const ProfitTab = (function () {
                 d3.select(node).interrupt();
                 const prevProfit = (typeof node._currentProfit !== 'undefined') ? node._currentProfit : 0;
                 const prevSign = (prevProfit >= 0);
+                const newSign = (d.profit >= 0);
                 const yVal = yBar(d.profit);
                 const safeY = Number.isFinite(yVal) ? yVal : zeroY;
                 const targetY = Math.min(safeY, zeroY);
                 const targetH = Math.abs(safeY - zeroY);
 
-                if (prevSign === (d.profit >= 0)) {
+                if (prevSign === newSign) {
                     const currentH = +d3.select(node).attr("height");
                     d3.select(node).transition(sharedTransition)
                         .attrTween("y", function () {
@@ -1081,7 +1065,7 @@ const ProfitTab = (function () {
                 } else {
                     const halfDur = Math.round(baseDuration / 2);
                     const currentH = +d3.select(node).attr("height");
-                    d3.select(node).transition(sharedTransition)
+                    const shrinkTransition = d3.select(node).transition(sharedTransition)
                         .attrTween("y", function () {
                             const baselineInterpolator = d3.interpolate(oldBaselineY, zeroY);
                             const heightInterpolator = d3.interpolate(currentH, 0);
@@ -1100,12 +1084,18 @@ const ProfitTab = (function () {
                         });
 
                     const transDuration = anySignChange ? halfDur : baseDuration;
-                    d3.select(node).transition().delay(transDuration).duration(halfDur).ease(d3.easeCubicOut)
+                    const expandTransition = d3.select(node).transition().delay(transDuration).duration(halfDur).ease(d3.easeCubicOut)
                         .attr("y", targetY)
                         .attr("height", targetH)
                         .on("end", function () {
                             this._currentProfit = d.profit;
                         });
+
+                    if (d.profit < 0) {
+                        expandTransition.on("start", function (d) {
+                            d3.select(this).style("opacity", 0.3);
+                        });
+                    }
                 }
             });
 
@@ -1256,7 +1246,12 @@ const ProfitTab = (function () {
     }
 
     function resize() {
-        draw(true);
+        const svg = d3.select("#profit-panel");
+        svg.attr("width", 0).attr("height", 0);
+
+        requestAnimationFrame(() => {
+            draw(true);
+        });
     }
 
     return { draw, resize };

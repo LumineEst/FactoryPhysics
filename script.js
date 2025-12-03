@@ -10,7 +10,19 @@ let isRecalculating = false;
 let autoAdjustEnabled = true;
 let investmentMetricsInitialized = false;
 let targetSalesDemand = 0;
-let allowInputCommitCallbacks = false; // Prevent onCommit callbacks during initialization
+let allowInputCommitCallbacks = false;
+
+const liveState = {
+    dailyDemand: 180,
+    opHours: 15.0,
+    numEmployees: 8,
+    laborCost: 25.0,
+    superSell: 400, superCogs: 375, superRework: 350,
+    ultraSell: 650, ultraCogs: 590, ultraRework: 500,
+    megaSell: 1000, megaCogs: 960, megaRework: 650,
+    qualityYieldInput: 100.0,
+    qualityStDevPercentage: 0.15
+};
 
 const PRECEDENCE_DATA = [
     { id: 1, predecessors: [] }, { id: 2, predecessors: [1] }, { id: 3, predecessors: [1] }, { id: 4, predecessors: [1] },
@@ -110,6 +122,10 @@ function setInputValue(input, value, decimals) {
 
     input.value = formattedValue;
     input.dataset.committedValue = formattedValue;
+    const numericVal = parseFloat(formattedValue);
+    if (input.id in liveState && isFinite(numericVal)) {
+        liveState[input.id] = numericVal;
+    }
 }
 
 /**
@@ -206,6 +222,7 @@ let currentView = 'current';
 async function main() {
     injectCustomStyles();
     await loadData();
+    syncLiveState();
 
     // Pre-set committedValue on inputs AFTER loadData() to capture any value modifications
     [dailyDemandInput, opHoursInput, numEmployeesInput, laborCostInput,
@@ -313,6 +330,30 @@ async function loadData() {
         console.error("Fatal Error: Could not load local data files.", error);
         demandStatusEl.innerHTML = "Error: Failed to load data.<br>Please use a local server.";
     }
+}
+
+function syncLiveState() {
+    const update = (id, el) => {
+        if (el) {
+            const val = parseFloat(el.value);
+            liveState[id] = isFinite(val) ? val : 0;
+        }
+    };
+    update('dailyDemand', dailyDemandInput);
+    update('opHours', opHoursInput);
+    update('numEmployees', numEmployeesInput);
+    update('laborCost', laborCostInput);
+    update('superSell', superSellInput);
+    update('superCogs', superCogsInput);
+    update('superRework', superReworkInput);
+    update('ultraSell', ultraSellInput);
+    update('ultraCogs', ultraCogsInput);
+    update('ultraRework', ultraReworkInput);
+    update('megaSell', megaSellInput);
+    update('megaCogs', megaCogsInput);
+    update('megaRework', megaReworkInput);
+    update('qualityYieldInput', qualityYieldInput);
+    update('qualityStDevPercentage', qualityStDevPercentageInput);
 }
 
 /**
@@ -869,7 +910,6 @@ function updateUI(options = {}) {
                     ScheduleTab.draw();
                 } else if (isSavedMode && lastSavedConfig && lastSavedConfig.visualizationSnapshots[activeTab]) {
                     // Fallback: if the module isn't available, restore the static snapshot
-                    // (non-animated) so the user still sees something.
                     const panel = document.getElementById(`${activeTab}-panel`);
                     panel.innerHTML = lastSavedConfig.visualizationSnapshots[activeTab];
                 } else {
@@ -958,7 +998,6 @@ function renderWorkstationSidebar(numEmployees) {
         const stationTotalElementTime = elementsInStation.reduce((s, tId) => s + (state.taskData.get(tId)?.elementTime || 0), 0);
         const stationLengthFt = stationTotalElementTime * 15;
         title.textContent = `Workstation ${stationId}`;
-        //title.textContent = `Workstation ${stationId} — ${stationLengthFt.toFixed(1)} ft`;
         workstationDiv.appendChild(title);
 
         const elementsContainer = document.createElement('div');
@@ -1101,8 +1140,12 @@ function setupEventListeners() {
     // Attach listeners to trigger financial updates
     inputs.forEach(input => {
         input.addEventListener('input', () => {
-            if (typeof window.updateProbabilisticValues === 'function') {
-                window.updateProbabilisticValues('mean');
+            const val = parseFloat(input.value);
+            if (input.id in liveState && isFinite(input.val)) {
+                liveState[input.id] = val;
+            }
+            if (investmentMetricsInitialized) {
+                updateProbabilisticValues('mean');
             }
         });
     });
@@ -1479,8 +1522,19 @@ function setupUIEventListeners() {
     switchContainer.append(switchText, switchLabel);
     switchContainer.style.gap = '6px';
 
+    // --- Reset manual overrides when re-enabling ---
     switchInput.addEventListener('change', () => {
         autoAdjustEnabled = switchInput.checked;
+
+        if (autoAdjustEnabled) {
+            // 1. Clear the "User Modified" flag for Quality Yield so the system takes over
+            if (qualityYieldInput) {
+                qualityYieldInput.dataset.userModified = "false";
+            }
+
+            // 2. Trigger a recalculation to apply system values (Op variables + Yield)
+            handleInputChange('dailyDemand');
+        }
     });
 
     // --- Position the Switch Next to the "Operational Inputs" Title ---
@@ -1942,21 +1996,15 @@ function generateElementColorScale(workstationIndex, numWorkstations, numElement
 * --------------------------------------------------------------------
 */
 
-
 /**
 * Handles changes from any of the main input controls, triggering
 * recalculations and UI updates.
 * NOW ASYNC to wait for wage stress calculation.
-* @param {string} driverId - The ID of the input element that changed.
-* @param {object} [context={}] - An optional context object.
 */
 async function handleInputChange(driverId, context = {}) {
     if (isRecalculating) return;
     isRecalculating = true;
 
-    // When callers want to apply inputs without triggering the auto-adjust
-    // logic (for example when loading a saved configuration), they can pass
-    // { skipAutoAdjust: true } in the context object.
     const skipAutoAdjust = context && context.skipAutoAdjust;
 
     const isFinancialDriver = ['laborCost', 'superSell', 'superCogs', 'ultraSell', 'ultraCogs', 'megaSell', 'megaCogs', 'qualityYieldInput', 'qualityStDevPercentage'].includes(driverId);
@@ -1965,12 +2013,9 @@ async function handleInputChange(driverId, context = {}) {
     if (isFinancialDriver) {
         if (driverId === 'qualityYieldInput') {
             qualityYieldInput.dataset.userModified = "true";
-        } else {
-            qualityYieldInput.dataset.userModified = "false";
         }
 
         if (driverId === 'laborCost' && typeof LocationTab !== 'undefined' && LocationTab.updateLocalWageStress) {
-            console.log("LaborCost changed, forcing wage stress recalculation...");
             const currentLaborCost = parseFloat(laborCostInput.value) || 25;
             await LocationTab.updateLocalWageStress(currentLaborCost);
         }
@@ -1980,10 +2025,8 @@ async function handleInputChange(driverId, context = {}) {
 
     if (isOperationalDriver) {
         workstationList.scrollTop = 0;
-        qualityYieldInput.dataset.userModified = "false";
 
         if (typeof LocationTab !== 'undefined' && LocationTab.runOptimization) {
-            console.log("Operational driver changed, running full optimization...");
             await LocationTab.runOptimization();
         }
     }
@@ -2000,31 +2043,51 @@ async function handleInputChange(driverId, context = {}) {
             document.querySelectorAll('.element-row').forEach(row => row.classList.remove('precedence-error'));
         }
 
-        // Only auto-adjust when enabled and not explicitly skipped by caller
+        // --- Operational Decision Hierarchy ---
         if (isOperationalDriver && autoAdjustEnabled && !skipAutoAdjust) {
 
             let productionTarget = parseInt(dailyDemandInput.value) || 1;
 
             switch (driverId) {
                 case 'dailyDemand':
+                    // 1. Find best employee count for this demand
                     numEmployees = findBestEmployeeFitForDemand(productionTarget, opHours, numEmployees);
+                    // 2. Find required hours for that employee count
                     opHours = Math.min(24, roundUpToQuarter(getRequiredHours(productionTarget, numEmployees)));
 
-                    const maxPhysical = calculateMaxDemand(opHours, numEmployees);
-                    if (productionTarget > maxPhysical) {
-                        productionTarget = maxPhysical;
+                    // 3. Cap demand if physically impossible
+                    const maxPhysDemand = calculateMaxDemand(opHours, numEmployees);
+                    if (productionTarget > maxPhysDemand) {
+                        productionTarget = maxPhysDemand;
+                        setInputValue(dailyDemandInput, productionTarget);
+                    }
+                    break;
+
+                case 'numEmployees':
+                    // 1. Adjust hours to meet the current demand with new workforce
+                    opHours = Math.min(24, roundUpToQuarter(getRequiredHours(productionTarget, numEmployees)));
+
+                    // 2. If maxed at 24h and still can't meet demand, cap the demand
+                    const maxPhysEmp = calculateMaxDemand(opHours, numEmployees);
+                    if (productionTarget > maxPhysEmp) {
+                        productionTarget = maxPhysEmp;
                         setInputValue(dailyDemandInput, productionTarget);
                     }
                     break;
 
                 case 'opHours':
-                case 'numEmployees':
+                    // Just cap demand if the new hours reduce capacity below target
+                    const maxPhysHrs = calculateMaxDemand(opHours, numEmployees);
+                    if (productionTarget > maxPhysHrs) {
+                        productionTarget = maxPhysHrs;
+                        setInputValue(dailyDemandInput, productionTarget);
+                    }
                     break;
             }
 
+            // Apply the calculated values to the inputs
             setInputValue(opHoursInput, opHours, 2);
             setInputValue(numEmployeesInput, numEmployees);
-
         }
 
         updateUI();
@@ -2040,6 +2103,264 @@ async function handleInputChange(driverId, context = {}) {
     } else if (investmentMetricsInitialized && typeof window.updateProbabilisticValues === 'function') {
         window.updateProbabilisticValues('mean');
     }
+}
+
+/**
+* Calculates all key performance indicators (KPIs) for the assembly line.
+* OPTIMIZATION: Reads from `liveState` object instead of DOM to prevent layout thrashing.
+* @param {object} op - Operational inputs { dailyDemand, opHours, numEmployees }.
+* @param {object} fin - Financial inputs { laborCost, ...sell/cogs prices }.
+* @param {boolean|object} [optionsOrSkip=false] - Options object.
+* @returns {object} An object containing all calculated metrics.
+*/
+function calculateMetrics(op, fin, optionsOrSkip = false) {
+    fin = fin || {};
+    const options = (typeof optionsOrSkip === 'boolean')
+        ? { skipQualityYield: optionsOrSkip }
+        : (optionsOrSkip || {});
+
+    // Helper to prefer passed arg, then fin obj, then liveState (fallback)
+    const getVal = (propName, argValue) => {
+        if (argValue !== undefined && isFinite(argValue)) return argValue;
+        if (fin[propName] !== undefined && isFinite(fin[propName])) return fin[propName];
+        return liveState[propName] || 0;
+    };
+
+    const finInputs = {
+        laborCost: getVal('laborCost'),
+        superSell: getVal('superSell'),
+        superCogs: getVal('superCogs'),
+        superRework: getVal('superRework'),
+        ultraSell: getVal('ultraSell'),
+        ultraCogs: getVal('ultraCogs'),
+        ultraRework: getVal('ultraRework'),
+        megaSell: getVal('megaSell'),
+        megaCogs: getVal('megaCogs'),
+        megaRework: getVal('megaRework'),
+    };
+
+    // Use passed op args or fallback to liveState
+    const currentOp = {
+        dailyDemand: (op && op.dailyDemand !== undefined) ? op.dailyDemand : liveState.dailyDemand,
+        opHours: (op && op.opHours !== undefined) ? op.opHours : liveState.opHours,
+        numEmployees: (op && op.numEmployees !== undefined) ? op.numEmployees : liveState.numEmployees
+    };
+
+    const wsDetails = calculateWorkstationDetails(currentOp.numEmployees);
+    const fullTotalOpMinutes = currentOp.opHours * 60;
+
+    const bottleneckCycleTime = wsDetails.bottleneckTime;
+    const productSpacing = wsDetails.fastestTime === Infinity ? 0 : wsDetails.fastestTime * 15;
+
+    let calculatedQualityYield = 1.0;
+
+    // --- Helper function to get quality yield ---
+    const getQualityYield = (taktTime, convSpeed) => {
+        if (options.skipQualityYield) return 1.0;
+
+        const config = state.configData[currentOp.numEmployees];
+        const workstationDetails = Object.keys(config || {}).map(wsId => {
+            const elements = config[wsId] || [];
+            const superElementTimes = [];
+            const ultraElementTimes = [];
+            const megaElementTimes = [];
+            elements.forEach(elId => {
+                const task = state.taskData.get(elId);
+                if (task) {
+                    if (task.Super > 0) superElementTimes.push(task.elementTime);
+                    if (task.Ultra > 0) ultraElementTimes.push(task.elementTime);
+                    if (task.Mega > 0) megaElementTimes.push(task.elementTime);
+                }
+            });
+            return { superElementTimes, ultraElementTimes, megaElementTimes };
+        });
+
+        const overtimeStress = (options.overtimeStress !== undefined)
+            ? options.overtimeStress
+            : (typeof LocationTab !== 'undefined' && LocationTab.getOvertimeStress ? LocationTab.getOvertimeStress() : 0);
+
+        const wageStress = (options.wageStress !== undefined)
+            ? options.wageStress
+            : (typeof LocationTab !== 'undefined' && LocationTab.getLocalWageStress ? LocationTab.getLocalWageStress() : 0);
+
+        // Read from liveState instead of DOM
+        const stDevPercentage = liveState.qualityStDevPercentage;
+
+        const qualityBreakdown = calculateQualityStressBreakdown(
+            stDevPercentage, convSpeed, workstationDetails, taktTime,
+            overtimeStress, wageStress, BUILD_RATIOS
+        );
+
+        if (!options.suppressUI) {
+            window.lastQualityBreakdown = qualityBreakdown;
+        }
+
+        calculatedQualityYield = 1.0 - qualityBreakdown.totalStress;
+
+        // Check DOM attribute for userModified flag (dataset access is fast enough)
+        const isUserModified = (qualityYieldInput && qualityYieldInput.dataset.userModified === "true");
+
+        if (!autoAdjustEnabled || isUserModified) {
+            // Return value from liveState (which mirrors the input)
+            return liveState.qualityYieldInput / 100.0;
+        }
+
+        if (!options.suppressUI && qualityYieldInput) {
+            const newYieldValue = (calculatedQualityYield * 100.0).toFixed(1);
+            // Only update if changed to avoid thrashing
+            if (qualityYieldInput.value !== newYieldValue) {
+                qualityYieldInput.value = newYieldValue;
+                qualityYieldInput.dataset.committedValue = newYieldValue;
+                // Sync liveState here too
+                liveState.qualityYieldInput = parseFloat(newYieldValue);
+            }
+        }
+
+        return calculatedQualityYield;
+    };
+
+    // --- Helper function to calculate throughput ---
+    const calculateThroughput = (productionTarget) => {
+        if (productSpacing <= 0 || bottleneckCycleTime <= 0) {
+            return {
+                wip: 0, throughputUnitsPerHour: 0, conveyorSpeed: 0,
+                effectiveCycleTime: Infinity,
+                totalUnitsProduced: 0, qualityYield: 1.0,
+                productionTarget: productionTarget
+            };
+        }
+
+        const bottleneckThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckCycleTime;
+        const bottleneckLaunchWindow = fullTotalOpMinutes - bottleneckThroughputTime;
+
+        let physicalMaxUnits = 0;
+        if (bottleneckLaunchWindow > 0) {
+            physicalMaxUnits = Math.round(bottleneckLaunchWindow / bottleneckCycleTime) + 1;
+        } else if (fullTotalOpMinutes >= bottleneckThroughputTime) {
+            physicalMaxUnits = 1;
+        }
+
+        let effectiveCycleTime;
+        let totalUnitsProduced;
+
+        if (productionTarget > physicalMaxUnits) {
+            effectiveCycleTime = bottleneckCycleTime;
+            totalUnitsProduced = physicalMaxUnits;
+        } else {
+            const demandIntervals = productionTarget > 1 ? productionTarget - 1 : 0;
+            const throughputTimeAsIntervals = ASSEMBLY_LINE_LENGTH / productSpacing;
+            const totalIntervals = demandIntervals + throughputTimeAsIntervals;
+
+            if (productionTarget <= 1) {
+                effectiveCycleTime = bottleneckCycleTime;
+            } else {
+                effectiveCycleTime = fullTotalOpMinutes / totalIntervals;
+            }
+            totalUnitsProduced = productionTarget;
+        }
+
+        const conveyorSpeed = productSpacing / effectiveCycleTime;
+        const wip = ASSEMBLY_LINE_LENGTH / productSpacing;
+        const actualThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * effectiveCycleTime;
+
+        let actualProductionMinutes;
+        if (totalUnitsProduced <= 0) {
+            actualProductionMinutes = 0;
+        } else if (totalUnitsProduced === 1) {
+            actualProductionMinutes = actualThroughputTime;
+        } else {
+            const demandIntervals = totalUnitsProduced - 1;
+            actualProductionMinutes = effectiveCycleTime * (demandIntervals) + actualThroughputTime;
+        }
+
+        const throughputUnitsPerHour = actualProductionMinutes > 0 ? (totalUnitsProduced / actualProductionMinutes) * 60 : 0;
+
+        return {
+            wip, throughputUnitsPerHour, conveyorSpeed,
+            effectiveCycleTime, totalUnitsProduced, qualityYield: 1.0,
+            productionTarget
+        };
+    };
+
+    const totalProductionTarget = currentOp.dailyDemand;
+    const finalPassResults = calculateThroughput(totalProductionTarget);
+    const finalQualityYield = getQualityYield(finalPassResults.effectiveCycleTime, finalPassResults.conveyorSpeed);
+    const totalStress = 1.0 - finalQualityYield;
+
+    const {
+        wip: finalWip,
+        throughputUnitsPerHour: finalTotalThroughputPerHour,
+        conveyorSpeed: finalConveyorSpeed,
+        effectiveCycleTime: finalEffectiveCycleTime,
+        totalUnitsProduced: finalTotalUnitsProduced
+    } = finalPassResults;
+
+    let totalWorkstationCycleTime = 0;
+    wsDetails.workstations.forEach(ws => {
+        totalWorkstationCycleTime += ws.cycleTime;
+        ws.efficiency = bottleneckCycleTime > 0 ? (ws.cycleTime / bottleneckCycleTime) * 100 : 0;
+        const idleTimePerCycle = bottleneckCycleTime - ws.cycleTime;
+        ws.dailyIdleTime = idleTimePerCycle * finalTotalUnitsProduced;
+    });
+
+    const totalAvailableTime = currentOp.numEmployees * fullTotalOpMinutes;
+    const totalDailyLaborCost = currentOp.numEmployees * currentOp.opHours * finInputs.laborCost;
+    const totalProductiveTime = finalTotalUnitsProduced * totalWorkstationCycleTime;
+    const totalIdleTime = Math.max(0, totalAvailableTime - totalProductiveTime);
+    const averageEfficiency = totalAvailableTime > 0 ? (totalProductiveTime / totalAvailableTime) * 100 : 0;
+
+    const efficiencies = wsDetails.workstations.map(ws => ws.efficiency);
+    const balanceActive = efficiencies.length > 0 ? efficiencies.reduce((a, b) => a + b, 0) / efficiencies.length : 0;
+    const balanceDelay = 100 - balanceActive;
+
+    const idleTimesPerCycle = wsDetails.workstations.map(ws => bottleneckCycleTime - ws.cycleTime);
+    const idleMean = idleTimesPerCycle.length > 0 ? idleTimesPerCycle.reduce((a, b) => a + b, 0) / idleTimesPerCycle.length : 0;
+    const stdDev = Math.sqrt(idleTimesPerCycle.map(x => Math.pow(x - idleMean, 2)).reduce((a, b) => a + b, 0) / (idleTimesPerCycle.length || 1));
+    const idleTimeCv = idleMean > 0 ? (stdDev / idleMean) * 100 : 0;
+
+    const totalRevenue = finalTotalUnitsProduced * (
+        (BUILD_RATIOS.super * finInputs.superSell) +
+        (BUILD_RATIOS.ultra * finInputs.ultraSell) +
+        (BUILD_RATIOS.mega * finInputs.megaSell)
+    );
+
+    const totalCogs = finalTotalUnitsProduced * (
+        (BUILD_RATIOS.super * finInputs.superCogs) +
+        (BUILD_RATIOS.ultra * finInputs.ultraCogs) +
+        (BUILD_RATIOS.mega * finInputs.megaCogs)
+    );
+
+    const failedSuper = (finalTotalUnitsProduced * BUILD_RATIOS.super) * totalStress;
+    const failedUltra = (finalTotalUnitsProduced * BUILD_RATIOS.ultra) * totalStress;
+    const failedMega = (finalTotalUnitsProduced * BUILD_RATIOS.mega) * totalStress;
+
+    const reworkCost = (failedSuper * finInputs.superRework) +
+        (failedUltra * finInputs.ultraRework) +
+        (failedMega * finInputs.megaRework);
+    const costOfPoorQuality = reworkCost;
+
+    const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost - costOfPoorQuality;
+    const grossProfitMargin = totalRevenue > 0 ? (dailyGrossProfit / totalRevenue) * 100 : 0;
+
+    const effectiveMeetsDemand = finalTotalUnitsProduced >= totalProductionTarget;
+    const effectiveHourlyUnits = finalTotalThroughputPerHour;
+    const effectiveTotalUnits = finalTotalUnitsProduced;
+
+    return {
+        wip: finalWip,
+        throughputUnitsPerHour: effectiveHourlyUnits,
+        conveyorSpeed: finalConveyorSpeed,
+        productSpacing: productSpacing,
+        dailyGrossProfit,
+        grossProfitMargin,
+        costOfPoorQuality: costOfPoorQuality,
+        meetsDemand: effectiveMeetsDemand,
+        effectiveCycleTime: finalEffectiveCycleTime,
+        workstations: wsDetails.workstations,
+        averageEfficiency, totalIdleTime, balanceDelay, idleTimeCv,
+        throughputUnitsPerDay: effectiveTotalUnits,
+        qualityYield: finalQualityYield
+    };
 }
 
 /**
@@ -2076,255 +2397,6 @@ function calculateWorkstationDetails(numEmployees) {
     }
 
     return { workstations, bottleneckTime, fastestTime };
-}
-
-
-/**
-* Calculates all key performance indicators (KPIs) for the assembly line
-* based on the current operational and financial inputs.
-* @param {object} op - Operational inputs { dailyDemand, opHours, numEmployees }.
-* @param {object} fin - Financial inputs { laborCost, ...sell/cogs prices }.
-* @param {boolean} [skipQualityYield=false] - If true, skips applying quality yield to throughput.
-* @returns {object} An object containing all calculated metrics.
-*/
-function calculateMetrics(op, fin, skipQualityYield = false) {
-    fin = fin || {};
-    const getFinVal = (val) => {
-        const n = parseFloat(val);
-        return isFinite(n) ? n : 0;
-    };
-
-    const finInputs = {
-        laborCost: getFinVal(fin.laborCost) || getFinVal(laborCostInput?.value),
-        superSell: getFinVal(fin.superSell) || getFinVal(superSellInput?.value),
-        superCogs: getFinVal(fin.superCogs) || getFinVal(superCogsInput?.value),
-        superRework: getFinVal(fin.superRework) || getFinVal(superReworkInput?.value),
-        ultraSell: getFinVal(fin.ultraSell) || getFinVal(ultraSellInput?.value),
-        ultraCogs: getFinVal(fin.ultraCogs) || getFinVal(ultraCogsInput?.value),
-        ultraRework: getFinVal(fin.ultraRework) || getFinVal(ultraReworkInput?.value),
-        megaSell: getFinVal(fin.megaSell) || getFinVal(megaSellInput?.value),
-        megaCogs: getFinVal(fin.megaCogs) || getFinVal(megaCogsInput?.value),
-        megaRework: getFinVal(fin.megaRework) || getFinVal(megaReworkInput?.value),
-    };
-
-    const wsDetails = calculateWorkstationDetails(op.numEmployees);
-    const fullTotalOpMinutes = op.opHours * 60;
-
-    const bottleneckCycleTime = wsDetails.bottleneckTime;
-    const productSpacing = wsDetails.fastestTime === Infinity ? 0 : wsDetails.fastestTime * 15;
-
-    // This will hold the *calculated* yield, regardless of override
-    let calculatedQualityYield = 1.0;
-
-    // --- Helper function to get quality yield ---
-    const getQualityYield = (taktTime, convSpeed) => {
-        if (skipQualityYield) return 1.0;
-
-        const config = state.configData[op.numEmployees];
-        const workstationDetails = Object.keys(config || {}).map(wsId => {
-            const elements = config[wsId] || [];
-            const superElementTimes = [];
-            const ultraElementTimes = [];
-            const megaElementTimes = [];
-            elements.forEach(elId => {
-                const task = state.taskData.get(elId);
-                if (task) {
-                    if (task.Super > 0) superElementTimes.push(task.elementTime);
-                    if (task.Ultra > 0) ultraElementTimes.push(task.elementTime);
-                    if (task.Mega > 0) megaElementTimes.push(task.elementTime);
-                }
-            });
-            return { superElementTimes, ultraElementTimes, megaElementTimes };
-        });
-
-        const overtimeStress = typeof LocationTab !== 'undefined' && LocationTab.getOvertimeStress ? LocationTab.getOvertimeStress() : 0;
-        const wageStress = typeof LocationTab !== 'undefined' && LocationTab.getLocalWageStress ? LocationTab.getLocalWageStress() : 0;
-        const stDevPercentage = parseFloat(qualityStDevPercentageInput.value);
-
-        // This function returns a breakdown with a single `.totalStress`
-        const qualityBreakdown = calculateQualityStressBreakdown(
-            stDevPercentage, convSpeed, workstationDetails, taktTime,
-            overtimeStress, wageStress, BUILD_RATIOS
-        );
-        window.lastQualityBreakdown = qualityBreakdown;
-
-        // `calculatedQualityYield` is the (1.0 - totalStress)
-        calculatedQualityYield = 1.0 - qualityBreakdown.totalStress;
-
-        if (qualityYieldInput && qualityYieldInput.dataset.userModified === "true") {
-            return parseFloat(qualityYieldInput.value) / 100.0;
-        } else {
-            // Only update the input if it's not being overridden
-            if (qualityYieldInput) {
-                const newYieldValue = (calculatedQualityYield * 100.0).toFixed(1);
-                if (qualityYieldInput.value !== newYieldValue) {
-                    qualityYieldInput.value = newYieldValue;
-                    // Update committedValue to match so this change doesn't trigger a callback
-                    qualityYieldInput.dataset.committedValue = newYieldValue;
-                    qualityYieldInput.dispatchEvent(new Event('input', {
-                        bubbles: true
-                    }));
-                }
-            }
-            return calculatedQualityYield;
-        }
-    };
-
-    // --- Helper function to calculate throughput ---
-    const calculateThroughput = (productionTarget) => {
-        if (productSpacing <= 0 || bottleneckCycleTime <= 0) {
-            return {
-                wip: 0, throughputUnitsPerHour: 0, conveyorSpeed: 0,
-                effectiveCycleTime: Infinity,
-                totalUnitsProduced: 0, qualityYield: 1.0,
-                productionTarget: productionTarget
-            };
-        }
-
-        // 1. Calculate the line's true physical maximum production
-        const bottleneckThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * bottleneckCycleTime;
-        const bottleneckLaunchWindow = fullTotalOpMinutes - bottleneckThroughputTime;
-
-        let physicalMaxUnits = 0;
-        if (bottleneckLaunchWindow > 0) {
-            physicalMaxUnits = Math.round(bottleneckLaunchWindow / bottleneckCycleTime) + 1;
-        } else if (fullTotalOpMinutes >= bottleneckThroughputTime) {
-            physicalMaxUnits = 1;
-        }
-
-        // 2. Determine if the line is paced by demand or by the bottleneck
-        let effectiveCycleTime;
-        let totalUnitsProduced;
-
-        if (productionTarget > physicalMaxUnits) {
-            effectiveCycleTime = bottleneckCycleTime;
-            totalUnitsProduced = physicalMaxUnits;
-        } else {
-            const demandIntervals = productionTarget > 1 ? productionTarget - 1 : 0;
-            const throughputTimeAsIntervals = ASSEMBLY_LINE_LENGTH / productSpacing;
-            const totalIntervals = demandIntervals + throughputTimeAsIntervals;
-
-            if (productionTarget <= 1) {
-                effectiveCycleTime = bottleneckCycleTime;
-            } else {
-                effectiveCycleTime = fullTotalOpMinutes / totalIntervals;
-            }
-            totalUnitsProduced = productionTarget;
-        }
-
-        // 3. Calculate all other metrics
-        const conveyorSpeed = productSpacing / effectiveCycleTime;
-        const wip = ASSEMBLY_LINE_LENGTH / productSpacing;
-        const actualThroughputTime = (ASSEMBLY_LINE_LENGTH / productSpacing) * effectiveCycleTime;
-
-        let actualProductionMinutes;
-        if (totalUnitsProduced <= 0) {
-            actualProductionMinutes = 0;
-        } else if (totalUnitsProduced === 1) {
-            actualProductionMinutes = actualThroughputTime;
-        } else {
-            const demandIntervals = totalUnitsProduced - 1;
-            actualProductionMinutes = effectiveCycleTime * (demandIntervals) + actualThroughputTime;
-        }
-
-        const throughputUnitsPerHour = actualProductionMinutes > 0 ? (totalUnitsProduced / actualProductionMinutes) * 60 : 0;
-
-        return {
-            wip, throughputUnitsPerHour, conveyorSpeed,
-            effectiveCycleTime, totalUnitsProduced, qualityYield: 1.0,
-            productionTarget
-        };
-    };
-
-    // --- Main Calculation Logic ---
-    const totalProductionTarget = op.dailyDemand;
-    const finalPassResults = calculateThroughput(totalProductionTarget);
-    const finalQualityYield = getQualityYield(finalPassResults.effectiveCycleTime, finalPassResults.conveyorSpeed);
-    const totalStress = 1.0 - finalQualityYield;
-
-    const {
-        wip: finalWip,
-        throughputUnitsPerHour: finalTotalThroughputPerHour,
-        conveyorSpeed: finalConveyorSpeed,
-        effectiveCycleTime: finalEffectiveCycleTime,
-        totalUnitsProduced: finalTotalUnitsProduced
-    } = finalPassResults;
-
-    // --- Calculate final metrics ---
-    let totalWorkstationCycleTime = 0;
-    wsDetails.workstations.forEach(ws => {
-        totalWorkstationCycleTime += ws.cycleTime;
-        ws.efficiency = bottleneckCycleTime > 0 ? (ws.cycleTime / bottleneckCycleTime) * 100 : 0;
-        const idleTimePerCycle = bottleneckCycleTime - ws.cycleTime;
-        ws.dailyIdleTime = idleTimePerCycle * finalTotalUnitsProduced;
-    });
-
-    const totalAvailableTime = op.numEmployees * fullTotalOpMinutes;
-    const totalDailyLaborCost = op.numEmployees * op.opHours * finInputs.laborCost;
-    const totalProductiveTime = finalTotalUnitsProduced * totalWorkstationCycleTime;
-    const totalIdleTime = Math.max(0, totalAvailableTime - totalProductiveTime);
-    const averageEfficiency = totalAvailableTime > 0 ? (totalProductiveTime / totalAvailableTime) * 100 : 0;
-
-    const efficiencies = wsDetails.workstations.map(ws => ws.efficiency);
-    const balanceActive = efficiencies.length > 0 ? efficiencies.reduce((a, b) => a + b, 0) / efficiencies.length : 0;
-    const balanceDelay = 100 - balanceActive;
-
-    const idleTimesPerCycle = wsDetails.workstations.map(ws => bottleneckCycleTime - ws.cycleTime);
-    const idleMean = idleTimesPerCycle.length > 0 ? idleTimesPerCycle.reduce((a, b) => a + b, 0) / idleTimesPerCycle.length : 0;
-    const stdDev = Math.sqrt(idleTimesPerCycle.map(x => Math.pow(x - idleMean, 2)).reduce((a, b) => a + b, 0) / (idleTimesPerCycle.length || 1));
-    const idleTimeCv = idleMean > 0 ? (stdDev / idleMean) * 100 : 0;
-
-    // --- FINANCIAL CALCULATION (with Rework Cost) ---
-    const totalRevenue = finalTotalUnitsProduced * (
-        (BUILD_RATIOS.super * finInputs.superSell) +
-        (BUILD_RATIOS.ultra * finInputs.ultraSell) +
-        (BUILD_RATIOS.mega * finInputs.megaSell)
-    );
-
-    // COGS is based on *ALL* units produced
-    const totalCogs = finalTotalUnitsProduced * (
-        (BUILD_RATIOS.super * finInputs.superCogs) +
-        (BUILD_RATIOS.ultra * finInputs.ultraCogs) +
-        (BUILD_RATIOS.mega * finInputs.megaCogs)
-    );
-
-    // --- CoPQ CALCULATION (as Rework) ---
-    const failedSuper = (finalTotalUnitsProduced * BUILD_RATIOS.super) * totalStress;
-    const failedUltra = (finalTotalUnitsProduced * BUILD_RATIOS.ultra) * totalStress;
-    const failedMega = (finalTotalUnitsProduced * BUILD_RATIOS.mega) * totalStress;
-
-    // Use the sanitized finInputs values
-    const reworkCost = (failedSuper * finInputs.superRework) +
-        (failedUltra * finInputs.ultraRework) +
-        (failedMega * finInputs.megaRework);
-    const costOfPoorQuality = reworkCost;
-
-    // Gross Profit now subtracts COGS, Labor, and Rework (CoPQ)
-    const dailyGrossProfit = totalRevenue - totalCogs - totalDailyLaborCost - costOfPoorQuality;
-    const grossProfitMargin = totalRevenue > 0 ? (dailyGrossProfit / totalRevenue) * 100 : 0;
-
-    // "Meets Demand" is a purely physical check.
-    const effectiveMeetsDemand = finalTotalUnitsProduced >= totalProductionTarget;
-
-    // Throughput KPIs report TOTAL physical units.
-    const effectiveHourlyUnits = finalTotalThroughputPerHour;
-    const effectiveTotalUnits = finalTotalUnitsProduced;
-
-    return {
-        wip: finalWip,
-        throughputUnitsPerHour: effectiveHourlyUnits,
-        conveyorSpeed: finalConveyorSpeed,
-        productSpacing: productSpacing,
-        dailyGrossProfit,
-        grossProfitMargin,
-        costOfPoorQuality: costOfPoorQuality,
-        meetsDemand: effectiveMeetsDemand,
-        effectiveCycleTime: finalEffectiveCycleTime,
-        workstations: wsDetails.workstations,
-        averageEfficiency, totalIdleTime, balanceDelay, idleTimeCv,
-        throughputUnitsPerDay: effectiveTotalUnits,
-        qualityYield: finalQualityYield
-    };
 }
 
 /**
@@ -2406,7 +2478,6 @@ function findBestEmployeeFit(requiredTaktTime, startingCount) {
 function updateWorkstationOrder() {
     const numEmployees = parseInt(numEmployeesInput.value);
     const newConfig = {};
-    // Select only the workstation divs (ignoring potential Sortable.js drag mirrors)
     const workstationDivs = document.querySelectorAll('#workstation-list .workstation');
 
     workstationDivs.forEach(workstationDiv => {
@@ -2898,7 +2969,6 @@ async function drawOverviewPanel() {
 * Save & Compare Functionality
 * --------------------------------------------------------------------
 */
-
 function onSaveConfiguration() {
     const timestamp = new Date().toISOString();
 
@@ -3181,204 +3251,6 @@ function switchCompareView(view) {
 
     // Re-enable input commit callbacks (safe now since we cleared all pending timers)
     allowInputCommitCallbacks = true;
-} async function fetchFipsFromLatLon(lat, lon, timeoutMs = 8000) {
-    const corsProxy = 'https://api.allorigins.win/raw?url=';
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeoutMs);
-
-    // --- 1. Try to get the specific block ---
-    try {
-        let blockTargetUrl = `https://geo.fcc.gov/api/census/block/find?format=json&latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}`;
-        let url = `${corsProxy}${encodeURIComponent(blockTargetUrl)}`;
-
-        const res = await fetch(url, { signal: controller.signal });
-        if (!res.ok) throw new Error(`FCC block lookup failed: ${res.status}`);
-
-        const json = await res.json();
-        const blockFIPS = (json.Block && json.Block.FIPS) ? json.Block.FIPS : null;
-
-        if (blockFIPS) {
-            clearTimeout(id);
-            return {
-                stateFips: (json.State && json.State.FIPS) ? json.State.FIPS : null,
-                countyFips: (json.County && json.County.FIPS) ? json.County.FIPS : null,
-                tract: blockFIPS.substring(0, 11), // Full 11-digit tract FIPS
-            };
-        }
-        // If blockFIPS is null, fall through to the county lookup
-        console.warn("Block lookup succeeded but returned no FIPS. Falling back to county.");
-
-    } catch (err) {
-        console.warn('fetchFipsFromLatLon (Block) error, falling back to county.', err);
-    }
-
-    // --- 2. FALLBACK: Try to get the county ---
-    try {
-        let countyTargetUrl = `https://geo.fcc.gov/api/census/county/find?format=json&latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}`;
-        let url = `${corsProxy}${encodeURIComponent(countyTargetUrl)}`;
-
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(id); // Clear timeout after the *last* successful fetch
-        if (!res.ok) throw new Error(`FCC county lookup failed: ${res.status}`);
-
-        const json = await res.json();
-
-        // County lookup has a different structure
-        return {
-            stateFips: (json.State && json.State.FIPS) ? json.State.FIPS : null,
-            countyFips: (json.County && json.County.FIPS) ? json.County.FIPS : null,
-            tract: null, // We don't have tract info from this endpoint
-        };
-    } catch (err) {
-        console.warn('fetchFipsFromLatLon (County fallback) error', err);
-        clearTimeout(id);
-        return null;
-    }
-}
-
-async function fetchMedianHouseholdIncome({ stateFips, countyFips, tract }, censusApiKey = '') {
-    const corsProxy = 'https://api.allorigins.win/raw?url=';
-
-    const year = '2021';
-    const varName = 'B19013_001E'; // median household income estimate
-    const commonKey = censusApiKey ? `&key=${encodeURIComponent(censusApiKey)}` : '';
-
-    // --- Helper function to safely fetch and parse from the proxy ---
-    const safeProxyFetch = async (targetUrl) => {
-        const url = `${corsProxy}${encodeURIComponent(targetUrl)}`;
-        console.log('Proxy URL:', url);
-        let res;
-        try {
-            res = await fetch(url);
-        } catch (fetchErr) {
-            console.warn('Proxy fetch failed:', fetchErr);
-            return null;
-        }
-
-        if (!res.ok) {
-            console.warn('Proxy request failed, status:', res.status, res.statusText);
-            return null;
-        }
-
-        try {
-            const jsonResponse = await res.json();
-            return jsonResponse;
-        } catch (jsonErr) {
-            console.warn('Failed to parse proxy response as JSON:', jsonErr);
-            return null;
-        }
-    };
-
-    // --- Main Logic ---
-    try {
-        // 1. --- Try Tract-Level ---
-        if (stateFips && countyFips && tract) {
-            const countyCode = countyFips.slice(-3);
-            const tractCode = tract.substring(5, 11);
-
-            const forParam = `tract:${encodeURIComponent(tractCode)}`;
-            const inParam = `state:${encodeURIComponent(stateFips)}+county:${encodeURIComponent(countyCode)}`;
-
-            const tractTargetUrl = `https://api.census.gov/data/${year}/acs/acs1?get=${varName}&for=${forParam}&in=${inParam}${commonKey}`;
-
-            const tractResponse = await safeProxyFetch(tractTargetUrl);
-
-            if (tractResponse) {
-                if (Array.isArray(tractResponse) && tractResponse.length >= 2 && tractResponse[1][0] !== null) {
-                    const val = Number(tractResponse[1][0]);
-                    if (Number.isFinite(val) && val > 0) {
-                        return val;
-                    }
-                }
-            } else {
-                console.warn('No valid response for tract, falling back to county.');
-            }
-        }
-
-        // 2. --- Fallback to County-Level ---
-        if (stateFips && countyFips) {
-            const countyCode = countyFips.slice(-3);
-
-            const countyForParam = `county:${encodeURIComponent(countyCode)}`;
-            const countyInParam = `state:${encodeURIComponent(stateFips)}`;
-
-            const countyTargetUrl = `https://api.census.gov/data/${year}/acs/acs1?get=${varName}&for=${countyForParam}&in=${countyInParam}${commonKey}`;
-
-            const countyResponse = await safeProxyFetch(countyTargetUrl);
-
-            if (countyResponse) {
-                if (Array.isArray(countyResponse) && countyResponse.length >= 2 && countyResponse[1][0] !== null) {
-                    const val = Number(countyResponse[1][0]);
-                    if (Number.isFinite(val) && val > 0) {
-                        return val;
-                    }
-                }
-            } else {
-                console.warn('No valid response for county.');
-            }
-        }
-    } catch (err) {
-        console.warn('fetchMedianHouseholdIncome main try/catch error', err);
-    }
-
-    return null;
-}
-
-function medianIncomeToHourly(medianHouseholdIncome, hoursPerWeek = 40, weeksPerYear = 52) {
-    if (!medianHouseholdIncome || medianHouseholdIncome <= 0) return null;
-    return medianHouseholdIncome / (weeksPerYear * hoursPerWeek);
-}
-
-/*
-  Map median hourly wage to stress [0..1]:
-  - setLaborCost = What the user is paying.
-  - medianHourly = The median wage at the factory location.
-  - Stress should be 0 if (setLaborCost >= medianHourly).
-  - Stress should increase as (setLaborCost) falls below (medianHourly).
-*/
-function mapWageToStress(medianHourly, setLaborCost, lowBoundFactor = 0.6) {
-    if (medianHourly == null || !isFinite(medianHourly) || medianHourly <= 0) {
-        return 0; // If local wage is unknown, assume 0 stress
-    }
-    if (!isFinite(setLaborCost)) {
-        setLaborCost = 0;
-    }
-
-    // If what we pay is at or above the local median, stress is 0.
-    if (setLaborCost >= medianHourly) {
-        return 0;
-    }
-
-    // The low bound is 60% of the local median wage.
-    const lowBound = medianHourly * lowBoundFactor;
-
-    // If what we pay is at or below this low bound, stress is 1.
-    if (setLaborCost <= lowBound) {
-        return 1;
-    }
-
-    // Linear interpolation for wages between the low bound and the median.
-    // (MedianWage - PaidWage) / (MedianWage - LowBoundWage)
-    return (medianHourly - setLaborCost) / (medianHourly - lowBound);
-}
-
-/*
-  Top-level helper: given lat/lon returns { medianHouseholdIncome, medianHourly, stress }
-  - censusApiKey optional (use '' for anonymous requests)
-*/
-async function getLocalWageAndStress(lat, lon, setLaborCost, censusApiKey = '') {
-    console.log('Fetching wage data for:', lat, lon);
-    const fips = await fetchFipsFromLatLon(lat, lon);
-    console.log('FIPS result:', fips);
-    if (!fips) return { medianHouseholdIncome: null, medianHourly: null, stress: 0.5 };
-    const mhh = await fetchMedianHouseholdIncome(fips, censusApiKey);
-    console.log('Median household income:', mhh);
-    if (!mhh) return { medianHouseholdIncome: null, medianHourly: null, stress: 0.5 };
-    const medianHourly = medianIncomeToHourly(mhh);
-    console.log('Median hourly wage:', medianHourly);
-    const stress = mapWageToStress(medianHourly, setLaborCost);
-    console.log('Calculated stress:', stress);
-    return { medianHouseholdIncome: mhh, medianHourly, stress, fips };
 }
 
 document.addEventListener('DOMContentLoaded', main());
