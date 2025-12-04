@@ -1368,13 +1368,30 @@
             </ul>
             <p><em>Example: If CV is 20%, the Safe Speed drops to 12 ft/min. Running at 15 ft/min would essentially ensure defects.</em></p>
 
-            <h4>2. Local Wage Stress (Location Tab)</h4>
+            <h4>3. Local Wage Stress (Location Tab)</h4>
             <p>
                 The quality of the workforce is modeled as a function of the wages paid relative to the local market conditions.
                 This captures how underpaying employees will increase their stress, engagement, turnover, and starting skill level.
-                The system uses a 3rd-party API to fetch the **Median Household Income** for the specific Census Block
+                The system uses adaptive 3rd-party APIs to fetch the **Median Household Income** for the specific Census Block
                 of the factory's optimal location (lat/lon).
             </p>
+            <p>To ensure reliability between APIs, the system employs an <strong>Adaptive "Shotgun-to-Race" Strategy</strong> for fetching wage data:</p>
+            <ul>
+                <li><strong>Cold Start (Discovery):</strong> On the first request, the system fires <em>all</em> combinations of proxies (Direct, CorsProxy, AllOrigins) and data granularities (Census Tract, County) simultaneously. 
+                    It waits for all to settle to build a complete reliability profile for the user's network environment.
+                </li>
+                <li><strong>Scoring Algorithm:</strong> Strategies are ranked dynamically based on:
+                    <ul>
+                        <li><strong>Reliability:</strong> Heavy weighting for successful returns.</li>
+                        <li><strong>Speed:</strong> Moderate weighting for lower latency.</li>
+                        <li><strong>Precision:</strong> Slight bonus for Tract-level data over County-level.</li>
+                    </ul>
+                </li>
+                <li><strong>Warm State (Optimization):</strong> Subsequent requests select the <strong>Top 2</strong> ranked strategies and race them in parallel. 
+                    An <code>AbortController</code> is used to immediately terminate the slower request once the winner returns, minimizing bandwidth usage.
+                </li>
+            </ul>
+            <p>This leads to a more robust system of returning Median Household Income which improves with usage.  Once the Income is returned, the Wage Stress is calculated by:</p>
             <ul>
                 <li><strong>Step 1:</strong> Convert Median Household Income to an hourly rate (assuming a full-time 2080 hours/year).
                 </li>

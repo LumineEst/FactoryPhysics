@@ -21,7 +21,7 @@ const LocationTab = (() => {
     let isBottomRibbonOpen = false;
 
     let _localWageStress = 0.0;
-    let _currentWageDisplay = 'N/A'; 
+    let _currentWageDisplay = 'N/A';
     let _lastMedianHourly = null;
 
     let selectedCityInDropdown = "";
@@ -40,7 +40,7 @@ const LocationTab = (() => {
     let simulationResults = null;
     let simulationError = null;
     let simulationPromiseResolve = null;
-    let simulationPromiseReject = null; 
+    let simulationPromiseReject = null;
     let isValidationRun = false;
 
     // --- Filter and Brush state variables ---
@@ -371,11 +371,9 @@ const LocationTab = (() => {
 
     /**
     * ASYNC HELPER: Calls the global WageManager to get wage/stress data.
-    * Updates local state variables and the summary panel UI.
-    * @param {number} currentLaborCost - The user's input labor cost ($/hr).
+    * Updates local state variables and triggers global recalculations.
     */
     async function updateLocalWageStress(currentLaborCost) {
-        // 1. Guard against missing location or missing Manager
         if (!optimalFactoryLocation) {
             _localWageStress = 0;
             _currentWageDisplay = 'N/A';
@@ -384,42 +382,38 @@ const LocationTab = (() => {
             return;
         }
 
-        if (!window.WageManager) {
-            console.warn("WageManager not initialized.");
-            return;
-        }
+        const [lon, lat] = optimalFactoryLocation;
 
-        try {
-            // 2. Call WageManager.update(lat, lon, cost)
-            const result = await window.WageManager.update(
-                optimalFactoryLocation[1], // Latitude
-                optimalFactoryLocation[0], // Longitude
-                currentLaborCost
-            );
+        // Fetch from API (WageManager handles caching and persistence)
+        const { medianHourly, stress } = await window.WageManager.update(lat, lon, currentLaborCost);
 
-            // 3. Update Internal State
-            _localWageStress = result.stress;
+        // Only update the UI if we have a valid number (new or persisted)
+        if (Number.isFinite(medianHourly) && medianHourly > 0) {
+            _lastMedianHourly = medianHourly;
+            _localWageStress = stress;
 
-            if (result.medianHourly > 0) {
-                _currentWageDisplay = `$${result.medianHourly.toFixed(2)}/hr`;
-            } else {
-                _currentWageDisplay = 'N/A';
-            }
+            const newValue = `$${medianHourly.toFixed(2)}/hr`;
+            _currentWageDisplay = newValue;
 
-            // 4. Update UI Element directly
             const displayEl = document.getElementById('loc-wage-display');
-            if (displayEl) {
-                displayEl.textContent = _currentWageDisplay;
+            if (displayEl) displayEl.textContent = newValue;
+
+            if (typeof InvestmentTab !== 'undefined' && typeof InvestmentTab.calculate === 'function') {
+                InvestmentTab.calculate();
             }
 
-        } catch (err) {
-            console.warn("WageManager update failed:", err);
+        } else {
+            // If WageManager returns 0, it means NO data exists, Only set N/A if we don't already have a value shown.
+            if (_currentWageDisplay === 'N/A') {
+                _localWageStress = 0;
+                const displayEl = document.getElementById('loc-wage-display');
+                if (displayEl) displayEl.textContent = 'N/A';
+            }
         }
     }
 
     /**
      * Runs the facility location optimization algorithm.
-     * OPTIMIZATION: Returns immediately, triggers Wage API in background.
      */
     const runOptimization = (options = {}) => {
         const cities = Array.from(cityData.values());
@@ -515,36 +509,16 @@ const LocationTab = (() => {
         refreshHoldingCost();
 
         // --- BACKGROUND API: Trigger Wage Update (Non-Blocking) ---
-        if (optimalFactoryLocation && window.WageManager) {
-            const currentLaborCost = parseFloat(document.getElementById('laborCost')?.value) || 25;
+        return new Promise((resolve) => {
+            setTimeout(async () => {
+                const currentLaborCost = parseFloat(document.getElementById('laborCost')?.value) || 25;
 
-            window.WageManager.update(optimalFactoryLocation[1], optimalFactoryLocation[0], currentLaborCost)
-                .then(result => {
-                    // FIX: Capture the old stress value BEFORE updating it
-                    const oldStress = _localWageStress;
-
-                    // Update Local State for UI Display
-                    _localWageStress = result.stress;
-
-                    const displayEl = document.getElementById('loc-wage-display');
-                    if (displayEl) {
-                        if (result.medianHourly > 0) {
-                            displayEl.textContent = `$${result.medianHourly.toFixed(2)}/hr`;
-                        } else {
-                            displayEl.textContent = 'N/A';
-                        }
-                    }
-
-                    if (Math.abs(result.stress - oldStress) > 0.001) {
-                        if (typeof updateUI === 'function') {
-                            updateUI({ skipPrecedence: true });
-                        }
-                    }
-                })
-                .catch(err => console.warn("Background wage fetch failed", err));
-        }
-
-        return Promise.resolve();
+                if (optimalFactoryLocation) {
+                    await updateLocalWageStress(currentLaborCost);
+                }
+                resolve();
+            }, 100);
+        });
     };
 
     /**
@@ -1269,21 +1243,20 @@ const LocationTab = (() => {
     // -------------------------------------------------------------------------
 
     /**
-     * Initializes the D3 map, projection, and static elements.
-     * Runs only once when the `draw` function is first called.
-     */
+ * Initializes the D3 map, projection, and static elements.
+ * Runs only once when the `draw` function is first called.
+ */
     const initializeMap = (svg, width, height) => {
-        if (mapInitialized) return;
-        console.log("Initializing map...");
+        // Reset flag if we are rebuilding
+        mapInitialized = true;
+
         layoutManager.update(width, height);
         projection = d3.geoAlbersUsa();
         path = d3.geoPath().projection(projection);
 
         const defs = svg.append("defs");
-
-        // Define the arrow marker
         defs.append("marker")
-            .attr("id", "arrowhead")
+            .attr("id", "loc-arrowhead")
             .attr("viewBox", "0 -5 10 10")
             .attr("refX", 7)
             .attr("refY", 0)
@@ -1291,10 +1264,7 @@ const LocationTab = (() => {
             .attr("markerHeight", 5)
             .attr("orient", "auto")
             .append("path")
-            .attr("d", "M0,-5L10,0L0,5")
-            .attr("class", "arrowhead")
-            .style("fill", "var(--secondary1)")
-            .style("stroke", "none");
+            .attr("d", "M0,-5L10,0L0,5");
 
         const mainMapGroup = svg.append("g").attr("class", "main-map-group");
         mainMapGroup.append("g")
@@ -1320,7 +1290,8 @@ const LocationTab = (() => {
                 .enter().append("path")
                 .attr("d", path)
                 .attr("class", "state-boundary");
-            mapInitialized = true;
+
+            // Ensure map is ready before updating elements
             updateDynamicMapElements();
             runOptimization();
         }).catch(error => {
@@ -1443,6 +1414,7 @@ const LocationTab = (() => {
         if (!mapInitialized || isSvgEmpty) {
             svg.selectAll("*").remove();
             d3.select("body").selectAll(".ppi-tooltip, .holding-cost-tooltip, .factory-tooltip, .city-calc-tooltip, .holding-cost-breakdown-tooltip, .ppi-ribbon-tooltip").remove(); // Clear old tooltips
+            mapInitialized = false;
             initializeMap(svg, width, height);
         }
 
@@ -1744,7 +1716,7 @@ const LocationTab = (() => {
             // Draw Label Text
             legend.append("text")
                 .text(item.label)
-                .attr("x", item.type === "text" ? 10 : item.x + 40) 
+                .attr("x", item.type === "text" ? 10 : item.x + 40)
                 .attr("y", item.y + 3)
                 .attr("font-weight", "bold")
                 .style("font-size", "0.75rem")
@@ -2194,14 +2166,30 @@ const LocationTab = (() => {
     }
 
     /**
-     * Updates the optimal factory marker (the star) on the map.
-     */
+    * Updates the optimal factory marker (the star) on the map.
+    */
     function updateOptimalFactoryMarker() {
         if (!projection || !mapInitialized) return;
 
         const container = d3.select(".optimal-factory-container");
         const tooltip = createTooltip('factory-tooltip');
         const data = optimalFactoryLocation ? [optimalFactoryLocation] : [];
+
+        let starSize = 540;
+        if (optimalFactoryLocation && radiusScale) {
+            const cities = Array.from(cityData.values());
+            const match = cities.find(c =>
+                Math.abs(c.coordinates[0] - optimalFactoryLocation[0]) < 0.001 &&
+                Math.abs(c.coordinates[1] - optimalFactoryLocation[1]) < 0.001
+            );
+
+            if (match) {
+                const r = radiusScale(match.annualDemand);
+                starSize = Math.pow(r * 2.7, 2);
+            }
+        }
+
+        const symbolGen = d3.symbol(d3.symbolStar, starSize);
         const marker = container.selectAll(".optimal-factory-marker")
             .data(data);
 
@@ -2214,7 +2202,7 @@ const LocationTab = (() => {
         // Enter + Merge
         marker.enter().append("path")
             .attr("class", "optimal-factory-marker")
-            .attr("d", d3.symbol(d3.symbolStar, 400))
+            .attr("d", symbolGen)
             .style("opacity", 0)
             .merge(marker)
             .on("mouseover", (event, d) => {
@@ -2228,9 +2216,11 @@ const LocationTab = (() => {
             )
             .on("mouseout", () => tooltip.style("opacity", 0))
             .transition().duration(500)
+            .attr("d", symbolGen)
             .attr("transform", d => `translate(${projection(d)})`)
             .style("opacity", 1);
     }
+
 
     /**
      * Updates the city markers (circles) on the map.
@@ -2398,44 +2388,35 @@ const LocationTab = (() => {
         if (isBottomRibbonOpen) drawHoldingCostChart();
     }
 
- /**
- * Updates the animated connection lines from the factory to the cities.
- */
+    /**
+     * Updates the animated connection lines from the factory to the cities.
+     */
     function updateConnectionLines() {
         if (!projection || !radiusScale || !mapInitialized) return;
 
         const lineGroup = d3.select(".connection-lines");
         const cities = Array.from(cityData.values());
 
-        // No factory or no cities, remove all lines
         if (!optimalFactoryLocation || cities.length < 2) {
             lineGroup.selectAll(".connection-group").interrupt().remove();
             return;
         }
 
-        // --- Setup Scales based on cost ---
         const costs = cities.map(city => calculateTotalCostForCity(optimalFactoryLocation, city));
         const maxCost = d3.max(costs);
         const widthScale = d3.scaleLinear().domain([0, maxCost || 1]).range([1, 8]).clamp(true);
         const dashScale = d3.scaleLinear().domain([1, TRUCK_CAPACITY_UNITS * 3]).range([5, 30]).clamp(true);
         const gapScale = d3.scaleLinear().domain([1, 30]).range([15, 100]).clamp(true);
 
-        // --- D3 Data Join ---
-        const groups = lineGroup.selectAll(".connection-group")
-            .data(cities, d => d.name);
+        const groups = lineGroup.selectAll(".connection-group").data(cities, d => d.name);
 
-        // Exit
         groups.exit().selectAll(".connection-line").interrupt();
         groups.exit().remove();
 
-        // Enter
-        const enterGroups = groups.enter().append("g")
-            .attr("class", "connection-group");
+        const enterGroups = groups.enter().append("g").attr("class", "connection-group");
+        enterGroups.append("line").attr("class", "connection-line-bg");
+        enterGroups.append("line").attr("class", "connection-line");
 
-        enterGroups.append("line").attr("class", "connection-line-bg"); // Solid background line
-        enterGroups.append("line").attr("class", "connection-line");    // Animated dashed line
-
-        // --- Update (Enter + Merge) ---
         enterGroups.merge(groups).each(function (d) {
             const group = d3.select(this);
             const startPoint = projection(optimalFactoryLocation);
@@ -2446,13 +2427,11 @@ const LocationTab = (() => {
                 return;
             }
 
-            // Shorten line so it points to the edge of the circle, not the center
             const radius = radiusScale(d.annualDemand) + 3;
             const dx = endPoint[0] - startPoint[0];
             const dy = endPoint[1] - startPoint[1];
             const lineLength = Math.sqrt(dx * dx + dy * dy);
 
-            // If factory is inside circle, hide line
             if (lineLength < radius) {
                 group.selectAll('line').style('display', 'none');
                 group.select(".connection-line").interrupt();
@@ -2461,85 +2440,65 @@ const LocationTab = (() => {
                 group.selectAll('line').style('display', null);
             }
 
-            // Calculate new end point at edge of circle
             const targetX = endPoint[0] - (dx / lineLength) * radius;
             const targetY = endPoint[1] - (dy / lineLength) * radius;
-
             const strokeWidth = widthScale(calculateTotalCostForCity(optimalFactoryLocation, d));
 
-            // Update background line (Instant update)
+            // Update background line
             group.select(".connection-line-bg")
                 .attr("x1", startPoint[0]).attr("y1", startPoint[1])
                 .attr("x2", targetX).attr("y2", targetY)
-                .attr("marker-end", "url(#arrowhead)")
-                .style("fill", "var(--secondary1")
-                .style("stroke", "var(--secondary1)")
+                .attr("marker-end", "url(#loc-arrowhead)")
                 .style("stroke-width", strokeWidth);
 
-            // --- Animated Line Logic ---
+            // Update animated line
             const animLine = group.select(".connection-line");
-
-            // 1. Check if the line is already at the destination
             const currentX2 = parseFloat(animLine.attr("x2"));
             const currentY2 = parseFloat(animLine.attr("y2"));
             const distToTarget = Math.sqrt(Math.pow(currentX2 - targetX, 2) + Math.pow(currentY2 - targetY, 2));
+
             if (!isNaN(distToTarget) && distToTarget < 2.0) {
-                // Just update stroke/dash properties to match any data changes, but don't reset length
                 animLine
                     .style("stroke-width", strokeWidth)
                     .attr("x1", startPoint[0]).attr("y1", startPoint[1]);
                 return;
             }
 
-            // 2. If we are NOT at the target (new city, or factory moved), reset and animate.
             animLine.interrupt();
 
-            // Define dash pattern
             const dashArray = `${dashScale(d.qty)} ${gapScale(d.freq)}`;
             const dashTotal = dashScale(d.qty) + gapScale(d.freq);
 
-            // Initialize dashed line collapsed at start (x2=x1, y2=y1)
             animLine
                 .attr("x1", startPoint[0]).attr("y1", startPoint[1])
                 .attr("x2", startPoint[0]).attr("y2", startPoint[1])
                 .style("stroke-width", strokeWidth)
-                .style("fill", "var(--secondary1")
-                .style("stroke", "var(--secondary1)")
-                .attr("marker-end", "url(#arrowhead)")
+                .attr("marker-end", "url(#loc-arrowhead)")
                 .attr("stroke-dasharray", dashArray)
                 .attr("stroke-dashoffset", 0);
 
-            // Calculate duration based on length
             const pixelLength = Math.sqrt(dx * dx + dy * dy);
             const growDuration = Math.max(800, Math.min(4000, pixelLength * 2));
 
-            // Start Animation Sequence
-            animateLine(animLine, targetX, targetY, growDuration, dashTotal);
-        });
-
-        function animateLine(line, targetX, targetY, growDuration, dashTotal) {
-            // Animate the line length (x2,y2 grows from start → end)
-            line
-                .transition("grow")
+            // Animate
+            animLine.transition("grow")
                 .duration(growDuration)
                 .ease(d3.easeLinear)
                 .attr("x2", targetX)
                 .attr("y2", targetY);
 
-            // Start dash motion concurrently (continues indefinitely)
-            repeatMotion(line, dashTotal);
-        }
-
-        function repeatMotion(line, dashTotal) {
-            if (!line.node()?.isConnected) return;
-            line
-                .attr("stroke-dashoffset", dashTotal)
-                .transition("move")
-                .ease(d3.easeLinear)
-                .duration(600)
-                .attr("stroke-dashoffset", 0)
-                .on("end", () => repeatMotion(line, dashTotal));
-        }
+            function repeatMotion() {
+                if (!animLine.node()?.isConnected) return;
+                animLine
+                    .attr("stroke-dashoffset", dashTotal)
+                    .transition("move")
+                    .ease(d3.easeLinear)
+                    .duration(600)
+                    .attr("stroke-dashoffset", 0)
+                    .on("end", repeatMotion);
+            }
+            repeatMotion();
+        });
     }
 
     /**

@@ -928,8 +928,10 @@ function updateUI(options = {}) {
                     const panel = document.getElementById(`${activeTab}-panel`);
                     panel.innerHTML = lastSavedConfig.visualizationSnapshots[activeTab];
                 } else {
-                    if (typeof ProfitTab !== 'undefined' && ProfitTab.draw) {
+                    if (typeof ProfitTab !== 'undefined' && ProfitTab.draw && profitMaximizationCache.data) {
                         ProfitTab.draw();
+                    } else if (!profitMaximizationCache.data) {
+                        runProfitCalculation();
                     } else {
                         console.warn("ProfitTab.draw not found.");
                     }

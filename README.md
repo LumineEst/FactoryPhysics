@@ -2,7 +2,7 @@
 
 A browser-based simulation designed to model, optimize, and analyze a mixed-model refrigerator assembly line. Unlike static calculators, this application integrates factory physics, capacity planning, financial forecasting, and geospatial logistics optimization into a single interactive dashboard.  It is both a powerful educational and decision-making tool for how to design a mixed-model assembly line.
 
-[![▶ Watch the Overview Video](https://img.youtube.com/vi/qwavaRLAXZ4/hqdefault.jpg)](https://youtu.be/qwavaRLAXZ4)
+[![▶ Watch the Overview Video](https://img.youtube.com/vi/hzbBAcDX-VM/hqdefault.jpg)](https://youtu.be/hzbBAcDX-VM)
 
 
 ## 📋 Table of Contents
@@ -158,7 +158,7 @@ This project was designed and developed for CS 6630 (Visualization for Data Scie
 The Project Team was:
 - **Joel Wood** - MS in Engineering Management (MEM), University of Utah
 - **Dhruv Ram** - MS in Computing (Graphics and Visualization Track), University of Utah
-- **Sumaiya Azad** - MS in Computing (Database Management Track), University of Utah
+- **Sumaiya Azad** - MS in Computing (Database Management and Analysis Track), University of Utah
 
 The core premise of this website is an extension of content provided for the Final Project of ME-EN 6182 (Design of Production and Service Systems).  
 This is used with the expressed permission of Pedro Huebner Ph.D. - Associate Professor and Director of Systems Engineering Programs, University of Utah.  

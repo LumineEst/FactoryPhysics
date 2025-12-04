@@ -86,10 +86,25 @@ body {
     width: 100%;
     max-width: 800px; /* Prevents it from getting too huge on large screens */
     height: auto;
-    object-fit: cover;
-    border-radius: 8px; /* Softens the corners */
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2); /* Adds depth */
-    background-color: #000; /* Fallback background */
+    display: block;
+    object-fit: contain;
+    border-radius: 8px; 
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2); 
+    background-color: #000;
+}
+
+.video-container video:full-screen,
+.video-container Video:-webkit-full-screen,
+.video-container video:-moz-full-screen,
+.video-container video:-ms-fullscreen {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    object-fit: contain !important;
+    background-color: #000 !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
 }
 
 .sidebar {
@@ -2117,11 +2132,8 @@ input:checked+.slider:before {
     stroke: var(--secondary1);
 }
 
-#location-panel .arrowhead {
-    fill: var(--secondary1);
-}
-
-#location-panel .arrowhead path {
+#location-panel #loc-arrowhead path {
+    stroke: var(--secondary1);
     fill: var(--secondary1);
 }
 
@@ -2216,8 +2228,8 @@ input:checked+.slider:before {
 
 #location-panel .optimal-factory-marker {
     fill: var(--secondary1);
-    stroke: var(--white);
-    stroke-width: 2px;
+    stroke: var(--accent);
+    stroke-width: 1px;
     pointer-events: none;
 }
 

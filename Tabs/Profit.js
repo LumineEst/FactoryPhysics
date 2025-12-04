@@ -14,6 +14,8 @@ const ProfitTab = (function () {
     const root = document.documentElement;
     let profitPieStateCache = {};
     let previousBaselineY = 0;
+    let hasResizeListeners = false;
+    let lastDrawTime = 0;
 
     function draw(isResize = false) {
         const svg = d3.select("#profit-panel");
@@ -46,6 +48,17 @@ const ProfitTab = (function () {
         };
 
         document.documentElement.style.setProperty('--profit-ui-scale', uiScale);
+
+        // Add resize listeners if not already added
+        if (!hasResizeListeners) {
+            document.getElementById('left-sidebar').addEventListener('transitionend', (event) => {
+                if (event.propertyName === 'width') draw();
+            });
+            document.getElementById('right-sidebar').addEventListener('transitionend', (event) => {
+                if (event.propertyName === 'width') draw();
+            });
+            hasResizeListeners = true;
+        }
 
         // Standard transition used for axis & shape animations
         const baseDuration = isResize ? 0 : 750;
