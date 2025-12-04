@@ -2,9 +2,6 @@
 
 A browser-based simulation designed to model, optimize, and analyze a mixed-model refrigerator assembly line. Unlike static calculators, this application integrates factory physics, capacity planning, financial forecasting, and geospatial logistics optimization into a single interactive dashboard.  It is both a powerful educational and decision-making tool for how to design a mixed-model assembly line.
 
-[![▶ Watch the Overview Video](https://img.youtube.com/vi/hzbBAcDX-VM/hqdefault.jpg)](https://youtu.be/hzbBAcDX-VM)
-
-
 ## 📋 Table of Contents
 
 - [Overview](#-overview)
@@ -97,7 +94,7 @@ An overview video introducing the Project is embedded within the top of the Over
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/yourusername/factory-flow.git](https://github.com/yourusername/factory-flow.git)
+    git clone [https://github.com/yourusername/factory-flow.git](https://github.com/yourusername/factory-flow.git)  
     cd factory-flow
     ```
 
@@ -132,7 +129,6 @@ An overview video introducing the Project is embedded within the top of the Over
 │   ├── intro.mp4               # Short Video Introducing Website on Overview Tab
 │   ├── investmentInputs.html   # DOM user inputs for the Investment Tab
 │   ├── overview.html           # Main dashboard UI
-│   ├── ProcessBook             # Development Documentation viewable on Overview Tab
 │   ├── readme_viewer.html      # Processes README.md into HTML page viewed on Overview Tab
 │   └── VidThumb.jpg            # Image of Website for Video Thumbnail
 ├── Tabs/
