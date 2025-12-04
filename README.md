@@ -92,11 +92,7 @@ An overview video introducing the Project is embedded within the top of the Over
 
 ### Installation
 
-1.  **Clone the repository:**
-    ```bash
-    git clone [https://github.com/yourusername/factory-flow.git](https://github.com/yourusername/factory-flow.git)  
-    cd factory-flow
-    ```
+1. **Clone the repository:**
 
 2. **Start a Local Server:**
 
